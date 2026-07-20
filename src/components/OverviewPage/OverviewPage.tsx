@@ -297,7 +297,7 @@ function SparkCard({
               }
               return null;
             })()}
-            {(() => {
+{(() => {
               const role = resolveSparkRole(spark);
 
               // Workers have no local LLM API — show cluster/model label instead.
@@ -317,28 +317,35 @@ function SparkCard({
                 );
               }
 
-              // Head / Standalone: same as before — live backend + model id.
+              // Head / Standalone: live backend + model id.
               const llmArr = spark.metrics.llm;
               const llm = Array.isArray(llmArr) ? llmArr.find((l) => l.available) : null;
               if (!llm) return null;
               return (
-                <MiniStat
-                  label={
-                    llm.backend === "vllm"
-                      ? "vLLM"
-                      : llm.backend === "ds4"
-                        ? "ds4"
-                        : llm.backend === "sglang"
-                          ? "sgLang"
-                          : llm.backend === "exl3"
-                            ? "EXL3"
-                            : llm.backend ?? "LLM"
-                  }
-                  value={llm.modelId ?? "unknown"}
-                  tone="accent"
-                  title={llm.modelId ?? undefined}
-                  wrap
-                />
+                <>
+                  <MiniStat
+                    label={
+                      llm.backend === "vllm"
+                        ? "vLLM"
+                        : llm.backend === "ds4"
+                          ? "ds4"
+                          : llm.backend === "sglang"
+                            ? "sgLang"
+                            : llm.backend === "exl3"
+                              ? "EXL3"
+                              : llm.backend ?? "LLM"
+                    }
+                    value={llm.modelId ?? "unknown"}
+                    tone="accent"
+                    title={llm.modelId ?? undefined}
+                    wrap
+                  />
+                  <MiniStat
+                    label="Requests"
+                    value={`${llm.slotsActive ?? 0}`}
+                    tone={(llm.slotsActive ?? 0) > 0 ? "accent" : "default"}
+                  />
+                </>
               );
             })()}
           </div>
