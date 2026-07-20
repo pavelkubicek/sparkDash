@@ -43,28 +43,29 @@
   --shell-gradient: linear-gradient(180deg, var(--color-surface) 0%, #ede8da 100%);
 }
 
+/* ─── Dark theme (GitHub Dark Mode palette) ─────────────── */
 [data-theme="dark"] {
-  --color-base: #0a0a0a;
-  --color-surface: #1a1a1a;
-  --color-surface-elevated: #262626;
-  --color-surface-hover: #303030;
-  --color-border: #353535;
-  --color-border-strong: #4a4a4a;
-  --color-text: #e4e4e4;
+  --color-base: #0d1117;
+  --color-surface: #161b22;
+  --color-surface-elevated: #1c2128;
+  --color-surface-hover: #21262d;
+  --color-border: #30363d;
+  --color-border-strong: #484f58;
+  --color-text: #c9d1d9;
   --color-text-strong: #ffffff;
-  --color-muted: #8a8a8a;
-  --color-muted-strong: #b8b8b8;
-  --color-accent: #e8a830;
-  --color-accent-hover: #f0b840;
-  --color-accent-soft: rgba(232, 168, 48, 0.16);
-  --color-danger: #e5594d;
-  --color-warning: #e0a838;
-  --color-success: #4dbf91;
+  --color-muted: #8b949e;
+  --color-muted-strong: #b1bac4;
+  --color-accent: #58a6ff;
+  --color-accent-hover: #79c0ff;
+  --color-accent-soft: rgba(88, 166, 255, 0.15);
+  --color-danger: #f85149;
+  --color-warning: #d29922;
+  --color-success: #3fb950;
   --color-grid: rgba(255, 255, 255, 0.04);
 
-  --toggle-track-off: #3a3a3a;
+  --toggle-track-off: #30363d;
   --toggle-track-on: var(--color-accent);
-  --toggle-dot: #e4e4e4;
+  --toggle-dot: #ffffff;
 
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--color-border);
   --shadow-card-hover: 0 6px 20px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--color-border-strong);
@@ -73,8 +74,8 @@
   --color-surface-glass: color-mix(in srgb, var(--color-surface) 72%, transparent);
   --color-card-glass: color-mix(in srgb, var(--color-surface-elevated) 60%, transparent);
 
-  --body-gradient: linear-gradient(160deg, #0a0a0a 0%, #111111 40%, #181818 100%);
-  --shell-gradient: linear-gradient(180deg, var(--color-surface) 0%, #121212 100%);
+  --body-gradient: linear-gradient(160deg, #0d1117 0%, #10151c 40%, #141920 100%);
+  --shell-gradient: linear-gradient(180deg, var(--color-surface) 0%, #0d1117 100%);
 }
 
 /* ─── White theme (neutral, no warm tones) ──────────────── */
