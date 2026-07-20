@@ -274,13 +274,10 @@ function SparkCard({
               label="GPU Power"
               value={`${gpu?.power?.draw ?? 0}W / ${gpu?.power?.limit ?? 0}W`}
             />
-            {vramAvail > 0 && (
-              <MiniStat
-                label="Available"
-                value={formatMb(vramAvail)}
-                tone={vramAvail < 4096 ? "danger" : vramAvail < 16384 ? "warning" : "accent"}
-              />
-            )}
+            <MiniStat
+              label="CPU Power"
+              value={`${spark.metrics.cpu?.power?.draw ?? 0}W / ${spark.metrics.cpu?.power?.tdp ?? 0}W`}
+            />
             {(() => {
               // Find the root disk by label "/" (the collector maps the host
               // root mount to that label). Fall back to the GB10 partition name
