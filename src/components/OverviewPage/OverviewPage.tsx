@@ -73,6 +73,9 @@ function MiniStat({
   );
 }
 
+// Module-level token history map so sparklines survive re-renders
+const tokenHistory = new Map<string, number[]>();
+
 function SparkCard({
   spark,
   headSparkName,
@@ -87,6 +90,17 @@ function SparkCard({
   const gpu = spark.metrics.gpu;
   const um = spark.metrics.unifiedMemory;
   const online = spark.online;
+  const llmTps = spark.metrics.llm?.generationTps ?? 0;
+  const slotsActive = spark.metrics.llm?.slotsActive ?? 0;
+
+  // Accumulate token rate history for sparkline
+  if (spark.metrics.llm?.available) {
+    const hist = tokenHistory.get(spark.id) ?? [];
+    hist.push(llmTps);
+    if (hist.length > 30) hist.shift();
+    tokenHistory.set(spark.id, hist);
+  }
+  const genHistory = tokenHistory.get(spark.id) ?? [];
 
   const usage = gpu?.usage ?? 0;
   const tempRaw = gpu?.temperature ?? 0;
@@ -357,7 +371,7 @@ function SparkCard({
             const llm = Array.isArray(llmArr) ? llmArr.find((l) => l.available) : null;
             if (!llm) return null;
             return (
-              <div className="mt-3.5 grid grid-cols-2 gap-2 border-t border-border pt-3">
+              <div className="overview-tps-footer mt-3.5 grid grid-cols-2 gap-2 border-t border-border pt-3">
                 <div className="text-center">
                   <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                     {llm.generationTps.toFixed(0)}
