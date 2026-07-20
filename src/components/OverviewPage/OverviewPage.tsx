@@ -276,7 +276,7 @@ function SparkCard({
             />
             <MiniStat
               label="CPU Power"
-              value={`${spark.metrics.cpu?.power?.draw ?? 0}W / ${spark.metrics.cpu?.power?.tdp ?? 0}W`}
+              value={`${spark.metrics.cpu?.draw ?? 0}W / ${spark.metrics.cpu?.tdp ?? 0}W`}
             />
             {(() => {
               // Find the root disk by label "/" (the collector maps the host
