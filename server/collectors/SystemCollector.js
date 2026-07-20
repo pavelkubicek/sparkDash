@@ -269,6 +269,13 @@ export class SystemCollector {
       if (memTotalMB > 0) totalMB = memTotalMB;
       else if (totalMB <= 0) totalMB = DGX_SPARK.MEMORY_HBM_SIZE_GB * 1024; // Convert to MB
       availableMB = availMB;
+
+      // On unified-memory devices (GB10) with no active GPU compute apps,
+      // mirror system RAM usage so VRAM indicators show meaningful data
+      if (usedMB === 0 && totalMB > 0) {
+        // Fall back to RAM usage: total - available
+        usedMB = totalMB - availableMB;
+      }
     }
 
     const percentage = totalMB > 0 ? Math.round((usedMB / totalMB) * 100) : 0;

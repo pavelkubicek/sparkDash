@@ -1289,14 +1289,36 @@ app.get("*splat", (_req, res) => {
 
 // ─── WebSocket ──────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: "/ws" });
+
+/** Track active client count for poll pause/resume. */
+let activeClientCount = 0;
+
+/** Pause all monitors when last client disconnects, resume when first connects. */
+function updateClientState() {
+  if (activeClientCount === 0) {
+    for (const monitor of monitors.values()) {
+      monitor.pause();
+    }
+  } else {
+    for (const monitor of monitors.values()) {
+      monitor.resume();
+    }
+  }
+}
+
 wss.on("connection", (ws) => {
-  console.log("[ws] client connected");
+  activeClientCount++;
+  console.log(`[ws] client connected (${activeClientCount} active)`);
+  // Resume polling now that a client is watching
+  updateClientState();
   // Send the initial snapshot through the same path the broadcast uses so the
   // new client benefits from the same payload format (and bufferedAmount
   // guard, although a freshly-open socket trivially passes it).
   broadcastPayload(buildSnapshotPayload());
   ws.on("close", () => {
-    console.log("[ws] client disconnected");
+    activeClientCount = Math.max(0, activeClientCount - 1);
+    console.log(`[ws] client disconnected (${activeClientCount} active)`);
+    updateClientState();
   });
 });
 

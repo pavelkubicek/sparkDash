@@ -22,6 +22,7 @@ import {
   COMFY_PORT,
   HOST_PATHS,
 } from "../config.js";
+import { getSettings } from "../settings.js";
 
 const ONLINE_GRACE_MS = 10000;
 
@@ -338,10 +339,16 @@ export class SparkMonitor {
     return [LLM_PORT];
   }
 
+  /** Resolve the LLM poll interval from settings (falls back to config default). */
+  _llmPollInterval() {
+    return getSettings().pollIntervalMs || POLL_INTERVAL_LLM;
+  }
+
   /** Start background polling. */
   start() {
     if (this._running) return;
     this._running = true;
+    this._paused = false;
     this._stopped = false;
     this._poll();
     this._intervals.push(setInterval(() => this._pollDomain("gpu"), POLL_INTERVAL_GPU));
@@ -378,6 +385,44 @@ export class SparkMonitor {
       }
     }
     console.log(`[SparkMonitor] ${this.spark.id} stopped`);
+  }
+
+  /** Pause polling (no WS clients). Keeps the monitor alive but stops all timers. */
+  pause() {
+    if (this._paused || !this._running) return;
+    this._paused = true;
+    this._clearIntervals();
+    console.log(`[SparkMonitor] ${this.spark.id} paused (no active clients)`);
+  }
+
+  /** Resume polling (WS client connected). Restores all timers. */
+  resume() {
+    if (!this._paused || !this._running) return;
+    this._paused = false;
+    this._poll();
+    this._storeIntervals([
+      setInterval(() => this._pollDomain("gpu"), POLL_INTERVAL_GPU),
+      setInterval(() => this._pollDomain("cpu"), POLL_INTERVAL_CPU),
+      setInterval(() => this._pollDomain("network"), POLL_INTERVAL_NETWORK),
+      setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE),
+      setInterval(() => this._pollDomain("ram"), POLL_INTERVAL_CPU),
+      setInterval(() => this._pollDomain("memory"), POLL_INTERVAL_BANDWIDTH),
+      setInterval(() => this._pollDomain("llm"), this._llmPollInterval()),
+      setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS),
+    ]);
+    console.log(`[SparkMonitor] ${this.spark.id} resumed`);
+  }
+
+  /** Store interval IDs for later cleanup. */
+  _storeIntervals(intervals) {
+    this._clearIntervals();
+    this._intervals = intervals;
+  }
+
+  /** Clear all interval timers. */
+  _clearIntervals() {
+    for (const id of this._intervals) clearInterval(id);
+    this._intervals = [];
   }
 
   /** Return a full snapshot of this Spark's metrics. */
@@ -451,7 +496,7 @@ export class SparkMonitor {
 
   // ─── Liveness ─────────────────────────────────────────────
   async _checkOnline() {
-    if (!this._running || this._inflight.online) return;
+    if (!this._running || this._paused || this._inflight.online) return;
     this._inflight.online = true;
     try {
       if (this.spark.isLocal) {
@@ -487,7 +532,7 @@ export class SparkMonitor {
 
   // ─── Polling ──────────────────────────────────────────────
   async _poll() {
-    if (!this._running) return;
+    if (!this._running || this._paused) return;
     await Promise.all([
       this._checkOnline(),
       this._pollDomain("gpu"),
@@ -504,7 +549,7 @@ export class SparkMonitor {
   }
 
   async _pollDomain(domain) {
-    if (!this._running || this._inflight[domain]) return;
+    if (!this._running || this._paused || this._inflight[domain]) return;
     // Skip storage auto-poll when disabled for this spark
     if (domain === "storage" && this.spark.storagePollDisabled) return;
     // Worker nodes: no local LLM API
