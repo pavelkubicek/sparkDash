@@ -449,11 +449,11 @@ export function LlmPanel({
             </div>
           )}
 
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted">Generation tok/s</span>
-            <div className="flex items-center gap-2">
-              <Sparkline data={genHistory} color="var(--color-accent)" height={24} />
-              <span className="font-tabular text-sm font-semibold text-accent">
+          <div className="flex items-center justify-between gap-4">
+            <span className="shrink-0 text-xs text-muted">Generation tok/s</span>
+            <div className="flex items-center gap-3">
+              <Sparkline data={genHistory} color="var(--color-accent)" height={24} width={160} />
+              <span className="shrink-0 font-tabular text-3xl font-bold text-accent">
                 {generationTps.toFixed(1)}
               </span>
             </div>
