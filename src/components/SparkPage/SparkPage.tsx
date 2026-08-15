@@ -262,8 +262,16 @@ export function SparkPage({ spark, temperatureUnit, onEdit }: SparkPageProps) {
                 {tailscaleOn && <TailscalePanel tailscale={metrics.tailscale ?? null} />}
               </>
             ) : (
-              /* Resources layout: GPU spans the full left column; Storage + Network stack in the right column (stock) */
+              /* Resources layout: full-width CPU & RAM first, then GPU spans the
+                 full left column; Storage + Network stack in the right column */
               <>
+                <CpuPanel
+                  cpu={metrics.cpu}
+                  ram={metrics.ram}
+                  unifiedMemory={metrics.unifiedMemory}
+                  sparkId={spark.id}
+                  className="md:col-span-2"
+                />
                 <GpuPanel
                   gpu={metrics.gpu}
                   sparkId={spark.id}
@@ -283,14 +291,6 @@ export function SparkPage({ spark, temperatureUnit, onEdit }: SparkPageProps) {
                   sparkId={spark.id}
                   disabledInterfaces={disabledInterfaces}
                   onDisabledChange={setDisabledInterfaces}
-                />
-                {/* Full-width CPU & RAM row below the stock resources grid */}
-                <CpuPanel
-                  cpu={metrics.cpu}
-                  ram={metrics.ram}
-                  unifiedMemory={metrics.unifiedMemory}
-                  sparkId={spark.id}
-                  className="md:col-span-2"
                 />
                 {tailscaleOn && <TailscalePanel tailscale={metrics.tailscale ?? null} />}
               </>
