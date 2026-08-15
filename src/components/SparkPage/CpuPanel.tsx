@@ -18,36 +18,17 @@ function formatMb(mb: number): string {
   return `${Math.round(mb)} MB`;
 }
 
-function MetricRow({
-  label,
-  spark,
-  value,
-  color = "var(--color-accent)",
-}: {
-  label: string;
-  spark: React.ReactNode;
-  value: React.ReactNode;
-  color?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-muted">{label}</span>
-      <div className="flex items-center gap-3">
-        <span style={{ color }}>{spark}</span>
-        <span className="font-tabular text-sm font-semibold text-text">{value}</span>
-      </div>
-    </div>
-  );
-}
-
 /**
- * CPU panel — CPU usage sparkline + power draw (draw/TDP) + system RAM.
- * Shows for Spark units (shared HBM) where CPU usage and RAM complement the GPU.
+ * CPU & RAM row — a full-width panel with two side-by-side boxes:
+ * CPU (usage sparkline + power + temperature) on the left, RAM on the right.
+ * Lives below the stock Resources grid (GPU | Storage + Network).
  */
 export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPanelProps) {
-  const usageHistory = useMetricsHistoryTail(sparkId, "cpu.usage");
+  const cpuHistory = useMetricsHistoryTail(sparkId, "cpu.usage");
+  const ramHistory = useMetricsHistoryTail(sparkId, "ram.percentage");
 
   const usage = cpu?.usage ?? 0;
+  const temperature = cpu?.temperature ?? 0;
   const draw = cpu?.draw ?? 0;
   const tdp = cpu?.tdp ?? 0;
 
@@ -58,31 +39,40 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
 
   return (
     <Panel
-      title="CPU"
+      title="CPU & RAM"
       icon={<CpuIcon />}
-      className={`panel-cpu ${className ?? ""}`}
-      bodyClassName="space-y-3"
+      className={`panel-cpu-ram ${className ?? ""}`}
+      bodyClassName=""
       accent
     >
-      <MetricRow
-        label="Usage"
-        color="var(--color-accent)"
-        spark={
-          usageHistory.length > 0 ? (
-            <Sparkline data={usageHistory} color="var(--color-accent)" />
-          ) : undefined
-        }
-        value={<span className="text-text-strong">{usage}%</span>}
-      />
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted">Power</span>
-        <span className="font-tabular text-[13px] text-text">
-          {draw}W / {tdp}W
-        </span>
-      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* CPU box */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted">Usage</span>
+            <div className="flex items-center gap-3">
+              {cpuHistory.length > 0 && (
+                <span style={{ color: "var(--color-accent)" }}>
+                  <Sparkline data={cpuHistory} color="var(--color-accent)" />
+                </span>
+              )}
+              <span className="font-tabular text-sm font-semibold text-text-strong">{usage}%</span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted">Power</span>
+            <span className="font-tabular text-[13px] text-text">
+              {draw}W / {tdp}W
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted">Temperature</span>
+            <span className="font-tabular text-[13px] text-text">{temperature}°C</span>
+          </div>
+        </div>
 
-      {(ramTotal > 0 || ram) && (
-        <div className="space-y-2 border-t border-border pt-3">
+        {/* RAM box */}
+        <div className="space-y-2 border-l border-border pl-4">
           <div className="panel-title mb-2.5">
             <MemoryIcon />
             RAM
@@ -93,6 +83,17 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
             max={ramTotal}
             caption={ramTotal > 0 ? `${formatMb(ramUsed)} / ${formatMb(ramTotal)} · ${ramPct}%` : "—"}
           />
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted">Usage</span>
+            <div className="flex items-center gap-3">
+              {ramHistory.length > 0 && (
+                <span style={{ color: "var(--color-accent)" }}>
+                  <Sparkline data={ramHistory} color="var(--color-accent)" width={140} />
+                </span>
+              )}
+              <span className="font-tabular text-sm font-semibold text-text">{ramPct}%</span>
+            </div>
+          </div>
           {ramAvail > 0 && (
             <div className="flex justify-between text-xs">
               <span className="text-muted">Available</span>
@@ -112,7 +113,7 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
             </div>
           )}
         </div>
-      )}
+      </div>
     </Panel>
   );
 }
