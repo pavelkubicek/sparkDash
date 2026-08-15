@@ -90,11 +90,15 @@ function SparkCard({
   const gpu = spark.metrics.gpu;
   const um = spark.metrics.unifiedMemory;
   const online = spark.online;
-  const llmTps = spark.metrics.llm?.generationTps ?? 0;
-  const slotsActive = spark.metrics.llm?.slotsActive ?? 0;
+  // metrics.llm is an array (one entry per LLM port). Pick the first available
+  // probe for the overview footer (REQS / sparkline / tok/s).
+  const llmArr = Array.isArray(spark.metrics.llm) ? spark.metrics.llm : [];
+  const llm = llmArr.find((l) => l.available) ?? null;
+  const llmTps = llm?.generationTps ?? 0;
+  const slotsActive = llm?.slotsActive ?? 0;
 
   // Accumulate token rate history for sparkline
-  if (spark.metrics.llm?.available) {
+  if (llm) {
     const hist = tokenHistory.get(spark.id) ?? [];
     hist.push(llmTps);
     if (hist.length > 30) hist.shift();
