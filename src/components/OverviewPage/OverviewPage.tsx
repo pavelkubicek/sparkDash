@@ -73,9 +73,6 @@ function MiniStat({
   );
 }
 
-// Module-level token history map so sparklines survive re-renders
-const tokenHistory = new Map<string, number[]>();
-
 function SparkCard({
   spark,
   headSparkName,
@@ -90,21 +87,6 @@ function SparkCard({
   const gpu = spark.metrics.gpu;
   const um = spark.metrics.unifiedMemory;
   const online = spark.online;
-  // metrics.llm is an array (one entry per LLM port). Pick the first available
-  // probe for the overview footer (REQS / sparkline / tok/s).
-  const llmArr = Array.isArray(spark.metrics.llm) ? spark.metrics.llm : [];
-  const llm = llmArr.find((l) => l.available) ?? null;
-  const llmTps = llm?.generationTps ?? 0;
-  const slotsActive = llm?.slotsActive ?? 0;
-
-  // Accumulate token rate history for sparkline
-  if (llm) {
-    const hist = tokenHistory.get(spark.id) ?? [];
-    hist.push(llmTps);
-    if (hist.length > 30) hist.shift();
-    tokenHistory.set(spark.id, hist);
-  }
-  const genHistory = tokenHistory.get(spark.id) ?? [];
 
   const usage = gpu?.usage ?? 0;
   const tempRaw = gpu?.temperature ?? 0;
