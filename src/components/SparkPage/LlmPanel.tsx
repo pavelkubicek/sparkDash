@@ -453,8 +453,8 @@ export function LlmPanel({
             <span className="shrink-0 text-xs text-muted">Generation tok/s</span>
             <div className="flex items-center gap-3">
               <Sparkline data={genHistory} color="var(--color-accent)" height={24} width={160} />
-              {/* Fixed-width (≥5ch incl. ".0") so the digit column doesn't jump around */}
-              <span className="inline-block min-w-[5ch] text-right font-tabular text-3xl font-bold text-accent">
+              {/* Fixed-width (≥7ch incl. ".0") so the digit column doesn't jump around */}
+              <span className="inline-block min-w-[7ch] text-right font-tabular text-3xl font-bold text-accent">
                 {generationTps.toFixed(1)}
               </span>
             </div>
@@ -466,8 +466,8 @@ export function LlmPanel({
             <span className="text-xs text-muted">Prefill tok/s</span>
             <div className="flex items-center gap-3">
               <Sparkline data={prefillHistory} color="var(--color-accent)" height={24} width={160} />
-              {/* Fixed-width (≥5ch incl. ".0") so the digit column doesn't jump around */}
-              <span className="inline-block min-w-[5ch] text-right font-tabular text-3xl font-bold text-text">
+              {/* Fixed-width (≥7ch incl. ".0") so the digit column doesn't jump around */}
+              <span className="inline-block min-w-[7ch] text-right font-tabular text-3xl font-bold text-text">
                 {prefillTps.toFixed(1)}
               </span>
             </div>
