@@ -1,6 +1,5 @@
 import type { CpuMetrics, RamMetrics, UnifiedMemoryMetrics } from "../../api/types";
 import { Sparkline } from "../ui/Sparkline";
-import { Panel } from "../ui/Panel";
 import { CpuIcon, MemoryIcon } from "../ui/icons";
 import { MetricBar } from "../ui/MetricBar";
 import { useMetricsHistoryTail } from "../../hooks/metricsStore";
@@ -21,6 +20,7 @@ function formatMb(mb: number): string {
 /**
  * CPU & RAM row — a full-width panel with two side-by-side boxes:
  * CPU (usage sparkline + power + temperature) on the left, RAM on the right.
+ * Each box carries its own header (icon + label); the container has no heading.
  * Lives below the stock Resources grid (GPU | Storage + Network).
  */
 export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPanelProps) {
@@ -37,16 +37,17 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
   const ramAvail = ramTotal > 0 ? ramTotal - ramUsed : 0;
 
   return (
-    <Panel
-      title="CPU & RAM"
-      icon={<CpuIcon />}
-      className={`panel-cpu-ram ${className ?? ""}`}
-      bodyClassName=""
-      accent
+    <section
+      className={`panel panel-accent panel-cpu-ram ${className ?? ""}`}
+      style={{ padding: "var(--density-panel-pad)" }}
     >
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {/* CPU box */}
-        <div className="space-y-3">
+        <div className="space-y-2">
+          <div className="panel-title mb-2.5">
+            <CpuIcon />
+            CPU
+          </div>
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted">Usage</span>
             <div className="flex items-center gap-3">
@@ -102,6 +103,6 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
           )}
         </div>
       </div>
-    </Panel>
+    </section>
   );
 }
