@@ -200,17 +200,11 @@ function SparkCard({
         </div>
       ) : (
         <>
-          {/* Three headline bars: GPU alloc, Temp, Usage */}
+          {/* Three headline bars: RAM, GPU alloc, Temp, Usage */}
           <div className="flex flex-col gap-3.5">
-            <MetricBar
-              label="VRAM"
-              value={vramUsed}
-              max={vramTotal}
-              color={vramBarColor}
-              caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
-            />
-            {spark.kind === "host" && (() => {
-              // Non-Spark hosts: system RAM is separate from discrete VRAM.
+            {(() => {
+              // System RAM — always shown on the dashboard (crucial when we
+              // track more than just VRAM). Separate from discrete VRAM.
               const ram = spark.metrics.ram;
               const rUsed = ram?.used ?? 0;
               const rTotal = ram?.total ?? 0;
@@ -226,6 +220,13 @@ function SparkCard({
                 />
               );
             })()}
+            <MetricBar
+              label="VRAM"
+              value={vramUsed}
+              max={vramTotal}
+              color={vramBarColor}
+              caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
+            />
             <MetricBar
               label={spark.kind === "host" ? "GPU" : "Temperature"}
               value={displayTemp}
