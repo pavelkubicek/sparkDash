@@ -53,7 +53,7 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
             <div className="flex items-center gap-3">
               {cpuHistory.length > 0 && (
                 <span style={{ color: "var(--color-accent)" }}>
-                  <Sparkline data={cpuHistory} color="var(--color-accent)" />
+                  <Sparkline data={cpuHistory} color="var(--color-accent)" width={180} />
                 </span>
               )}
               <span className="font-tabular text-sm font-semibold text-text-strong">{usage}%</span>
