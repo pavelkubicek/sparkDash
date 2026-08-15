@@ -463,9 +463,9 @@ export function LlmPanel({
             title="Tokens/sec while the engine is reading the prompt and building KV cache — before the first output token. Opening a saved chat in the UI does not hit the GPU; send (or regenerate) so the history is sent as the prompt. Prefix-cache hits do little compute, so this can stay ~0. Long cold prefills show here until decode starts."
           >
             <span className="text-xs text-muted">Prefill tok/s</span>
-            <div className="flex items-center gap-2">
-              <Sparkline data={prefillHistory} color="var(--color-text)" height={24} />
-              <span className="font-tabular text-sm font-semibold text-text">
+            <div className="flex items-center gap-3">
+              <Sparkline data={prefillHistory} color="var(--color-accent)" height={24} width={160} />
+              <span className="shrink-0 font-tabular text-3xl font-bold text-accent">
                 {prefillTps.toFixed(1)}
               </span>
             </div>
