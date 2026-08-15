@@ -25,7 +25,6 @@ function formatMb(mb: number): string {
  */
 export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPanelProps) {
   const cpuHistory = useMetricsHistoryTail(sparkId, "cpu.usage");
-  const ramHistory = useMetricsHistoryTail(sparkId, "ram.percentage");
 
   const usage = cpu?.usage ?? 0;
   const temperature = cpu?.temperature ?? 0;
@@ -83,17 +82,6 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
             max={ramTotal}
             caption={ramTotal > 0 ? `${formatMb(ramUsed)} / ${formatMb(ramTotal)} · ${ramPct}%` : "—"}
           />
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted">Usage</span>
-            <div className="flex items-center gap-3">
-              {ramHistory.length > 0 && (
-                <span style={{ color: "var(--color-accent)" }}>
-                  <Sparkline data={ramHistory} color="var(--color-accent)" width={140} />
-                </span>
-              )}
-              <span className="font-tabular text-sm font-semibold text-text">{ramPct}%</span>
-            </div>
-          </div>
           {ramAvail > 0 && (
             <div className="flex justify-between text-xs">
               <span className="text-muted">Available</span>
