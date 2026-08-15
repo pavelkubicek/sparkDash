@@ -5,6 +5,7 @@ import { updateSpark, refreshSparkMetric, addLlmPort, removeLlmPort } from "../.
 import { SparkHeader } from "./SparkHeader";
 import { SparkActions } from "./SparkActions";
 import { GpuPanel } from "./GpuPanel";
+import { CpuPanel } from "./CpuPanel";
 import { RamPanel } from "./RamPanel";
 import { StoragePanel } from "./StoragePanel";
 import { NetworkPanel } from "./NetworkPanel";
@@ -261,13 +262,19 @@ export function SparkPage({ spark, temperatureUnit, onEdit }: SparkPageProps) {
                 {tailscaleOn && <TailscalePanel tailscale={metrics.tailscale ?? null} />}
               </>
             ) : (
-              /* Resources layout: GPU spans the full left column; Storage + Network [+ Tailnet] stack in the right column */
+              /* Resources layout: GPU spans the full left column; CPU + Storage + Network stack in the right column */
               <>
                 <GpuPanel
                   gpu={metrics.gpu}
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                   className={tailscaleOn ? "md:row-span-3" : "md:row-span-2"}
+                />
+                <CpuPanel
+                  cpu={metrics.cpu}
+                  ram={metrics.ram}
+                  unifiedMemory={metrics.unifiedMemory}
+                  sparkId={spark.id}
                 />
                 <StoragePanel
                   storage={metrics.storage}
