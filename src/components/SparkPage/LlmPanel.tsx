@@ -465,7 +465,7 @@ export function LlmPanel({
           >
             <span className="text-xs text-muted">Prefill tok/s</span>
             <div className="flex items-center gap-3">
-              <Sparkline data={prefillHistory} color="var(--color-accent)" height={24} width={160} />
+              <Sparkline data={prefillHistory} color="var(--color-text)" height={24} width={160} />
               {/* Fixed-width (≥7ch incl. ".0") so the digit column doesn't jump around */}
               <span className="inline-block min-w-[7ch] text-right font-tabular text-3xl font-bold text-text">
                 {prefillTps.toFixed(1)}
