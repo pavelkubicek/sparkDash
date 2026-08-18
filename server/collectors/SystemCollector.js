@@ -63,8 +63,13 @@ export class SystemCollector {
 
       // Temperature and power can run in parallel — power is now a pure
       // function of the usage fraction (no extra /proc/stat read).
+      //
+      // CPU temperature is only meaningful/reported for dedicated GPU hosts
+      // (`kind: "host"`) that expose a real x86 core sensor (coretemp/k10temp/
+      // zenpower). DGX Sparks (GB10, ARM) only expose an `acpitz` board/case
+      // zone — that is NOT a CPU temp, so we report 0 there (the UI hides it).
       const [temp, power] = await Promise.all([
-        this._getCPUTemperature(),
+        this.spark.kind === "host" ? this._getCPUTemperature() : Promise.resolve(0),
         this._getCPUPower(usageFraction),
       ]);
       return { usage: cpuPercentage, temperature: temp, ...power };
@@ -458,44 +463,78 @@ export class SystemCollector {
     return { total, used };
   }
 
+  /**
+   * Read CPU temperature from sysfs (host kind only).
+   *
+   * Priority:
+   *   1. Real x86 CPU sensors in hwmon — `coretemp`, `k10temp`, `zenpower`.
+   *      These report package/core junction temps. We take the HOTTEST input
+   *      (thermal margin matters more than averaging).
+   *   2. Fallback to a generic CPU-compatible zone. GB10/DGX Spark (ARM) has
+   *      no coretemp/k10temp — only an `acpitz` board/case zone, which is NOT a
+   *      CPU temp. To avoid reporting a misleading "CPU temp", acpitz is only
+   *      used as a last-resort and the hottest zone is selected (previously we
+   *      blindly took the first `temp*_input`, which on GB10 was the hottest
+   *      board zone — the source of the "84°C CPU" reports).
+   *
+   * @returns {Promise<number>} degrees Celsius, or 0 when no usable sensor.
+   */
   async _getCPUTemperature() {
-    // Try hwmon sysfs first
+    const CPU_SENSORS = ["coretemp", "k10temp", "zenpower"];
+    const BOARD_SENSOR = "acpitz";
+    let maxCpuTemp = 0;
+    let maxBoardTemp = 0;
+
+    // hwmon sysfs
     try {
       const hwmonDir = path.join(HOST_PATHS.SYS, "class/hwmon");
       if (fs.existsSync(hwmonDir)) {
-        const entries = fs.readdirSync(hwmonDir);
-        for (const entry of entries) {
+        for (const entry of fs.readdirSync(hwmonDir)) {
           const nameFile = path.join(hwmonDir, entry, "name");
-          if (fs.existsSync(nameFile)) {
-            const name = fs.readFileSync(nameFile, "utf-8").trim();
-            if (["coretemp", "k10temp", "zenpower", "acpitz"].includes(name)) {
-              const tempFiles = fs.readdirSync(path.join(hwmonDir, entry)).filter((f) => f.startsWith("temp") && f.endsWith("_input"));
-              if (tempFiles.length > 0) {
-                const tempRaw = parseInt(fs.readFileSync(path.join(hwmonDir, entry, tempFiles[0]), "utf-8").trim());
-                if (tempRaw > 0 && tempRaw < 200000) return tempRaw / 1000;
-              }
+          if (!fs.existsSync(nameFile)) continue;
+          const name = fs.readFileSync(nameFile, "utf-8").trim();
+          const isCpu = CPU_SENSORS.includes(name);
+          const isBoard = name === BOARD_SENSOR;
+          if (!isCpu && !isBoard) continue;
+          const tempFiles = fs
+            .readdirSync(path.join(hwmonDir, entry))
+            .filter((f) => f.startsWith("temp") && f.endsWith("_input"));
+          for (const f of tempFiles) {
+            const raw = parseInt(fs.readFileSync(path.join(hwmonDir, entry, f), "utf-8").trim(), 10);
+            if (Number.isFinite(raw) && raw > 0 && raw < 200000) {
+              const celsius = raw / 1000;
+              if (isCpu && celsius > maxCpuTemp) maxCpuTemp = celsius;
+              else if (isBoard && celsius > maxBoardTemp) maxBoardTemp = celsius;
             }
           }
         }
       }
     } catch {}
 
-    // Try thermal zones
+    // Real CPU sensor wins.
+    if (maxCpuTemp > 0) return maxCpuTemp;
+
+    // Thermal zones fallback (only if no hwmon CPU sensor was found).
     try {
       const thermalDir = path.join(HOST_PATHS.SYS, "class/thermal");
       if (fs.existsSync(thermalDir)) {
-        const zones = fs.readdirSync(thermalDir).filter((z) => z.startsWith("thermal_zone"));
-        for (const zone of zones) {
+        for (const zone of fs.readdirSync(thermalDir).filter((z) => z.startsWith("thermal_zone"))) {
           const tempFile = path.join(thermalDir, zone, "temp");
-          if (fs.existsSync(tempFile)) {
-            const temp = parseInt(fs.readFileSync(tempFile, "utf-8").trim());
-            if (temp > 0 && temp < 200000) return temp / 1000;
+          if (!fs.existsSync(tempFile)) continue;
+          const raw = parseInt(fs.readFileSync(tempFile, "utf-8").trim(), 10);
+          if (Number.isFinite(raw) && raw > 0 && raw < 200000) {
+            const celsius = raw / 1000;
+            if (celsius > maxBoardTemp) maxBoardTemp = celsius;
           }
         }
       }
     } catch {}
 
-    return 0;
+    // Last resort: hottest board/case (acpitz) zone. Note this is a board
+    // temperature, not a core temp — on GB10 it runs notably hotter than the
+    // GPU die and should not be labeled "CPU". It's the best we can do when a
+    // host has no x86 CPU sensor.
+    return maxBoardTemp;
   }
 
   /**
@@ -1017,10 +1056,15 @@ export class SystemCollector {
         ...(this.spark.kind === "host"
           ? [
               "echo '---'",
-              // Same hwmon-then-thermal priority as local `_getCPUTemperature()`.
-              // GB10 also exposes nvme/mlx5 sensors; the name allowlist keeps those out.
-              'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in coretemp|k10temp|zenpower|acpitz) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; break; done;; esac; done',
-              "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null",
+              // Same priority as local `_getCPUTemperature()`: real x86 CPU
+              // sensors first (hottest input), acpitz/thermal as board fallback.
+              // GB10 also exposes nvme/mlx5 sensors; the name allowlist keeps
+              // those out. Each category emits its hottest value on its own
+              // line; `_parseSensorTemp` returns the first plausible line, so
+              // coretemp/k10temp/zenpower wins over acpitz over thermal zones.
+              'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in coretemp|k10temp|zenpower) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
+              'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in acpitz) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
+              "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -nr | head -1",
             ]
           : []),
       ].join("; ");
