@@ -1,4 +1,8 @@
 import type {
+  AiProxyActiveRequest,
+  AiProxyObserverUrl,
+  AiProxyStats,
+  AiProxyStream,
   DecodeBenchJob,
   DecodeBenchListResponse,
   HermesBatchUpdateResponse,
@@ -371,6 +375,50 @@ export function wakeAllSparks(): Promise<BatchPowerResult> {
 /** Per-Spark update preview (release + pending commits + resolved view). */
 export function fetchHermesUpdates(id: string): Promise<HermesUpdatesResponse> {
   return apiFetch(`/api/sparks/${encodeURIComponent(id)}/hermes/updates`);
+}
+
+// ─── AI Proxy ─────────────────────────────────────────────
+// All calls go through the sparkDash server bridge (/api/ai-proxy/*) so the
+// browser never needs CORS against the proxy. Each endpoint returns 502 when
+// the proxy is unreachable, letting the UI show a graceful offline state.
+// The bridge uses localhost inside the page URL and is reachable from the UI.
+
+/** Active streaming requests. */
+export function fetchAiProxyStreams(): Promise<AiProxyStream[]> {
+  return apiFetch("/api/ai-proxy/streams");
+}
+
+/** Active non-streaming requests. */
+export function fetchAiProxyActiveRequests(): Promise<AiProxyActiveRequest[]> {
+  return apiFetch("/api/ai-proxy/active-requests");
+}
+
+/** Statistics for a date range (YYYY-MM-DD). */
+export function fetchAiProxyStats(
+  startDate: string,
+  endDate: string
+): Promise<AiProxyStats> {
+  const q = new URLSearchParams({ startDate, endDate });
+  return apiFetch(`/api/ai-proxy/statistics?${q.toString()}`);
+}
+
+/** Kill a streaming request by id. */
+export function killAiProxyStream(id: string): Promise<{ success?: boolean; error?: string }> {
+  return apiFetch(`/api/ai-proxy/cancel/${encodeURIComponent(id)}`, {
+    method: "POST",
+  });
+}
+
+/** Cancel a non-streaming request by id. */
+export function killAiProxyRequest(id: string): Promise<{ success?: boolean; error?: string }> {
+  return apiFetch(`/api/ai-proxy/cancel-request/${encodeURIComponent(id)}`, {
+    method: "POST",
+  });
+}
+
+/** Observer base URL for "jump to proxy" links. */
+export function fetchAiProxyObserverUrl(): Promise<AiProxyObserverUrl> {
+  return apiFetch("/api/ai-proxy/observer-url");
 }
 
 // ─── Global settings ──────────────────────────────────────

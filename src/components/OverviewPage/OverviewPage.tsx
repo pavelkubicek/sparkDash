@@ -5,6 +5,7 @@ import { shutdownAllSparks, updateAllHermes, wakeAllSparks } from "../../api/cli
 import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { MetricBar } from "../ui/MetricBar";
 import { ActivityIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
+import { AiProxyPanel } from "./AiProxyPanel";
 
 interface OverviewPageProps {
   sparks: SparkSnapshot[];
@@ -503,18 +504,23 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
   if (visibleSparks.length === 0) {
     const allOffline = hideOffline && sparks.length > 0;
     return (
-      <div className="panel mx-auto mt-16 max-w-md p-8 text-center">
-        <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
-          <ActivityIcon className="h-5 w-5" />
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-overview-rhythm)" }}>
+        <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
+          <AiProxyPanel />
         </div>
-        <h2 className="text-sm font-semibold text-text-strong">
-          {allOffline ? "All Sparks are offline" : "No Sparks registered"}
-        </h2>
-        <p className="mt-1 text-xs text-muted">
-          {allOffline
-            ? "Auto-hide is enabled and no Sparks are currently online."
-            : "Click the + tab to add a DGX Spark unit."}
-        </p>
+        <div className="panel mx-auto mt-4 max-w-md p-8 text-center">
+          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
+            <ActivityIcon className="h-5 w-5" />
+          </div>
+          <h2 className="text-sm font-semibold text-text-strong">
+            {allOffline ? "All Sparks are offline" : "No Sparks registered"}
+          </h2>
+          <p className="mt-1 text-xs text-muted">
+            {allOffline
+              ? "Auto-hide is enabled and no Sparks are currently online."
+              : "Click the + tab to add a DGX Spark unit."}
+          </p>
+        </div>
       </div>
     );
   }
@@ -628,7 +634,7 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
         description={`Gracefully shut down all ${onlineShutdownCount} online Spark${onlineShutdownCount === 1 ? "" : "s"}? Offline nodes will be skipped.`}
         confirmLabel="Shut down all"
       />
-      <div className="overview-page grid sm:grid-cols-2 lg:grid-cols-3" style={{ gap: "var(--density-page-gap)" }}>
+      <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
         {visibleSparks.map((spark) => (
           <SparkCard
             key={spark.id}
@@ -642,6 +648,7 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
             onSelect={onSelectSpark}
           />
         ))}
+        <AiProxyPanel />
       </div>
     </div>
   );

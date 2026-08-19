@@ -780,3 +780,86 @@ export interface ShowcaseStartResponse {
   sessionId: string;
   status: "running";
 }
+
+// ─── AI Proxy (via sparkDash bridge) ─────────────────────
+/**
+ * The AI proxy is a proprietary integration that sparkDash talks to via its
+ * observer API on the loopback host. All fields mirror the proxy payloads;
+ * keep this types file as the single source of truth for the UI.
+ */
+
+/** One active streaming request as reported by the observer. */
+export interface AiProxyStream {
+  id: string;
+  startTime: number;
+  method: string;
+  url: string;
+  model: string | null;
+  targetPort: number;
+  requestBody?: { messages?: Array<{ role?: string; content?: unknown }> } | null;
+  /** Number of SSE chunks received. null when unavailable. */
+  chunksReceived?: number | null;
+  /** Output text chars so far (0 = still prefill/reasoning). */
+  textLength?: number | null;
+  /** Reasoning text chars so far. */
+  thinkingLength?: number | null;
+  /** Preview of the answer text so far. */
+  textPreview?: string | null;
+  /** Preview of the reasoning text so far. */
+  thinkingPreview?: string | null;
+  /** Tool-call payload chars so far. */
+  toolCallsChars?: number | null;
+  /** When the stream last updated (ms epoch). */
+  lastUpdated?: number | null;
+  /** Seconds elapsed since the stream started. */
+  elapsed?: number | null;
+}
+
+/** One active non-streaming request as reported by the observer. */
+export interface AiProxyActiveRequest {
+  id: string;
+  startTime: number;
+  method: string;
+  url: string;
+  model: string | null;
+  targetPort: number;
+  requestBody?: { messages?: Array<{ role?: string; content?: unknown }> } | null;
+}
+
+/** Totals for a statistics bucket. */
+export interface AiProxyTotals {
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+/** One model row in the statistics breakdown. */
+export interface AiProxyModelStat {
+  model: string;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+/** One day+model row in the daily breakdown. */
+export interface AiProxyDailyStat {
+  period: string;
+  model: string;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface AiProxyStats {
+  totals: AiProxyTotals;
+  byModel: AiProxyModelStat[];
+  daily: AiProxyDailyStat[];
+}
+
+/** Response for the observer-url helper. */
+export interface AiProxyObserverUrl {
+  url: string;
+}

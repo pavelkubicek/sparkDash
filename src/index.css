@@ -677,12 +677,14 @@ input[type="checkbox"] {
 .overview-card:hover {
   box-shadow: var(--shadow-card-hover);
   border-color: var(--color-border-strong);
-  transform: translateY(-1px);
 }
 
 /* ─── Pulse / glow accents ─────────────────────────────── */
 .dot-glow-success {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 20%, transparent);
+}
+.dot-glow-danger {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 20%, transparent);
 }
 .dot-glow-accent {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
@@ -1009,7 +1011,12 @@ input[type="checkbox"] {
   }
 }
 .modal-sheet--wide {
-  max-width: 40rem;
+  max-width: 50rem;
+}
+@media (min-width: 640px) {
+  .modal-sheet--wide {
+    max-height: min(92dvh, 56rem);
+  }
 }
 
 .modal-sheet__header {

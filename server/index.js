@@ -35,6 +35,7 @@ const BIND_HOST = process.env.BIND_HOST || "127.0.0.1";
 const PORT = parseInt(process.env.PORT || "5555", 10);
 const LLM_PORT = parseInt(process.env.LLM_PORT || "8888", 10);
 const COMFY_PORT = parseInt(process.env.COMFY_PORT || "8188", 10);
+const AI_PROXY_PORT = parseInt(process.env.AI_PROXY_PORT || "3001", 10);
 
 /** Per-spark LLM HTTP port (1–65535), else env default. */
 function resolveLlmPort(sparkOrPort) {
@@ -139,6 +140,87 @@ app.use(express.json());
 function clientKey(req) {
   return req.ip || req.socket?.remoteAddress || "unknown";
 }
+
+// ─── AI Proxy bridge ─────────────────────────────────────
+// Proxies the (proprietary) AI proxy's observer API through the sparkDash
+// server so the browser never needs CORS and the integration stays self-
+// contained. Routes are unauthenticated like the rest of the LAN dashboard.
+const AI_PROXY_BASE = `http://127.0.0.1:${AI_PROXY_PORT}`;
+const AI_PROXY_TIMEOUT_MS = 5000;
+
+async function aiProxyFetch(path, init) {
+  const res = await fetch(`${AI_PROXY_BASE}${path}`, {
+    ...init,
+    signal: AbortSignal.timeout(AI_PROXY_TIMEOUT_MS),
+  });
+  const text = await res.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = {};
+  }
+  return { status: res.status, json };
+}
+
+/**
+ * Shared handler for GET endpoints that forward to the observer API.
+ * On any upstream failure responds 502 so the UI can show a graceful
+ * offline state instead of a generic fetch error.
+ */
+async function aiProxyGet(req, res, path) {
+  try {
+    const query = new URLSearchParams(req.query);
+    const qs = query.toString() ? `?${query.toString()}` : "";
+    const { status, json } = await aiProxyFetch(`${path}${qs}`, { method: "GET" });
+    res.status(status).json(json);
+  } catch (err) {
+    res.status(502).json({ error: `AI proxy unreachable (${err.message || String(err)})` });
+  }
+}
+
+app.get("/api/ai-proxy/streams", (req, res) => {
+  void aiProxyGet(req, res, "/observer/api/streaming");
+});
+
+app.get("/api/ai-proxy/active-requests", (req, res) => {
+  void aiProxyGet(req, res, "/observer/api/active-requests");
+});
+
+app.get("/api/ai-proxy/statistics", (req, res) => {
+  void aiProxyGet(req, res, "/observer/api/statistics");
+});
+
+/** Kill a streaming request by id. */
+app.post("/api/ai-proxy/cancel/:id", async (req, res) => {
+  try {
+    const id = encodeURIComponent(String(req.params.id));
+    const { status, json } = await aiProxyFetch(`/observer/api/cancel/${id}`, {
+      method: "POST",
+    });
+    res.status(status).json(json);
+  } catch (err) {
+    res.status(502).json({ error: `AI proxy unreachable (${err.message || String(err)})` });
+  }
+});
+
+/** Cancel a non-streaming request by id. */
+app.post("/api/ai-proxy/cancel-request/:id", async (req, res) => {
+  try {
+    const id = encodeURIComponent(String(req.params.id));
+    const { status, json } = await aiProxyFetch(`/observer/api/cancel-request/${id}`, {
+      method: "POST",
+    });
+    res.status(status).json(json);
+  } catch (err) {
+    res.status(502).json({ error: `AI proxy unreachable (${err.message || String(err)})` });
+  }
+});
+
+/** Base observer URL for "jump to proxy" links. */
+app.get("/api/ai-proxy/observer-url", (_req, res) => {
+  res.json({ url: AI_PROXY_BASE.replace("127.0.0.1", "localhost") + "/observer" });
+});
 
 // ─── REST API ────────────────────────────────────────────
 // Never return SSH passwords in any response
