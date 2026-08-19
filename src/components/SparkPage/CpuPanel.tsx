@@ -67,7 +67,9 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
           </div>
           {temperature > 0 && (
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted">Temperature</span>
+              <span className="text-muted" title="Board/SoC ACPI zone (no coretemp on GB10)">
+                SoC temp
+              </span>
               <span className="font-tabular text-[13px] text-text">{temperature}°C</span>
             </div>
           )}

@@ -209,9 +209,9 @@ test("rejects out-of-range values and falls through", async () => {
   }
 });
 
-test("collectCpu reports 0 temp for non-host kinds", async () => {
+test("collectCpu reports SoC/board temp for non-host kinds (GB10 acpitz)", async () => {
   // Object.create drops the constructor fields; build a real instance-like obj
-  // with the methods stubbed so we only exercise the kind gating.
+  // with the methods stubbed so we only exercise the temperature path.
   const spark = Object.create(SystemCollector.prototype);
   spark.spark = { kind: "spark", isLocal: true, id: "spark1" };
   // Baseline so the /proc/stat diff yields 50%: used +50 on total +100.
@@ -219,10 +219,10 @@ test("collectCpu reports 0 temp for non-host kinds", async () => {
   spark.lastCpuUsagePct = 50;
   spark._getCPUUsage = async () => ({ total: 200, used: 100 });
   spark._getCPUPower = async () => ({ draw: 20, tdp: 65 });
-  spark._getCPUTemperature = async () => 84; // would-be GB10 acpitz reading
+  spark._getCPUTemperature = async () => 84; // GB10 acpitz SoC/board reading
   try {
     const result = await spark.collectCpu();
-    assert.equal(result.temperature, 0, "non-host kind must report temperature 0");
+    assert.equal(result.temperature, 84, "non-host kind reports the acpitz SoC temp");
     assert.equal(result.usage, 50);
   } finally {
     restoreFs();

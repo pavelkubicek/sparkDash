@@ -64,12 +64,12 @@ export class SystemCollector {
       // Temperature and power can run in parallel — power is now a pure
       // function of the usage fraction (no extra /proc/stat read).
       //
-      // CPU temperature is only meaningful/reported for dedicated GPU hosts
-      // (`kind: "host"`) that expose a real x86 core sensor (coretemp/k10temp/
-      // zenpower). DGX Sparks (GB10, ARM) only expose an `acpitz` board/case
-      // zone — that is NOT a CPU temp, so we report 0 there (the UI hides it).
+      // On a DGX Spark (GB10/ARM) there is no coretemp/k10temp; the value read
+      // is an acpitz board/case zone — a genuine SoC/board temperature, not a
+      // CPU core temp. We still report it so the panel can label it honestly
+      // ("SoC temp") instead of hiding it.
       const [temp, power] = await Promise.all([
-        this.spark.kind === "host" ? this._getCPUTemperature() : Promise.resolve(0),
+        this._getCPUTemperature(),
         this._getCPUPower(usageFraction),
       ]);
       return { usage: cpuPercentage, temperature: temp, ...power };
@@ -1053,27 +1053,24 @@ export class SystemCollector {
         "cat /proc/stat | head -1",
         "echo '---'",
         "cat /proc/cpuinfo | grep -E 'CPU architecture|aarch64' | head -1",
-        ...(this.spark.kind === "host"
-          ? [
-              "echo '---'",
-              // Same priority as local `_getCPUTemperature()`: real x86 CPU
-              // sensors first (hottest input), acpitz/thermal as board fallback.
-              // GB10 also exposes nvme/mlx5 sensors; the name allowlist keeps
-              // those out. Each category emits its hottest value on its own
-              // line; `_parseSensorTemp` returns the first plausible line, so
-              // coretemp/k10temp/zenpower wins over acpitz over thermal zones.
-              'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in coretemp|k10temp|zenpower) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
-              'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in acpitz) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
-              "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -nr | head -1",
-            ]
-          : []),
+        "echo '---'",
+        // Same priority as local `_getCPUTemperature()`: real x86 CPU sensors
+        // first (hottest input), acpitz/thermal as board/SoC fallback. GB10
+        // also exposes nvme/mlx5 sensors; the name allowlist keeps those out.
+        // Each category emits its hottest value on its own line;
+        // `_parseSensorTemp` returns the first plausible line, so
+        // coretemp/k10temp/zenpower wins over acpitz over thermal zones.
+        // On GB10 (ARM) only acpitz exists → that is the SoC/board temp.
+        'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in coretemp|k10temp|zenpower) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
+        'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in acpitz) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
+        "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -nr | head -1",
       ].join("; ");
 
       const output = await sshExec(this.spark, cmd);
       const sections = output.split("---");
       const statOut = sections[0]?.trim() || "";
       const cpuinfoOut = sections[1]?.trim() || "";
-      const tempOut = this.spark.kind === "host" ? sections[2] || "" : "";
+      const tempOut = sections[2] || "";
 
       const cpuStat = this._parseCPUUsage(statOut);
       const totalDiff = cpuStat.total - (this.lastCpuStat?.total || cpuStat.total);
@@ -1089,7 +1086,7 @@ export class SystemCollector {
 
       return {
         usage,
-        temperature: this.spark.kind === "host" ? this._parseSensorTemp(tempOut) : 0,
+        temperature: this._parseSensorTemp(tempOut),
         draw: Math.round(draw * 10) / 10,
         tdp: Math.round(tdp),
       };
