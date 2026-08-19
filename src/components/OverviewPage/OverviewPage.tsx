@@ -209,7 +209,7 @@ function SparkCard({
               const rUsed = ram?.used ?? 0;
               const rTotal = ram?.total ?? 0;
               const rPct = rTotal > 0 ? Math.round((rUsed / rTotal) * 100) : 0;
-              const ramBarColor = rPct > 95 ? "bg-danger" : "bg-bar-ram";
+              const ramBarColor = rPct > 95 ? "bg-danger" : rPct > 75 ? "bg-warning" : "bg-bar-ram";
               return (
                 <MetricBar
                   label="RAM"

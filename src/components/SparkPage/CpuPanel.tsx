@@ -34,6 +34,7 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
   const ramUsed = ram?.used ?? 0;
   const ramTotal = ram?.total ?? 0;
   const ramPct = ram?.percentage ?? 0;
+  const ramBarColor = ramPct > 95 ? "bg-danger" : ramPct > 75 ? "bg-warning" : "bg-bar-ram";
   const ramAvail = ramTotal > 0 ? ramTotal - ramUsed : 0;
 
   return (
@@ -85,7 +86,7 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
             label="Used"
             value={ramUsed}
             max={ramTotal}
-            color="bg-bar-ram"
+            color={ramBarColor}
             caption={ramTotal > 0 ? `${formatMb(ramUsed)} / ${formatMb(ramTotal)} · ${ramPct}%` : "—"}
           />
           {ramAvail > 0 && (

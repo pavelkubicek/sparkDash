@@ -58,6 +58,9 @@ export function GpuPanel({ gpu, sparkId, temperatureUnit, className }: GpuPanelP
   const vramTotal = gpu?.vram?.total ?? 0;
   const vramPct = gpu?.vram?.percentage ?? 0;
 
+  // GPU usage — cyan, red from 90% (matches the dashboard overview card)
+  const usageColor = usage >= 90 ? "var(--color-danger)" : "var(--color-bar-usage)";
+
   const tempColor =
     temperature >= 73
       ? "var(--color-danger)"
@@ -75,8 +78,8 @@ export function GpuPanel({ gpu, sparkId, temperatureUnit, className }: GpuPanelP
     >
       <MetricRow
         label="Usage"
-        color="var(--color-bar-usage)"
-        spark={<Sparkline data={usageHistory} color="var(--color-bar-usage)" width={180} />}
+        color={usageColor}
+        spark={<Sparkline data={usageHistory} color={usageColor} width={180} />}
         value={<span className="text-text-strong">{usage}%</span>}
       />
       <MetricRow
