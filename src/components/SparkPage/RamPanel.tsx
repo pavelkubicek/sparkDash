@@ -59,6 +59,7 @@ export function RamPanel({ ram, cpu, sparkId, temperatureUnit, className }: RamP
             label="RAM"
             value={used}
             max={total}
+            color="bg-bar-ram"
             caption={
               total > 0
                 ? `${formatMb(used).replace(/ (GB|MB)$/, "")} / ${formatMb(total)}`

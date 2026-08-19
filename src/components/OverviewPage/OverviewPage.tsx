@@ -97,13 +97,13 @@ function SparkCard({
   const vramTotal = gpu?.vram?.total ?? um?.total ?? 0;
   const vramAvail = gpu?.vram?.available ?? um?.available ?? 0;
 
-  // Temperature bar: cool → success, warm → warning, hot → danger
+  // Temperature bar: <68°C green, 68–73°C orange, 73°C+ red
   const tempBarColor =
-    tempRaw > 85 ? "bg-danger" : tempRaw > 65 ? "bg-warning" : tempRaw > 40 ? "bg-accent" : "bg-success";
-  // Usage bar: accent for moderate, warning high, danger critical
-  const usageBarColor = usage > 85 ? "bg-danger" : usage > 60 ? "bg-warning" : "bg-accent";
-  // VRAM allocation: accent normal → warning/danger as it fills
-  const vramBarColor = vramPct > 85 ? "bg-danger" : vramPct > 60 ? "bg-warning" : "bg-accent";
+    tempRaw >= 73 ? "bg-danger" : tempRaw >= 68 ? "bg-warning" : "bg-success";
+  // Usage bar: cyan, red from 90%+
+  const usageBarColor = usage >= 90 ? "bg-danger" : "bg-bar-usage";
+  // VRAM allocation: purple, red only at critical
+  const vramBarColor = vramPct > 95 ? "bg-danger" : "bg-bar-vram";
 
   return (
     <div
@@ -209,7 +209,7 @@ function SparkCard({
               const rUsed = ram?.used ?? 0;
               const rTotal = ram?.total ?? 0;
               const rPct = rTotal > 0 ? Math.round((rUsed / rTotal) * 100) : 0;
-              const ramBarColor = rPct > 85 ? "bg-danger" : rPct > 60 ? "bg-warning" : "bg-accent";
+              const ramBarColor = rPct > 95 ? "bg-danger" : "bg-bar-ram";
               return (
                 <MetricBar
                   label="RAM"
@@ -241,7 +241,7 @@ function SparkCard({
               const cpuLabel =
                 temperatureUnit === "fahrenheit" ? `${cpuDisplay}°F` : `${cpuDisplay}°C`;
               const cpuBarColor =
-                cpuRaw > 95 ? "bg-danger" : cpuRaw > 85 ? "bg-warning" : cpuRaw > 50 ? "bg-accent" : "bg-success";
+                cpuRaw >= 73 ? "bg-danger" : cpuRaw >= 68 ? "bg-warning" : "bg-success";
               return (
                 <MetricBar
                   label="CPU"
@@ -557,7 +557,7 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
               <div className="h-1 w-36 overflow-hidden rounded-full bg-border">
                 <div
                   className={`h-full rounded-full transition-[width] duration-300 ease-out ${
-                    batchProg.failed > 0 ? "bg-danger" : "bg-accent"
+                    batchProg.failed > 0 ? "bg-danger" : "bg-bar"
                   }`}
                   style={{
                     width: `${batchProg.total > 0 ? Math.round((batchProg.done / batchProg.total) * 100) : 0}%`,

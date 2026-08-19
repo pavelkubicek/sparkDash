@@ -85,6 +85,7 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
             label="Used"
             value={ramUsed}
             max={ramTotal}
+            color="bg-bar-ram"
             caption={ramTotal > 0 ? `${formatMb(ramUsed)} / ${formatMb(ramTotal)} · ${ramPct}%` : "—"}
           />
           {ramAvail > 0 && (

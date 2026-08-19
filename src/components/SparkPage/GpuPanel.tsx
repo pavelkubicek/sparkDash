@@ -59,11 +59,11 @@ export function GpuPanel({ gpu, sparkId, temperatureUnit, className }: GpuPanelP
   const vramPct = gpu?.vram?.percentage ?? 0;
 
   const tempColor =
-    temperature > 85
+    temperature >= 73
       ? "var(--color-danger)"
-      : temperature > 65
+      : temperature >= 68
         ? "var(--color-warning)"
-        : "var(--color-accent)";
+        : "var(--color-success)";
 
   return (
     <Panel
@@ -75,8 +75,8 @@ export function GpuPanel({ gpu, sparkId, temperatureUnit, className }: GpuPanelP
     >
       <MetricRow
         label="Usage"
-        color="var(--color-accent)"
-        spark={<Sparkline data={usageHistory} color="var(--color-accent)" width={180} />}
+        color="var(--color-bar-usage)"
+        spark={<Sparkline data={usageHistory} color="var(--color-bar-usage)" width={180} />}
         value={<span className="text-text-strong">{usage}%</span>}
       />
       <MetricRow
@@ -113,9 +113,7 @@ export function GpuPanel({ gpu, sparkId, temperatureUnit, className }: GpuPanelP
         const barColor =
           reason === "thermal"
             ? "bg-danger"
-            : reason === "power" || reason === "hw"
-              ? "bg-warning"
-              : "bg-accent";
+            : "bg-bar";
         const pct = t?.smClockPct;
         const clockCaption =
           t?.smClockMHz != null && t?.smClockMaxMHz != null
@@ -158,6 +156,7 @@ export function GpuPanel({ gpu, sparkId, temperatureUnit, className }: GpuPanelP
                 label="VRAM"
                 value={vramUsed}
                 max={vramTotal}
+                color="bg-bar-vram"
                 caption={vramTotal > 0 ? `${formatMb(vramUsed).replace(/ (GB|MB)$/, "")} / ${formatMb(vramTotal)}` : "—"}
               />
               {gpu.vram.available > 0 && (
