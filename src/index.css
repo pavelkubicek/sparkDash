@@ -355,6 +355,11 @@ input:disabled {
   .overview-page {
     gap: 0 !important;
   }
+  /* Panels (AI Proxy, Dev Engine) need the same spacing between rows as
+     the spark cards on single-column mobile layouts. */
+  .overview-page > .panel + .panel {
+    margin-top: 20px;
+  }
 }
 
 /* ─── Pill nav (white rounded container for tabs) ─────── */
