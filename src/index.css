@@ -354,6 +354,10 @@ input:disabled {
   }
   .overview-page {
     gap: 0 !important;
+    /* Below the sm breakpoint there is no grid-template-columns, so the single
+       implicit track sizes to max-content and the panels overflow the
+       viewport. Pin the track to the grid width so they shrink to fit. */
+    grid-template-columns: minmax(0, 1fr);
   }
   /* Panels (AI Proxy, Dev Engine) need the same spacing between rows as
      the spark cards on single-column mobile layouts. */
