@@ -23,6 +23,7 @@ const ACTIVE_STATUSES: ReadonlySet<string> = new Set([
   "in_progress",
   "review",
   "queued",
+  "failed",
 ]);
 
 /** Task status colors matching the engine web UI (web-ui ActiveTaskItem/StatusBadge). */
