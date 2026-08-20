@@ -30,17 +30,18 @@ const TASK_STATUS_COLOR: Record<string, string> = {
   pending: "#6b7280", // gray-500
   queued: "#6b7280",
   running: "#f59e0b", // amber-500
-  fixing: "#f59e0b",
+  fixing: "#8b5cf6", // violet-500
   in_progress: "#f59e0b",
   validating: "#d97706", // amber-600
   validation_fixing: "#ea580c", // orange-600
-  reviewing: "#a855f7", // purple-500
-  review: "#a855f7",
+  reviewing: "#9333ea", // purple-600
+  review: "#9333ea",
   done: "#16a34a", // green-600
   completed: "#16a34a",
   skipped: "#0d9488", // teal-600
   failed: "#dc2626", // red-600
   processing: "#0891b2", // cyan-600
+  creating_ticket: "#4f46e5", // indigo-600
   cancelled: "#6b7280",
 };
 
@@ -60,12 +61,13 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   skipped: "Skipped",
   failed: "Failed",
   processing: "Processing",
+  creating_ticket: "Creating Ticket",
   cancelled: "Cancelled",
 };
 
 /** Ticket status colors matching the engine web UI (StatusBadge / Sidebar chips). */
 const TICKET_STATUS_COLOR: Record<string, string> = {
-  queued: "#374151", // gray-700
+  queued: "#6b7280", // gray-500
   in_progress: "#f59e0b", // amber-500
   review: "#9333ea", // purple-600
   completed: "#16a34a", // green-600
@@ -115,10 +117,13 @@ function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => 
   const total = ticket.tasks_total;
   const done = ticket.tasks_done;
   const running = ticket.tasks_running;
-  const validating = ticket.tasks_validating + ticket.tasks_validation_fixing;
+  const fixing = ticket.tasks_fixing;
+  const validating = ticket.tasks_validating;
+  const valFixing = ticket.tasks_validation_fixing;
   const reviewing = ticket.tasks_reviewing;
   const failed = ticket.tasks_failed;
-  const inFlight = running + validating + reviewing;
+  const skipped = ticket.tasks_skipped ?? 0;
+  const inFlight = running + fixing + validating + valFixing + reviewing;
   const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
   const ticketColor = TICKET_STATUS_COLOR[ticket.status] ?? "var(--color-text)";
   const ticketLabel = TICKET_STATUS_LABEL[ticket.status] ?? ticket.status;
@@ -139,34 +144,52 @@ function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => 
         className="min-w-0 flex-1 text-left transition-colors hover:text-accent"
         title={`Open ${ticket.name} in the engine`}
       >
-        <span className="block truncate text-xs text-text">{ticket.name}</span>
+        <span className="flex min-w-0 items-baseline gap-1">
+          <span className="block truncate text-xs text-text">{ticket.name}</span>
+          <span className="shrink-0 font-tabular text-[10px] text-muted">
+            #{ticket.ticket_id}
+          </span>
+        </span>
         {/* Multi-label status row — mirrors the engine's ticket card header */}
         <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
           <span className="font-tabular">{done}/{total} tasks</span>
-          {running > 0 && <span className="text-[#3b82f6]">{running} running</span>}
-          {reviewing > 0 && <span className="text-[#a855f7]">{reviewing} reviewing</span>}
-          {validating > 0 && <span className="text-[#d97706]">{validating} validating</span>}
-          {failed > 0 && <span className="text-danger">{failed} failed</span>}
+          {running > 0 && <span className="text-[#fbbf24]">{running} running</span>}
+          {fixing > 0 && <span className="text-[#a78bfa]">{fixing} fixing</span>}
+          {reviewing > 0 && <span className="text-[#c084fc]">{reviewing} reviewing</span>}
+          {validating > 0 && <span className="text-[#fbbf24]">{validating} validating</span>}
+          {valFixing > 0 && <span className="text-[#ea580c]">{valFixing} val-fixing</span>}
+          {failed > 0 && <span className="text-[#dc2626]">{failed} failed</span>}
+          {skipped > 0 && <span className="text-[#14b8a6]">{skipped} skipped</span>}
           <span className="font-tabular">{ageLabel(ticket.created_at)}</span>
         </span>
         {/* Multi-color segmented progress bar — mirrors the engine web UI:
-            green = done, blue (pulse) = running, orange = validating,
-            purple (pulse) = reviewing, red = failed, track = remaining. */}
+            green = done, amber (pulse) = running, amber = validating,
+            violet = fixing, orange = val-fixing, purple (pulse) = reviewing,
+            red = failed, teal = skipped, track = remaining. */}
         <span className="mt-1 flex h-1 w-full overflow-hidden rounded-full bg-border">
           {done > 0 && (
-            <span className="h-full bg-success" style={{ width: `${pct(done)}%` }} />
+            <span className="h-full bg-[#22c55e]" style={{ width: `${pct(done)}%` }} />
           )}
           {running > 0 && (
-            <span className="h-full animate-pulse bg-[#3b82f6]" style={{ width: `${pct(running)}%` }} />
+            <span className="h-full animate-pulse bg-[#f59e0b]" style={{ width: `${pct(running)}%` }} />
+          )}
+          {fixing > 0 && (
+            <span className="h-full animate-pulse bg-[#8b5cf6]" style={{ width: `${pct(fixing)}%` }} />
           )}
           {validating > 0 && (
-            <span className="h-full animate-pulse bg-[#d97706]" style={{ width: `${pct(validating)}%` }} />
+            <span className="h-full animate-pulse bg-[#f59e0b]" style={{ width: `${pct(validating)}%` }} />
+          )}
+          {valFixing > 0 && (
+            <span className="h-full animate-pulse bg-[#f97316]" style={{ width: `${pct(valFixing)}%` }} />
           )}
           {reviewing > 0 && (
             <span className="h-full animate-pulse bg-[#a855f7]" style={{ width: `${pct(reviewing)}%` }} />
           )}
           {failed > 0 && (
-            <span className="h-full bg-danger" style={{ width: `${pct(failed)}%` }} />
+            <span className="h-full bg-[#ef4444]" style={{ width: `${pct(failed)}%` }} />
+          )}
+          {skipped > 0 && (
+            <span className="h-full bg-[#14b8a6]" style={{ width: `${pct(skipped)}%` }} />
           )}
         </span>
       </button>

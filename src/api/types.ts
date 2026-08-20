@@ -896,6 +896,7 @@ export interface DevEngineTicket {
   tasks_running: number;
   tasks_validating: number;
   tasks_reviewing: number;
+  tasks_fixing: number;
   tasks_validation_fixing: number;
   tasks_failed: number;
   tasks_skipped?: number;
