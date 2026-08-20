@@ -1,17 +1,28 @@
 import { useEffect, useState } from "react";
-import type { SparkSnapshot } from "../../api/types";
+import type { LlmMetrics, SparkSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
 import { shutdownAllSparks, updateAllHermes, wakeAllSparks } from "../../api/client";
 import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { MetricBar } from "../ui/MetricBar";
 import { ActivityIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { AiProxyPanel } from "./AiProxyPanel";
+import { DevEnginePanel } from "./DevEnginePanel";
 
 interface OverviewPageProps {
   sparks: SparkSnapshot[];
   hideOffline?: boolean;
   temperatureUnit?: "celsius" | "fahrenheit";
   onSelectSpark?: (id: string) => void;
+}
+
+/** Gather available LLM metrics across all sparks (for the AI Proxy panel). */
+function aggregateLlm(sparks: SparkSnapshot[]) {
+  const metrics: LlmMetrics[] = [];
+  for (const s of sparks) {
+    const llm = s.metrics?.llm;
+    if (Array.isArray(llm)) metrics.push(...(llm as LlmMetrics[]));
+  }
+  return metrics;
 }
 
 function celsiusToFahrenheit(c: number): number {
@@ -507,6 +518,7 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-overview-rhythm)" }}>
         <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
           <AiProxyPanel />
+          <DevEnginePanel />
         </div>
         <div className="panel mx-auto mt-4 max-w-md p-8 text-center">
           <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
@@ -529,6 +541,11 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-overview-rhythm)" }}>
+      {/* Panels first — AI Proxy + Spark Dev Engine */}
+      <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
+        <AiProxyPanel llmMetrics={aggregateLlm(sparks)} />
+        <DevEnginePanel />
+      </div>
       <div className="flex flex-wrap items-end justify-between gap-6">
         <h1
           className="font-normal leading-tight tracking-tight text-text-strong"
@@ -648,7 +665,6 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
             onSelect={onSelectSpark}
           />
         ))}
-        <AiProxyPanel />
       </div>
     </div>
   );

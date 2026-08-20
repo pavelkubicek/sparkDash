@@ -72,6 +72,24 @@ export function ChevronDownIcon({ className }: IconProps) {
   );
 }
 
+/** Chevron pointing left (navigate date ranges earlier). */
+export function ChevronLeftIcon({ className }: IconProps) {
+  return (
+    <svg {...baseProps(className)}>
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
+
+/** Chevron pointing right (navigate date ranges later). */
+export function ChevronRightIcon({ className }: IconProps) {
+  return (
+    <svg {...baseProps(className)}>
+      <path d="M9 18l6-6-6-6" />
+    </svg>
+  );
+}
+
 /** External link (open ComfyUI). */
 export function ExternalLinkIcon({ className }: IconProps) {
   return (

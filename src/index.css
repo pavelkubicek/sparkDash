@@ -679,6 +679,13 @@ input[type="checkbox"] {
   border-color: var(--color-border-strong);
 }
 
+/* Per-Spark tok/s + prefill footer is mirrored into the AI Proxy panel
+   (max token usage) at the top of the dashboard; hide the original in the
+   spark cards without touching the component markup. */
+.overview-tps-footer {
+  display: none;
+}
+
 /* ─── Pulse / glow accents ─────────────────────────────── */
 .dot-glow-success {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 20%, transparent);

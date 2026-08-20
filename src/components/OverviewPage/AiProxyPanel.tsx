@@ -12,11 +12,25 @@ import type {
   AiProxyStats,
   AiProxyStream,
 } from "../../api/types";
+import type { LlmMetrics } from "../../api/types";
 import { Panel } from "../ui/Panel";
 import { ChartIcon, ExternalLinkIcon, PowerOffIcon } from "../ui/icons";
 import { AiProxyDetailDialog } from "./AiProxyDetailDialog";
 
 const POLL_MS = 5000;
+
+/** Aggregate available LLM throughput (mirrors the spark boxes' tok/s + prefill). */
+function llmThroughput(metrics: LlmMetrics[] | undefined): {
+  generationTps: number | null;
+  prefillTps: number | null;
+} {
+  const avail = (metrics ?? []).filter((m) => m.available);
+  if (avail.length === 0) return { generationTps: null, prefillTps: null };
+  return {
+    generationTps: avail.reduce((s, m) => s + (m.generationTps || 0), 0),
+    prefillTps: avail.reduce((s, m) => s + (m.prefillTps || 0), 0),
+  };
+}
 
 function formatTokens(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
@@ -146,8 +160,12 @@ function RequestRow({
  * Compact "AI Proxy" box below the spark grid. Shows live running requests
  * (with kill buttons), a jump-to-observer link, and today's statistics.
  * Polls the bridge every POLL_MS. Offline/graceful when the proxy is down.
+ *
+ * Optionally receives LLM metrics from the sparks (the AI Proxy sits in front
+ * of the cluster LLMs) so it can show the same tok/s + prefill as the spark
+ * boxes — the spark boxes' own footer is hidden via CSS.
  */
-export function AiProxyPanel() {
+export function AiProxyPanel({ llmMetrics }: { llmMetrics?: LlmMetrics[] }) {
   const [streams, setStreams] = useState<AiProxyStream[]>([]);
   const [requests, setRequests] = useState<AiProxyActiveRequest[]>([]);
   const [stats, setStats] = useState<AiProxyStats | null>(null);
@@ -232,6 +250,7 @@ export function AiProxyPanel() {
     ...requests.map((r) => ({ ...r, kind: "request" as const })),
   ];
   const totals = stats?.totals ?? null;
+  const tps = llmThroughput(llmMetrics);
   const online = !error;
 
   return (
@@ -296,19 +315,40 @@ export function AiProxyPanel() {
           <p className="text-xs text-muted">No active requests.</p>
         )}
 
-        {/* Spark-style footer: today's requests + total tokens */}
-        <div className="mt-auto grid grid-cols-2 gap-2 border-t border-border pt-3">
-          <div className="text-center">
-            <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
-              {totals ? totals.request_count.toLocaleString() : "—"}
-            </span>
-            <span className="text-sm font-normal text-muted" title="Requests today"> reqs</span>
-          </div>
-          <div className="border-l border-border text-center">
-            <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
-              {totals ? formatTokens(totals.total_tokens) : "—"}
-            </span>
-            <span className="text-sm font-normal text-muted" title="Total tokens today"> tok</span>
+        {/* Bottom-anchored stat footers — LLM throughput (tok/s + prefill,
+            cloned from the spark boxes) directly above today's reqs + total
+            tokens, pinned together at the bottom of the panel. */}
+        <div className="mt-auto space-y-3">
+          {tps.generationTps !== null && (
+            <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
+              <div className="text-center">
+                <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                  {tps.generationTps.toFixed(0)}
+                </span>
+                <span className="text-sm font-normal text-muted"> tok/s</span>
+              </div>
+              <div className="border-l border-border text-center">
+                <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                  {tps.prefillTps !== null ? tps.prefillTps.toFixed(0) : "—"}
+                </span>
+                <span className="text-sm font-normal text-muted"> prefill</span>
+              </div>
+            </div>
+          )}
+          {/* Spark-style footer: today's requests + total tokens */}
+          <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
+            <div className="text-center">
+              <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                {totals ? totals.request_count.toLocaleString() : "—"}
+              </span>
+              <span className="text-sm font-normal text-muted" title="Requests today"> reqs</span>
+            </div>
+            <div className="border-l border-border text-center">
+              <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                {totals ? formatTokens(totals.total_tokens) : "—"}
+              </span>
+              <span className="text-sm font-normal text-muted" title="Total tokens today"> tok</span>
+            </div>
           </div>
         </div>
       </Panel>

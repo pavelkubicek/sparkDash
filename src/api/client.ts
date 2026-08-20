@@ -5,6 +5,11 @@ import type {
   AiProxyStream,
   DecodeBenchJob,
   DecodeBenchListResponse,
+  DevEngineRunningTask,
+  DevEngineSlotsConfig,
+  DevEngineStatus,
+  DevEngineTicket,
+  DevEngineWebuiUrl,
   HermesBatchUpdateResponse,
   HermesUpdatesResponse,
   LlmMetrics,
@@ -419,6 +424,56 @@ export function killAiProxyRequest(id: string): Promise<{ success?: boolean; err
 /** Observer base URL for "jump to proxy" links. */
 export function fetchAiProxyObserverUrl(): Promise<AiProxyObserverUrl> {
   return apiFetch("/api/ai-proxy/observer-url");
+}
+
+// ─── Spark Dev Engine ─────────────────────────────────────
+// All calls go through the sparkDash server bridge (/api/dev-engine/*) so the
+// browser never needs CORS against the engine. Each endpoint returns 502 when
+// the engine is unreachable, letting the UI show a graceful offline state.
+
+/** Scheduler status (slots used/total, ticket counters, model health). */
+export function fetchDevEngineStatus(): Promise<DevEngineStatus> {
+  return apiFetch("/api/dev-engine/status");
+}
+
+/** All tickets, latest iteration each. */
+export function fetchDevEngineTickets(): Promise<DevEngineTicket[]> {
+  return apiFetch("/api/dev-engine/tickets?exclude_plan=true");
+}
+
+/** Tasks currently in an active state, enriched with ticket info. */
+export function fetchDevEngineRunningTasks(): Promise<DevEngineRunningTask[]> {
+  return apiFetch("/api/dev-engine/running-tasks");
+}
+
+/** Slots configuration (day/night concurrency). */
+export function fetchDevEngineSlotsConfig(): Promise<DevEngineSlotsConfig> {
+  return apiFetch("/api/dev-engine/slots-config");
+}
+
+/** Request body for updating slots — matches the engine's SlotsConfigRequest
+ *  (daytime required; optional fields accept null to keep them unchanged). */
+export interface DevEngineSlotsConfigRequest {
+  daytime_concurrency: number;
+  nighttime_enabled?: boolean | null;
+  nighttime_concurrency?: number | null;
+  nighttime_start_hour?: number | null;
+  nighttime_end_hour?: number | null;
+}
+
+/** Update slots configuration (day/night concurrency) on the engine. */
+export function updateDevEngineSlotsConfig(
+  patch: DevEngineSlotsConfigRequest
+): Promise<DevEngineSlotsConfig> {
+  return apiFetch("/api/dev-engine/slots-config", {
+    method: "POST",
+    body: JSON.stringify(patch),
+  });
+}
+
+/** Web UI base URL for "jump to engine" links. */
+export function fetchDevEngineWebuiUrl(): Promise<DevEngineWebuiUrl> {
+  return apiFetch("/api/dev-engine/webui-url");
 }
 
 // ─── Global settings ──────────────────────────────────────

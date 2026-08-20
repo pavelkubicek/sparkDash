@@ -863,3 +863,78 @@ export interface AiProxyStats {
 export interface AiProxyObserverUrl {
   url: string;
 }
+
+// ─── Spark Dev Engine (via sparkDash bridge) ───────────────
+/**
+ * The Spark Dev Engine runs on the loopback host: API on port 10000, Web UI
+ * on port 10001. sparkDash talks to it via a bridge so the browser never needs
+ * CORS. All fields mirror the engine payloads.
+ */
+
+/** Scheduler status as reported by the engine. */
+export interface DevEngineStatus {
+  running: boolean;
+  paused: boolean;
+  slots_used: number;
+  slots_total: number;
+  tickets_active: number;
+  tickets_completed: number;
+  tickets_failed: number;
+  plans_completed: number;
+  model_online: boolean;
+  model_last_check: string | null;
+  model_offline_since: string | null;
+}
+
+/** One ticket summary as reported by the engine. */
+export interface DevEngineTicket {
+  ticket_id: string;
+  name: string;
+  status: "queued" | "in_progress" | "review" | "completed" | "failed";
+  tasks_total: number;
+  tasks_done: number;
+  tasks_running: number;
+  tasks_validating: number;
+  tasks_reviewing: number;
+  tasks_validation_fixing: number;
+  tasks_failed: number;
+  tasks_skipped?: number;
+  pr_url: string | null;
+  pr_state: "open" | "merged" | "closed" | "unknown";
+  created_at: string;
+  completed_at: string | null;
+  iteration: number;
+  iterations_completed: number;
+  error_message: string | null;
+  warnings: string[];
+  redirect_to: string | null;
+}
+
+/** One currently-running task enriched with ticket info. */
+export interface DevEngineRunningTask {
+  task_id: string;
+  name: string;
+  status: string;
+  attempt: number;
+  max_attempts: number;
+  ticket_id: string;
+  ticket_name: string;
+  ticket_status: string;
+  iteration: number;
+  started_at: string | null;
+}
+
+/** Slots configuration. */
+export interface DevEngineSlotsConfig {
+  daytime_concurrency: number;
+  nighttime_enabled: boolean;
+  nighttime_concurrency: number;
+  nighttime_start_hour: number;
+  nighttime_end_hour: number;
+  effective_concurrency: number;
+}
+
+/** Response for the webui-url helper. */
+export interface DevEngineWebuiUrl {
+  url: string;
+}

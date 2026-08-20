@@ -6,7 +6,12 @@ import {
 } from "../../api/client";
 import type { AiProxyModelStat, AiProxyStats } from "../../api/types";
 import { useModalPresence } from "../../hooks/useModalPresence";
-import { ExternalLinkIcon, ProxyIcon } from "../ui/icons";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ExternalLinkIcon,
+  ProxyIcon,
+} from "../ui/icons";
 
 function useEscape(onClose: () => void, enabled: boolean) {
   useEffect(() => {
@@ -263,6 +268,27 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
     setEndDate(draftEnd);
   };
 
+  // Move the applied range forward/back by the length of the current span.
+  // Single-day ranges step by one day (08-20 → 08-19 / 08-21).
+  const shiftRange = (direction: 1 | -1) => {
+    if (!startDate || !endDate) return;
+    const spanMs =
+      new Date(`${endDate}T00:00:00`).getTime() -
+      new Date(`${startDate}T00:00:00`).getTime();
+    const stepMs = spanMs > 0 ? spanMs : 24 * 60 * 60 * 1000; // 1 day
+    const newStart = toDateStr(
+      new Date(new Date(`${startDate}T00:00:00`).getTime() + direction * stepMs)
+    );
+    const newEnd = toDateStr(
+      new Date(new Date(`${endDate}T00:00:00`).getTime() + direction * stepMs)
+    );
+    setPreset("custom");
+    setStartDate(newStart);
+    setEndDate(newEnd);
+    setDraftStart(newStart);
+    setDraftEnd(newEnd);
+  };
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -365,6 +391,15 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
               ))}
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => shiftRange(-1)}
+                aria-label="Shift range earlier by current span"
+                title="Shift range earlier by current span"
+                className="rounded-md border border-border bg-surface-elevated px-1.5 py-1 text-muted transition-colors hover:bg-surface-hover hover:text-text"
+              >
+                <ChevronLeftIcon className="h-3.5 w-3.5" />
+              </button>
               <input
                 type="date"
                 value={draftStart}
@@ -380,6 +415,15 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
                 onChange={(e) => setDraftEnd(e.target.value)}
                 className="rounded-md border border-border bg-surface-elevated px-2 py-1 font-tabular text-xs text-text outline-none focus:border-accent"
               />
+              <button
+                type="button"
+                onClick={() => shiftRange(1)}
+                aria-label="Shift range later by current span"
+                title="Shift range later by current span"
+                className="rounded-md border border-border bg-surface-elevated px-1.5 py-1 text-muted transition-colors hover:bg-surface-hover hover:text-text"
+              >
+                <ChevronRightIcon className="h-3.5 w-3.5" />
+              </button>
               <button
                 type="button"
                 onClick={applyCustomRange}

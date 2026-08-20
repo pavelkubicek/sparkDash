@@ -36,6 +36,8 @@ const PORT = parseInt(process.env.PORT || "5555", 10);
 const LLM_PORT = parseInt(process.env.LLM_PORT || "8888", 10);
 const COMFY_PORT = parseInt(process.env.COMFY_PORT || "8188", 10);
 const AI_PROXY_PORT = parseInt(process.env.AI_PROXY_PORT || "3001", 10);
+const DEV_ENGINE_API_PORT = parseInt(process.env.DEV_ENGINE_API_PORT || "10000", 10);
+const DEV_ENGINE_WEBUI_PORT = parseInt(process.env.DEV_ENGINE_WEBUI_PORT || "10001", 10);
 
 /** Per-spark LLM HTTP port (1–65535), else env default. */
 function resolveLlmPort(sparkOrPort) {
@@ -217,9 +219,98 @@ app.post("/api/ai-proxy/cancel-request/:id", async (req, res) => {
   }
 });
 
-/** Base observer URL for "jump to proxy" links. */
-app.get("/api/ai-proxy/observer-url", (_req, res) => {
-  res.json({ url: AI_PROXY_BASE.replace("127.0.0.1", "localhost") + "/observer" });
+/**
+ * Resolve the request's origin hostname (domain-agnostic): builds a base
+ * URL pointing at the host the dashboard is served from, so links work under
+ * any domain/IP, not just localhost.
+ */
+function requestBaseUrl(req, port) {
+  const host = req.headers.host || "localhost";
+  // Strip a trailing :port (but not IPv6 brackets) — hostname only.
+  const hostname = host.startsWith("[") ? host.split("]")[0] + "]" : host.split(":")[0];
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  return `${proto}://${hostname}:${port}`;
+}
+
+/**
+ * Base observer URL for "jump to proxy" links — domain-agnostic.
+ * The proxy is reachable on the same hostname the user is currently viewing
+ * sparkDash from, just a different port.
+ */
+app.get("/api/ai-proxy/observer-url", (req, res) => {
+  res.json({ url: `${requestBaseUrl(req, AI_PROXY_PORT)}/observer` });
+});
+
+// ─── Spark Dev Engine bridge ─────────────────────────────
+// Proxies the Spark Dev Engine REST API (port 10000) through the sparkDash
+// server so the browser never needs CORS. Like the AI proxy bridge, routes are
+// unauthenticated like the rest of the LAN dashboard. On any upstream failure
+// respond 502 so the UI can show a graceful offline state.
+const DEV_ENGINE_API_BASE = `http://127.0.0.1:${DEV_ENGINE_API_PORT}`;
+const DEV_ENGINE_TIMEOUT_MS = 5000;
+
+async function devEngineFetch(path, init) {
+  const res = await fetch(`${DEV_ENGINE_API_BASE}${path}`, {
+    ...init,
+    signal: AbortSignal.timeout(DEV_ENGINE_TIMEOUT_MS),
+  });
+  const text = await res.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = {};
+  }
+  return { status: res.status, json };
+}
+
+async function devEngineGet(req, res, path) {
+  try {
+    const query = new URLSearchParams(req.query);
+    const qs = query.toString() ? `?${query.toString()}` : "";
+    const { status, json } = await devEngineFetch(`${path}${qs}`, { method: "GET" });
+    res.status(status).json(json);
+  } catch (err) {
+    res.status(502).json({ error: `Dev engine unreachable (${err.message || String(err)})` });
+  }
+}
+
+async function devEnginePost(req, res, path) {
+  try {
+    const { status, json } = await devEngineFetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req.body ?? {}),
+    });
+    res.status(status).json(json);
+  } catch (err) {
+    res.status(502).json({ error: `Dev engine unreachable (${err.message || String(err)})` });
+  }
+}
+
+app.get("/api/dev-engine/status", (req, res) => {
+  void devEngineGet(req, res, "/api/status");
+});
+
+app.get("/api/dev-engine/tickets", (req, res) => {
+  void devEngineGet(req, res, "/api/tickets");
+});
+
+app.get("/api/dev-engine/running-tasks", (req, res) => {
+  void devEngineGet(req, res, "/api/running-tasks");
+});
+
+app.get("/api/dev-engine/slots-config", (req, res) => {
+  void devEngineGet(req, res, "/api/slots-config");
+});
+
+app.post("/api/dev-engine/slots-config", (req, res) => {
+  void devEnginePost(req, res, "/api/slots-config");
+});
+
+/** Web UI base URL for "jump to engine" links — domain-agnostic. */
+app.get("/api/dev-engine/webui-url", (req, res) => {
+  res.json({ url: requestBaseUrl(req, DEV_ENGINE_WEBUI_PORT) });
 });
 
 // ─── REST API ────────────────────────────────────────────

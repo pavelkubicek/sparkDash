@@ -43,6 +43,9 @@ services:
       - BIND_HOST=0.0.0.0
       - PORT=5555
       - LLM_PORT=8888
+      # Spark Dev Engine integration ports (API + Web UI)
+      - DEV_ENGINE_API_PORT=10000
+      - DEV_ENGINE_WEBUI_PORT=10001
       - NODE_ENV=production
       - HOST_PROC_PATH=/host/proc
       - HOST_SYS_PATH=/host/sys
