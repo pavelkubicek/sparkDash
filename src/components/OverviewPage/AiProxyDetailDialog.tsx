@@ -6,6 +6,7 @@ import {
 } from "../../api/client";
 import type { AiProxyModelStat, AiProxyStats } from "../../api/types";
 import { useModalPresence } from "../../hooks/useModalPresence";
+import { DatePicker, formatCzDate, formatCzDateWithDay } from "../ui/DatePicker";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -86,8 +87,15 @@ function presetRange(
     case "today":
       return { startDate: endStr, endDate: endStr, label: "Today" };
     case "week": {
+      // Full 7-day span starting Monday.
       const start = startOfWeek(end);
-      return { startDate: toDateStr(start), endDate: endStr, label: "Current week" };
+      const weekEnd = new Date(start);
+      weekEnd.setDate(weekEnd.getDate() + 6); // Monday + 6 = Sunday
+      return {
+        startDate: toDateStr(start),
+        endDate: toDateStr(weekEnd),
+        label: "Current week",
+      };
     }
     case "month": {
       const start = new Date(end.getFullYear(), end.getMonth(), 1);
@@ -205,7 +213,9 @@ function DailyBreakdownTable({ stats }: { stats: AiProxyStats }) {
         return (
           <div key={period} className="rounded-md border border-border bg-surface-elevated/40">
             <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-              <span className="text-xs font-semibold text-text-strong">{period}</span>
+              <span className="text-xs font-semibold text-text-strong">
+                {formatCzDateWithDay(period)}
+              </span>
               <span className="font-tabular text-xs text-muted">
                 {formatTokens(total)} total
               </span>
@@ -345,7 +355,9 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
             <span className="rounded bg-accent/15 px-1.5 py-0.5 font-tabular text-xs font-medium text-accent">
               {preset === "custom" ? "Custom" : presetRange(preset).label}
             </span>
-            {startDate === endDate ? startDate : `${startDate} → ${endDate}`}
+            {startDate === endDate
+              ? formatCzDate(startDate)
+              : `${formatCzDate(startDate)} → ${formatCzDate(endDate)}`}
             {observerUrl && (
               <>
                 <a
@@ -400,20 +412,18 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
               >
                 <ChevronLeftIcon className="h-3.5 w-3.5" />
               </button>
-              <input
-                type="date"
+              <DatePicker
                 value={draftStart}
                 max={draftEnd || undefined}
-                onChange={(e) => setDraftStart(e.target.value)}
-                className="rounded-md border border-border bg-surface-elevated px-2 py-1 font-tabular text-xs text-text outline-none focus:border-accent"
+                onChange={setDraftStart}
+                ariaLabel="Start date"
               />
               <span className="text-xs text-muted">→</span>
-              <input
-                type="date"
+              <DatePicker
                 value={draftEnd}
                 min={draftStart || undefined}
-                onChange={(e) => setDraftEnd(e.target.value)}
-                className="rounded-md border border-border bg-surface-elevated px-2 py-1 font-tabular text-xs text-text outline-none focus:border-accent"
+                onChange={setDraftEnd}
+                ariaLabel="End date"
               />
               <button
                 type="button"
