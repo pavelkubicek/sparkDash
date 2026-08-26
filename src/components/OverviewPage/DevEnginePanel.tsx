@@ -367,7 +367,7 @@ export function DevEnginePanel() {
                   onOpen={() => {
                     if (webuiUrl) {
                       window.open(
-                        `${webuiUrl}/tickets/${task.ticket_id}?task=${task.task_id}&taskIteration=${task.iteration}`,
+                        `${webuiUrl}/tickets/${task.ticket_id}?task=${encodeURIComponent(task.task_id)}&taskIteration=${task.iteration}`,
                         "_blank",
                         "noreferrer"
                       );
