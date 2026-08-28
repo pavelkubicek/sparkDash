@@ -407,9 +407,14 @@ export class SparkMonitor {
       setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE),
       setInterval(() => this._pollDomain("ram"), POLL_INTERVAL_CPU),
       setInterval(() => this._pollDomain("memory"), POLL_INTERVAL_BANDWIDTH),
-      setInterval(() => this._pollDomain("llm"), this._llmPollInterval()),
       setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS),
     ]);
+    // Restore opt-in domain timers (LLM / ComfyUI / Hermes) with the same
+    // interval-ID tracking as start(), so later updateConfig() flips don't
+    // double-poll or leak stale timers after a pause→resume cycle.
+    this._restartLlmPollInterval();
+    this._restartComfyPollInterval();
+    this._restartHermesPollInterval();
     console.log(`[SparkMonitor] ${this.spark.id} resumed`);
   }
 

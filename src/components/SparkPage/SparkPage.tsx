@@ -263,7 +263,7 @@ export function SparkPage({ spark, temperatureUnit, onEdit }: SparkPageProps) {
               </>
             ) : (
               /* Resources layout: full-width CPU & RAM first, then GPU spans the
-                 full left column; Storage + Network stack in the right column */
+                 full left column; Storage + Network [+ Tailnet] stack in the right column */
               <>
                 <CpuPanel
                   cpu={metrics.cpu}
