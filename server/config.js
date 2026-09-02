@@ -89,6 +89,42 @@ const HOST_PATHS = {
   ROOT: process.env.HOST_ROOT_PATH || "/host/root",
 };
 
+// ─── Model launcher (isolated block — ModelRegistry / ModelJobManager / ModelScheduler) ───
+/** Model registry (repo cards). Same shape idiom as SPARKS_JSON_PATH. */
+const MODELS_JSON_PATH =
+  process.env.MODELS_JSON_PATH || path.join(ROOT, "config", "models.json");
+/** Scheduler config (enabled + per-model windows). */
+const SCHEDULER_JSON_PATH =
+  process.env.SCHEDULER_JSON_PATH || path.join(ROOT, "config", "scheduler.json");
+/**
+ * Host directory that holds one subdirectory per model repo. Scripts run on
+ * the HOST via nsenter (host mount namespace), so the path is a *host* path —
+ * identical inside the container because the bind mounts are 1:1 (`/` ->
+ * `/host/root` is only used to read /etc/passwd, not to run scripts).
+ * Model `dir` entries must resolve inside this base — allowlist enforced by
+ * ModelRegistry.
+ */
+const MODEL_REPOS_BASE =
+  process.env.MODEL_REPOS_BASE || "/home/pavelkubicek/cluster/docker";
+/** Hard cap for a start/stop/restart job (docker pull + weight load can be slow). */
+const MODEL_JOB_TIMEOUT_MS = parseInt(process.env.MODEL_JOB_TIMEOUT_MS || "1800000", 10);
+/** In-memory transcript ring size per job (chars kept for delta polls). */
+const MODEL_JOB_TAIL_CHARS = parseInt(process.env.MODEL_JOB_TAIL_CHARS || "120000", 10);
+/** How many finished jobs to keep in memory (per model). */
+const MODEL_JOB_HISTORY = parseInt(process.env.MODEL_JOB_HISTORY || "5", 10);
+/** Liveness probe cadence for model containers/ports. */
+const MODEL_PROBE_INTERVAL_MS = parseInt(process.env.MODEL_PROBE_INTERVAL_MS || "5000", 10);
+/** Scheduler tick cadence. */
+const MODEL_SCHEDULER_TICK_MS = parseInt(process.env.MODEL_SCHEDULER_TICK_MS || "30000", 10);
+/** Explicit scheduler timezone — DST must not silently move the night shift. */
+const MODEL_SCHEDULER_TZ = process.env.MODEL_SCHEDULER_TZ || "Europe/Prague";
+/**
+ * Host account whose uid/gid model scripts drop to before running (same
+ * mechanism hermes uses). Falls back to the current process user when the
+ * account is missing from the host passwd.
+ */
+const MODEL_HOST_USER = process.env.MODEL_HOST_USER || "pavelkubicek";
+
 export {
   SPARKS_JSON_PATH,
   GPU_MEMORY_JSON_PATH,
@@ -118,4 +154,14 @@ export {
   HARDWARE_DEFAULTS,
   HOST_PATHS,
   ROOT,
+  MODELS_JSON_PATH,
+  SCHEDULER_JSON_PATH,
+  MODEL_REPOS_BASE,
+  MODEL_JOB_TIMEOUT_MS,
+  MODEL_JOB_TAIL_CHARS,
+  MODEL_JOB_HISTORY,
+  MODEL_PROBE_INTERVAL_MS,
+  MODEL_SCHEDULER_TICK_MS,
+  MODEL_SCHEDULER_TZ,
+  MODEL_HOST_USER,
 };

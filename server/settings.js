@@ -19,6 +19,8 @@ const DEFAULTS = Object.freeze({
   benchDebugTraces: false,
   /** Layout density — compact (default) or comfortable. */
   density: "compact",
+  /** Show the Model Launcher panel on the Overview page. */
+  showModelLauncher: true,
 });
 
 /** @type {typeof DEFAULTS} */

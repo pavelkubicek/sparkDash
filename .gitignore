@@ -11,6 +11,12 @@ config/llm-daily.json
 config/gpu-memory.json
 config/gpu-memory.json.*
 config/bench-exports/
+# Model launcher state (registry / scheduler config / job + override state).
+# Same convention as sparks.json: machine-local runtime data, never committed.
+config/models.json
+config/models-active.json
+config/scheduler.json
+config/model-scheduler-state.json
 *.log
 .DS_Store
 docs/

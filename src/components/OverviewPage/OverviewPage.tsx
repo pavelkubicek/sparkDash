@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { LlmMetrics, SparkSnapshot } from "../../api/types";
+import type { LlmMetrics, SparkSnapshot, WsSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
 import { shutdownAllSparks, updateAllHermes, wakeAllSparks } from "../../api/client";
 import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
@@ -7,12 +7,19 @@ import { MetricBar } from "../ui/MetricBar";
 import { ActivityIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { AiProxyPanel } from "./AiProxyPanel";
 import { DevEnginePanel } from "./DevEnginePanel";
+import { ModelLauncherPanel } from "./ModelLauncher/ModelLauncherPanel";
 
 interface OverviewPageProps {
   sparks: SparkSnapshot[];
   hideOffline?: boolean;
   temperatureUnit?: "celsius" | "fahrenheit";
   onSelectSpark?: (id: string) => void;
+  /** Model launcher block from the WS snapshot (undefined until it arrives). */
+  models?: WsSnapshot["models"];
+  /** Hide the Model Launcher panel (Settings). */
+  showModelLauncher?: boolean;
+  /** WS connection state (passed to the launcher's status line). */
+  connected?: boolean;
 }
 
 /** Gather available LLM metrics across all sparks (for the AI Proxy panel). */
@@ -385,7 +392,7 @@ function SparkCard({
   );
 }
 
-export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "celsius", onSelectSpark }: OverviewPageProps) {
+export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "celsius", onSelectSpark, models, showModelLauncher = true, connected = false }: OverviewPageProps) {
   const visibleSparks = hideOffline ? sparks.filter((s) => s.online) : sparks;
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchMsg, setBatchMsg] = useState<{ text: string; tone: "ok" | "err" } | null>(null);
@@ -520,6 +527,8 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
           <AiProxyPanel />
           <DevEnginePanel />
         </div>
+        {/* Full-width: direct child of the page column, not the 2-col grid. */}
+        {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
         <div className="panel mx-auto mt-4 max-w-md p-8 text-center">
           <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
             <ActivityIcon className="h-5 w-5" />
@@ -546,6 +555,8 @@ export function OverviewPage({ sparks, hideOffline = false, temperatureUnit = "c
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} />
         <DevEnginePanel />
       </div>
+      {/* Full-width: direct child of the page column, not the 2-col grid. */}
+      {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
       <div className="flex flex-wrap items-end justify-between gap-6">
         <h1
           className="font-normal leading-tight tracking-tight text-text-strong"

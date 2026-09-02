@@ -21,6 +21,10 @@ import { showcaseManager } from "./collectors/ShowcaseManager.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
 import { llmDaily } from "./collectors/LlmDaily.js";
 import { compareSemver, getLatestRelease } from "./collectors/HermesReleases.js";
+// ─── Model launcher (isolated module — see server/models/ModelLauncher.js) ───
+import { initModelLauncher } from "./models/ModelLauncher.js";
+import { registerModelRoutes } from "./models/modelRoutes.js";
+import { loadSchedulerConfig } from "./models/schedulerStore.js";
 
 dotenv.config();
 
@@ -1444,6 +1448,14 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
   }
 });
 
+// ─── Model launcher (Overview panel: start/stop model repos on the host) ───
+// Registered before the static handler; every path is /api-scoped. The
+// forceBroadcast reference is a hoisted function declaration below, so the
+// launcher can push job/probe/scheduler changes to clients immediately
+// instead of waiting for the next poll tick.
+const modelLauncher = initModelLauncher({ onStatusChange: () => forceBroadcast() });
+registerModelRoutes(app, modelLauncher, { forceBroadcast });
+
 // ─── Static files (built frontend) ───────────────────────
 const distDir = path.join(ROOT, "dist");
 const indexHtml = path.join(distDir, "index.html");
@@ -1505,6 +1517,11 @@ function buildSnapshotPayload() {
     type: "snapshot",
     sparks: orderedSnapshots(),
     refreshInterval: getSettings().pollIntervalMs,
+    // Model launcher block, namespaced under one key so the merge surface
+    // stays a single added property. Contains no Date.now()-derived value
+    // (see ModelLauncher.snapshotPayload) so this string stays byte-identical
+    // between ticks and the diff cache below keeps skipping idle broadcasts.
+    models: modelLauncher.snapshotPayload(),
   });
 }
 
@@ -1567,6 +1584,7 @@ function restartBroadcast() {
 
 // ─── Start ───────────────────────────────────────────────
 loadSettings();
+loadSchedulerConfig();
 startBroadcast();
 
 server.listen(PORT, BIND_HOST, () => {
@@ -1582,6 +1600,9 @@ server.listen(PORT, BIND_HOST, () => {
     );
   }
   startAllMonitors();
+  // Model launcher probe + scheduler timers. Deliberately not tied to
+  // updateClientState(): the night shift must run with zero tabs open.
+  modelLauncher.startTimers();
 });
 
 // ─── Graceful shutdown ─────────────────────────────────
@@ -1603,6 +1624,17 @@ function shutdown(signal) {
     llmDaily.flush();
   } catch (err) {
     console.error("[sparkDash] failed to flush LLM daily history:", err.message);
+  }
+  // Finalize model jobs so polls after a --watch/reload don't 404. Does NOT
+  // touch host scripts or containers — a restart of the dashboard must never
+  // take someone's running model with it.
+  try {
+    modelLauncher.stopTimers();
+    modelLauncher.interruptAll(
+      "Interrupted — sparkDash restarted while the script was running (the script and any container it started keep running on the host)"
+    );
+  } catch (err) {
+    console.error("[sparkDash] failed to finalize model jobs:", err.message);
   }
   try {
     if (broadcastTimer) {

@@ -511,6 +511,11 @@ export interface WsSnapshot {
   type: "snapshot";
   sparks: SparkSnapshot[];
   refreshInterval: number;
+  /**
+   * Model launcher block (server/models). Optional so a server without the
+   * launcher still satisfies the type; every consumer must null-check it.
+   */
+  models?: import("./modelTypes").ModelsSnapshot | null;
 }
 
 // ─── API responses ────────────────────────────────────────
@@ -523,6 +528,8 @@ export interface Settings {
   benchDebugTraces: boolean;
   /** Layout density — compact (default) or comfortable. */
   density: "comfortable" | "compact";
+  /** Show the Model Launcher panel on the Overview page. */
+  showModelLauncher?: boolean;
 }
 
 export interface SparksListResponse {

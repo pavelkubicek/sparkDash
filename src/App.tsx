@@ -7,6 +7,9 @@ import { AddSparkDialog } from "./components/AddSparkDialog";
 import { EditSparkDialog } from "./components/EditSparkDialog";
 import { SparkPage } from "./components/SparkPage/SparkPage";
 import { HermesUpdateDialog } from "./components/SparkPage/HermesUpdateDialog";
+import { ModelCommandDialog } from "./components/OverviewPage/ModelLauncher/ModelCommandDialog";
+import { ModelScheduleDialog } from "./components/OverviewPage/ModelLauncher/ModelScheduleDialog";
+import { ModelEditDialog } from "./components/OverviewPage/ModelLauncher/ModelEditDialog";
 import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
 import { ThemeSwitch } from "./components/ThemeSwitch";
@@ -101,7 +104,7 @@ function placeholderSnapshot(
 }
 
 function DashboardApp() {
-  const { sparks, activeId, setActiveId, activeSpark, connected } = useSnapshot();
+  const { sparks, models, activeId, setActiveId, activeSpark, connected } = useSnapshot();
   const navigate = useRoute(setActiveId);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -273,6 +276,9 @@ function DashboardApp() {
               hideOffline={settings?.autoHideOffline ?? false}
               temperatureUnit={settings?.temperatureUnit ?? "celsius"}
               onSelectSpark={navigate}
+              models={models}
+              showModelLauncher={settings?.showModelLauncher !== false}
+              connected={connected}
             />
           ) : displayActive ? (
             <SparkPage
@@ -296,6 +302,10 @@ function DashboardApp() {
         </main>
       </div>
       <HermesUpdateDialog />
+      {/* Model launcher dialogs — mounted once, opened via their module stores. */}
+      <ModelCommandDialog />
+      <ModelScheduleDialog />
+      <ModelEditDialog />
       <AddSparkDialog
         open={showAdd}
         onClose={() => setShowAdd(false)}
