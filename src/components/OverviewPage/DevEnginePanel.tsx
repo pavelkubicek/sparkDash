@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  fetchDevEnginePlans,
   fetchDevEngineRunningTasks,
   fetchDevEngineSlotsConfig,
   fetchDevEngineStatus,
@@ -7,6 +8,7 @@ import {
   fetchDevEngineWebuiUrl,
 } from "../../api/client";
 import type {
+  DevEnginePlan,
   DevEngineRunningTask,
   DevEngineSlotsConfig,
   DevEngineStatus,
@@ -23,6 +25,16 @@ const ACTIVE_STATUSES: ReadonlySet<string> = new Set([
   "in_progress",
   "review",
   "queued",
+  "failed",
+]);
+
+/** Plan statuses that count as "active". The engine already excludes completed
+ *  plans from /api/plans; this keeps the section honest if a terminal status
+ *  ever shows up. */
+const ACTIVE_PLAN_STATUSES: ReadonlySet<string> = new Set([
+  "queued",
+  "processing",
+  "creating_ticket",
   "failed",
 ]);
 
@@ -83,6 +95,29 @@ const TICKET_STATUS_LABEL: Record<string, string> = {
   completed: "Completed",
   failed: "Failed",
 };
+
+/** Plan status colors matching the engine web UI (plan status badges). */
+const PLAN_STATUS_COLOR: Record<string, string> = {
+  queued: "#6b7280", // gray-500
+  processing: "#0891b2", // cyan-600
+  creating_ticket: "#4f46e5", // indigo-600
+  completed: "#059669", // emerald-600
+  failed: "#dc2626", // red-600
+};
+
+/** Plan status labels matching the engine web UI. */
+const PLAN_STATUS_LABEL: Record<string, string> = {
+  queued: "Queued",
+  processing: "Processing",
+  creating_ticket: "Creating Ticket",
+  completed: "Completed",
+  failed: "Failed",
+};
+
+/** Ticket id the engine mirrors a plan under — used for "open in engine" links. */
+function planTicketId(planId: string): string {
+  return planId.startsWith("PLAN-") ? planId : `PLAN-${planId}`;
+}
 
 /** Resolve the display tone for a ticket's PR badge. */
 function prBadge(prUrl: string | null, prState: string): { text: string; cls: string } | null {
@@ -209,6 +244,47 @@ function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => 
   );
 }
 
+/**
+ * One active plan row. Plans have no task counters, so the row shows the plan
+ * status, the ticket it refines/creates (when known), plan length and age.
+ */
+function PlanRow({ plan, onOpen }: { plan: DevEnginePlan; onOpen: () => void }) {
+  const color = PLAN_STATUS_COLOR[plan.status] ?? "var(--color-text)";
+  const label = PLAN_STATUS_LABEL[plan.status] ?? plan.status;
+  const target = plan.target_ticket_id ?? plan.base_id;
+  const busy = plan.status === "processing" || plan.status === "creating_ticket";
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-center gap-2 text-left transition-colors hover:text-accent"
+      title={`Open plan ${plan.name} in the engine${plan.error_message ? ` — ${plan.error_message}` : ""}`}
+    >
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${busy ? "animate-pulse" : ""}`}
+        style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }}
+        title={label}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-baseline gap-1">
+          <span className="block truncate text-xs text-text">{plan.name}</span>
+          {target && (
+            <span className="shrink-0 font-tabular text-[10px] text-muted">#{target}</span>
+          )}
+        </span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+          <span style={{ color }}>{label}</span>
+          {plan.iteration > 0 && <span className="font-tabular">iter {plan.iteration}</span>}
+          {plan.content_length > 0 && (
+            <span className="font-tabular">{(plan.content_length / 1000).toFixed(1)}k chars</span>
+          )}
+          <span className="font-tabular">{ageLabel(plan.created_at)}</span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
 function RunningTaskRow({ task, onOpen }: { task: DevEngineRunningTask; onOpen: () => void }) {
   const color = TASK_STATUS_COLOR[task.status] ?? "var(--color-text)";
   const label = TASK_STATUS_LABEL[task.status] ?? task.status;
@@ -246,6 +322,7 @@ function RunningTaskRow({ task, onOpen }: { task: DevEngineRunningTask; onOpen: 
 export function DevEnginePanel() {
   const [status, setStatus] = useState<DevEngineStatus | null>(null);
   const [tickets, setTickets] = useState<DevEngineTicket[]>([]);
+  const [plans, setPlans] = useState<DevEnginePlan[]>([]);
   const [runningTasks, setRunningTasks] = useState<DevEngineRunningTask[]>([]);
   const [slots, setSlots] = useState<DevEngineSlotsConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -259,9 +336,10 @@ export function DevEnginePanel() {
     async function poll() {
       // Each endpoint degrades independently: a single upstream failure must
       // not clear the other panels' data, but total failure = engine down.
-      const [s, t, r, sc] = await Promise.all([
+      const [s, t, p, r, sc] = await Promise.all([
         fetchDevEngineStatus().catch(() => null),
         fetchDevEngineTickets().catch(() => null),
+        fetchDevEnginePlans().catch(() => null),
         fetchDevEngineRunningTasks().catch(() => null),
         fetchDevEngineSlotsConfig().catch(() => null),
       ]);
@@ -274,6 +352,10 @@ export function DevEnginePanel() {
       if (t) {
         saw = true;
         setTickets(t);
+      }
+      if (p) {
+        saw = true;
+        setPlans(p);
       }
       if (r) {
         saw = true;
@@ -302,6 +384,7 @@ export function DevEnginePanel() {
 
   const online = !error;
   const activeTickets = (tickets ?? []).filter((t) => ACTIVE_STATUSES.has(t.status));
+  const activePlans = (plans ?? []).filter((p) => ACTIVE_PLAN_STATUSES.has(p.status));
   const withPendingPrs = (tickets ?? []).filter(
     (t) => t.pr_url && (t.pr_state === "open" || t.pr_state === "unknown")
   );
@@ -377,6 +460,32 @@ export function DevEnginePanel() {
               ))
             ) : (
               <p className="text-xs text-muted">No tasks currently running.</p>
+            )}
+          </div>
+
+          {/* Active plans */}
+          <div className="space-y-1">
+            <p className="text-xs uppercase tracking-wide text-muted">
+              Active plans ({activePlans.length})
+            </p>
+            {activePlans.length > 0 ? (
+              activePlans.map((plan) => (
+                <PlanRow
+                  key={plan.plan_id}
+                  plan={plan}
+                  onOpen={() => {
+                    if (webuiUrl) {
+                      window.open(
+                        `${webuiUrl}/tickets/${encodeURIComponent(planTicketId(plan.plan_id))}`,
+                        "_blank",
+                        "noreferrer"
+                      );
+                    }
+                  }}
+                />
+              ))
+            ) : (
+              <p className="text-xs text-muted">No active plans.</p>
             )}
           </div>
 

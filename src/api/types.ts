@@ -918,6 +918,29 @@ export interface DevEngineTicket {
   redirect_to: string | null;
 }
 
+/**
+ * One active plan (a plan-generation run) as reported by /api/plans.
+ * `plan_id` may already carry the `PLAN-` prefix; the engine's ticket mirror is
+ * `PLAN-${plan_id}` when the prefix is missing.
+ */
+export interface DevEnginePlan {
+  plan_id: string;
+  name: string;
+  status: "queued" | "processing" | "creating_ticket" | "completed" | "failed";
+  repo_url: string | null;
+  base_branch: string | null;
+  created_at: string;
+  completed_at: string | null;
+  generated_ticket_id: string | null;
+  error_message: string | null;
+  base_id: string | null;
+  iteration: number;
+  target_ticket_id: string | null;
+  submission_id: string | null;
+  /** Length of the plan markdown, reported by the bridge instead of `content`. */
+  content_length: number;
+}
+
 /** One currently-running task enriched with ticket info. */
 export interface DevEngineRunningTask {
   task_id: string;

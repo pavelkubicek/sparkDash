@@ -9,6 +9,9 @@ Format: version sections are listed newest first.
 
 ## [Unreleased]
 
+### Added
+- **Active plans in the Spark Dev Engine panel** — the overview panel now lists the engine's in-flight plan runs (queued / processing / creating-ticket) in its own section directly above **Active tickets**. Each row shows the plan status, the ticket it creates or refines, iteration, plan length and age, and jumps to the plan's page in the engine web UI. Served by a new `/api/dev-engine/plans` bridge route that drops the bulky plan markdown and reports `content_length` instead, so the 5s poll stays small.
+
 ---
 
 ## [1.8.5] — 2026-08-28

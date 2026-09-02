@@ -300,6 +300,29 @@ app.get("/api/dev-engine/tickets", (req, res) => {
   void devEngineGet(req, res, "/api/tickets");
 });
 
+/**
+ * Active plans (plan generation runs that have not produced a ticket yet).
+ * The engine returns the full plan markdown in `content`; the dashboard only
+ * needs the summary fields, so it is dropped here and replaced with
+ * `content_length` to keep the 5s poll small.
+ */
+app.get("/api/dev-engine/plans", async (req, res) => {
+  try {
+    const query = new URLSearchParams(req.query);
+    const qs = query.toString() ? `?${query.toString()}` : "";
+    const { status, json } = await devEngineFetch(`/api/plans${qs}`, { method: "GET" });
+    const slim = Array.isArray(json)
+      ? json.map(({ content, ...rest }) => ({
+          ...rest,
+          content_length: typeof content === "string" ? content.length : 0,
+        }))
+      : json;
+    res.status(status).json(slim);
+  } catch (err) {
+    res.status(502).json({ error: `Dev engine unreachable (${err.message || String(err)})` });
+  }
+});
+
 app.get("/api/dev-engine/running-tasks", (req, res) => {
   void devEngineGet(req, res, "/api/running-tasks");
 });

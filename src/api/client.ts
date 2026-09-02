@@ -5,6 +5,7 @@ import type {
   AiProxyStream,
   DecodeBenchJob,
   DecodeBenchListResponse,
+  DevEnginePlan,
   DevEngineRunningTask,
   DevEngineSlotsConfig,
   DevEngineStatus,
@@ -439,6 +440,15 @@ export function fetchDevEngineStatus(): Promise<DevEngineStatus> {
 /** All tickets, latest iteration each. */
 export function fetchDevEngineTickets(): Promise<DevEngineTicket[]> {
   return apiFetch("/api/dev-engine/tickets?exclude_plan=true");
+}
+
+/**
+ * Active plans — plan-generation runs that have not produced a ticket yet.
+ * The engine excludes completed plans by default; the bridge also strips the
+ * bulky `content` markdown and reports `content_length` instead.
+ */
+export function fetchDevEnginePlans(): Promise<DevEnginePlan[]> {
+  return apiFetch("/api/dev-engine/plans");
 }
 
 /** Tasks currently in an active state, enriched with ticket info. */
