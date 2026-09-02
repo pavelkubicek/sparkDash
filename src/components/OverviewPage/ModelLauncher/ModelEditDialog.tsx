@@ -49,6 +49,7 @@ interface Draft {
   container: string;
   port: string;
   startArgs: string;
+  repoUrl: string;
 }
 
 const BLANK: Draft = {
@@ -63,6 +64,7 @@ const BLANK: Draft = {
   container: "",
   port: "",
   startArgs: "",
+  repoUrl: "",
 };
 
 function toDraft(m: ModelConfig): Draft {
@@ -78,6 +80,7 @@ function toDraft(m: ModelConfig): Draft {
     container: m.container ?? "",
     port: m.port != null ? String(m.port) : "",
     startArgs: (m.startArgs ?? []).join(" "),
+    repoUrl: m.repoUrl ?? "",
   };
 }
 
@@ -109,6 +112,8 @@ function localErrors(target: string, d: Draft): string[] {
     if (!Number.isInteger(n) || n < 1 || n > 65535) e.push("port must be 1–65535");
   }
   if (!d.container.trim() && !d.port.trim()) e.push("needs a container name or a port to detect running");
+  if (d.repoUrl.trim() && !/^https?:\/\//i.test(d.repoUrl.trim()))
+    e.push("repo URL must start with http:// or https://");
   return e;
 }
 
@@ -207,6 +212,7 @@ export function ModelEditDialog() {
     container: orNull(draft.container),
     port: draft.port.trim() ? Number(draft.port) : null,
     startArgs: draft.startArgs.trim() ? draft.startArgs.trim().split(/\s+/) : [],
+    repoUrl: orNull(draft.repoUrl),
   });
 
   const handleSave = async () => {
@@ -371,6 +377,19 @@ export function ModelEditDialog() {
                   value={draft.description}
                   onChange={(e) => patch({ description: e.target.value })}
                   className="mt-1 w-full rounded border border-border bg-surface-elevated px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+                />
+              </Field>
+
+              <Field
+                label="repo URL (optional)"
+                hint="Auto-detected from `git remote get-url origin` when left empty; shows as the card's repo link."
+              >
+                <input
+                  type="text"
+                  value={draft.repoUrl}
+                  onChange={(e) => patch({ repoUrl: e.target.value })}
+                  className={INPUT}
+                  placeholder="https://github.com/MiaAI-Lab/…"
                 />
               </Field>
 

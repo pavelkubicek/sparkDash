@@ -94,7 +94,7 @@ export function ModelCommandDialog() {
       }}
     >
       <div
-        className="modal-sheet max-w-3xl"
+        className="modal-sheet modal-sheet--command"
         role="dialog"
         aria-modal="true"
         aria-labelledby="model-command-title"

@@ -1034,6 +1034,14 @@ input[type="checkbox"] {
     max-height: min(92dvh, 56rem);
   }
 }
+.modal-sheet--command {
+  max-width: 80rem;
+}
+@media (min-width: 640px) {
+  .modal-sheet--command {
+    max-height: min(92dvh, 56rem);
+  }
+}
 
 .modal-sheet__header {
   flex-shrink: 0;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { ModelRegistry, validateModelConfig, resolveRepoDir, isValidModelId } from "../ModelRegistry.js";
+import { ModelRegistry, validateModelConfig, resolveRepoDir, isValidModelId, normalizeRepoUrl } from "../ModelRegistry.js";
 
 const BASE = "/cluster/docker";
 
@@ -56,6 +56,26 @@ test("startArgs are restricted to single flag tokens", () => {
 test("isValidModelId rejects reserved route segments", () => {
   assert.ok(isValidModelId("glm-53"));
   for (const r of ["jobs", "config", "preview", "order", "..", ""]) assert.equal(isValidModelId(r), false);
+});
+
+// ─── repoUrl (card link) ───────────────────────────────────
+test("normalizeRepoUrl accepts https and scp-style remotes, rejects the rest", () => {
+  assert.equal(normalizeRepoUrl("https://github.com/o/r.git"), "https://github.com/o/r");
+  assert.equal(normalizeRepoUrl("https://github.com/o/r/"), "https://github.com/o/r");
+  assert.equal(normalizeRepoUrl("git@github.com:o/r.git"), "https://github.com/o/r");
+  assert.equal(normalizeRepoUrl("ssh://git@github.com/o/r"), "https://github.com/o/r");
+  for (const bad of ["javascript:alert(1)", "file:///etc/passwd", "", null, 42]) {
+    assert.equal(normalizeRepoUrl(bad), null);
+  }
+});
+
+test("validateModelConfig normalizes repoUrl through the same https gate", () => {
+  assert.equal(
+    validateModelConfig({ ...VALID, repoUrl: "git@github.com:MiaAI-Lab/r.git" }, BASE).repoUrl,
+    "https://github.com/MiaAI-Lab/r"
+  );
+  // Junk never persists — it just disappears (optional metadata, not an error).
+  assert.equal(validateModelConfig({ ...VALID, repoUrl: "javascript:alert(1)" }, BASE).repoUrl, null);
 });
 
 // ─── CRUD + persistence ────────────────────────────────────

@@ -72,7 +72,7 @@ export function buildScriptCommand({ dir, script, args = [] }) {
     scriptGuard(script),
     // `exec` replaces the shell so signals reach the script itself, and the
     // exit code we observe is the script's.
-    `exec sh ${shQuote(`./${script}`)}${argStr}`,
+    `exec bash ${shQuote(`./${script}`)}${argStr}`,
   ].join("; ");
 }
 
@@ -105,7 +105,7 @@ export function buildChainedCommand(steps) {
       `echo "=== ${s.label || s.script} (${s.dir}) ==="`,
       dirGuard(s.dir),
       scriptGuard(s.script),
-      `sh ${shQuote(`./${s.script}`)}${argStr}; __rc=$?; echo "[exit] ${s.script}: ${'$'}__rc"`
+      `bash ${shQuote(`./${s.script}`)}${argStr}; __rc=$?; echo "[exit] ${s.script}: ${'$'}__rc"`
     );
   }
   // Propagate the LAST step's code — that is the action the user asked for.

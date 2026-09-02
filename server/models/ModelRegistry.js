@@ -41,6 +41,25 @@ const CONTAINER_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const LABEL_MAX = 80;
 const DESC_MAX = 240;
 
+/**
+ * Normalise a repo URL for the card's GitHub link. Optional convenience
+ * metadata, so bad input yields null rather than an error (same policy as
+ * apiPath) — the important part is that only an http(s) URL can ever reach the
+ * browser as an href, which also covers scp-style git remotes.
+ * @returns {string|null}
+ */
+export function normalizeRepoUrl(raw) {
+  if (typeof raw !== "string") return null;
+  let url = raw.trim();
+  if (!url) return null;
+  // git@github.com:owner/repo.git  ->  https://github.com/owner/repo
+  const ssh = /^(?:ssh:\/\/)?git@([^:/]+)[:/](.+?)$/.exec(url);
+  if (ssh) url = `https://${ssh[1]}/${ssh[2]}`;
+  if (!/^https?:\/\//i.test(url)) return null;
+  url = url.replace(/\.git$/i, "").replace(/\/+$/, "");
+  return url.length <= 240 ? url : null;
+}
+
 export function isValidModelId(id) {
   return (
     typeof id === "string" &&
@@ -188,6 +207,9 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
     apiPath: typeof config.apiPath === "string" && config.apiPath.startsWith("/")
       ? config.apiPath.slice(0, 120)
       : null,
+    /** GitHub/browse URL for the kit — validated to https; auto-detected from
+     *  `git remote get-url origin` by the launcher, editable via the API. */
+    repoUrl: normalizeRepoUrl(config.repoUrl),
     schedule: scheduleCheck.schedule,
     schedulerEligible: scheduleIsUsable(scheduleCheck.schedule),
   };

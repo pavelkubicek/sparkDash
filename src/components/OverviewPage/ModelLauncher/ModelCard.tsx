@@ -1,10 +1,17 @@
 import { useState } from "react";
 import type { ModelInfo } from "../../../api/modelTypes";
-import { restartModel, startModel, stopModel, tailModelLogs } from "../../../api/modelClient";
+import { restartModel, startModel, stopModel } from "../../../api/modelClient";
 import { openModelCommandDialog } from "../../../hooks/useModelCommandDialog";
 import { openModelScheduleDialog } from "../../../hooks/useModelScheduleDialog";
 import { openModelEditDialog } from "../../../hooks/useModelEditDialog";
-import { GearIcon, GripIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../../ui/icons";
+import {
+  ExternalLinkIcon,
+  GearIcon,
+  GripIcon,
+  PowerOffIcon,
+  PowerOnIcon,
+  RotateIcon,
+} from "../../ui/icons";
 
 interface ModelCardProps {
   model: ModelInfo;
@@ -34,9 +41,8 @@ interface ModelCardProps {
  * so the state and the affordance are the same colour, exactly like the power
  * buttons on a Spark.
  *
- * Logs only appears while the model is running: a stopped repo has no live
- * container to tail, and its last transcript is still reachable through the
- * job chip at the bottom of the card.
+ * The last transcript remains reachable through the clickable job chip at the
+ * bottom of the card.
  */
 export function ModelCard({
   model,
@@ -57,7 +63,7 @@ export function ModelCard({
   const running = model.status.running;
   const disabled = busy;
 
-  async function run(kind: "start" | "stop" | "restart" | "logs") {
+  async function run(kind: "start" | "stop" | "restart") {
     setPending(kind);
     setError(null);
     try {
@@ -66,9 +72,7 @@ export function ModelCard({
           ? startModel
           : kind === "stop"
             ? stopModel
-            : kind === "restart"
-              ? restartModel
-              : tailModelLogs;
+              : restartModel;
       const res = await fn(model.id);
       openModelCommandDialog({
         jobId: res.jobId,
@@ -149,7 +153,10 @@ export function ModelCard({
                 : "Not running"
           }
         />
-        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-text-strong" title={model.name}>
+        <span
+          className="min-w-0 flex-1 truncate text-[15px] font-semibold text-text-strong"
+          title={`${model.name} — ${model.dir}`}
+        >
           {model.name}
         </span>
         {scheduledNow && (
@@ -173,15 +180,14 @@ export function ModelCard({
         </span>
       </div>
 
-      {/* Identity: repo + probe targets */}
+      {/* Probe targets: container + port, one line. The repo path is dropped
+          from the chips (it lives in the name tooltip); start args stay out of
+          the card too — the job transcript already echoes them. */}
       <div className="space-y-1">
         {model.description && (
           <p className="line-clamp-2 text-[11px] leading-snug text-muted">{model.description}</p>
         )}
         <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
-          <span className="truncate rounded bg-surface-elevated px-1.5 py-0.5 font-tabular" title={model.dir}>
-            {model.dir.split("/").slice(-1)[0]}
-          </span>
           {model.container && (
             <span
               className={`rounded px-1.5 py-0.5 font-tabular ${
@@ -218,11 +224,6 @@ export function ModelCard({
               :{model.port}
             </span>
           )}
-          {model.startArgs && (
-            <span className="rounded bg-border/60 px-1.5 py-0.5 font-tabular" title={`start args: ${model.startArgs.join(" ")}`}>
-              {model.startArgs.join(" ")}
-            </span>
-          )}
         </div>
       </div>
 
@@ -235,6 +236,44 @@ export function ModelCard({
         <p className="truncate text-[11px] text-muted" title={schedLine}>
           {schedLine}
         </p>
+      )}
+
+      {/* Last job chip — the way back into a transcript. Rendered ONLY when a
+          job exists and sits ABOVE the actions row, so the button row is always
+          the card's last child and mt-auto pins it to the bottom. (An
+          always-mounted mt-auto wrapper below the buttons left a strip of dead
+          space under them on every job-less card.) */}
+      {model.job && (
+        <button
+          type="button"
+          onClick={() =>
+            openModelCommandDialog({
+              jobId: model.job!.jobId,
+              modelId: model.id,
+              modelName: model.name,
+              action: model.job!.action,
+            })
+          }
+          className="flex min-w-0 items-center gap-1.5 self-start text-[10px] text-muted transition-colors hover:text-accent"
+          title="Open this job's transcript"
+        >
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              model.job.status === "running" || (running && model.job.status === "cancelled")
+                ? "bg-accent"
+                : model.job.status === "done"
+                  ? "bg-success"
+                  : "bg-danger"
+            }`}
+          />
+          <span className="truncate font-tabular">
+            {model.job.action}
+            {!(running && model.job.status === "cancelled") && ` · ${model.job.status}`}
+            {!(running && model.job.status === "cancelled") && typeof model.job.exitCode === "number"
+              ? ` · exit ${model.job.exitCode}`
+              : ""}
+          </span>
+        </button>
       )}
 
       {/* Actions — starting a drag from a button must not drag the card. */}
@@ -281,20 +320,20 @@ export function ModelCard({
           Restart
         </button>
 
-        {/* Logs: running-only (a stopped repo has no container to tail) */}
-        {running && model.hasLogs && (
-          <button
-            type="button"
-            onClick={() => void run("logs")}
-            disabled={disabled}
-            title="Tail this model's logs script in a transcript window"
-            className="flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-3 py-1.5 text-[11px] text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-50"
-          >
-            Logs
-          </button>
-        )}
-
         <div className="ml-auto flex items-center gap-1">
+          {model.repoUrl && (
+            <a
+              href={model.repoUrl}
+              target="_blank"
+              rel="noreferrer"
+              onDragStart={(e) => e.preventDefault()}
+              className="flex items-center gap-1 rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-surface-hover hover:text-text"
+              title={model.repoUrl}
+            >
+              <ExternalLinkIcon className="h-3 w-3" />
+              Github
+            </a>
+          )}
           <button
             type="button"
             onClick={() => openModelScheduleDialog(model.id)}
@@ -319,36 +358,6 @@ export function ModelCard({
         </div>
       </div>
 
-      {/* Last job chip — always the way back into a transcript */}
-      {model.job && (
-        <button
-          type="button"
-          onClick={() =>
-            openModelCommandDialog({
-              jobId: model.job!.jobId,
-              modelId: model.id,
-              modelName: model.name,
-              action: model.job!.action,
-            })
-          }
-          className="flex items-center gap-1.5 self-start text-[10px] text-muted transition-colors hover:text-accent"
-          title="Open this job's transcript"
-        >
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              model.job.status === "running"
-                ? "bg-accent"
-                : model.job.status === "done"
-                  ? "bg-success"
-                  : "bg-danger"
-            }`}
-          />
-          <span className="font-tabular">
-            {model.job.action} · {model.job.status}
-            {typeof model.job.exitCode === "number" ? ` · exit ${model.job.exitCode}` : ""}
-          </span>
-        </button>
-      )}
     </article>
   );
 }

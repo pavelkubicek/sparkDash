@@ -36,6 +36,8 @@ export interface ModelInfo {
   /** 1-based card position in the Overview list (registry keeps 1..n). */
   position: number | null;
   apiPath: string | null;
+  /** GitHub URL for the kit (auto-detected from `git remote`, editable). */
+  repoUrl: string | null;
   hasLogs: boolean;
   canRestart: boolean;
   startArgs: string[] | null;
@@ -61,6 +63,8 @@ export interface ModelConfig {
   /** 1-based card position; omit to append at the end. */
   position?: number | null;
   apiPath?: string | null;
+  /** https browse URL for the kit; auto-detected when omitted. */
+  repoUrl?: string | null;
   schedule?: ModelSchedule;
 }
 

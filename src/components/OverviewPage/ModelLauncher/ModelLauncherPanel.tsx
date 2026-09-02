@@ -8,7 +8,7 @@ import {
   updateSchedulerConfig,
 } from "../../../api/modelClient";
 import { Panel } from "../../ui/Panel";
-import { BoltIcon, GearIcon, PlusIcon, RotateIcon } from "../../ui/icons";
+import { BoltIcon, PlusIcon, RotateIcon } from "../../ui/icons";
 import { ModelCard } from "./ModelCard";
 import { openNewModelDialog } from "../../../hooks/useModelEditDialog";
 
@@ -252,12 +252,24 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
                   scheduler.override ? (
                     <>
                       manual{overrideName ? ` · ${overrideName}` : " · all stopped"}
-                      {autoIn ? ` · auto in ${autoIn}` : " · auto on next boundary"}
+                      {autoIn ? (
+                        <>
+                          {" · auto in "}
+                          <span className="text-accent">{autoIn}</span>
+                        </>
+                      ) : (
+                        " · auto on next boundary"
+                      )}
                     </>
                   ) : (
                     <>
                       scheduler → {targetModelName ?? "nothing"}
-                      {autoIn ? ` · ${autoIn}` : ""}
+                      {autoIn ? (
+                        <>
+                          {" · "}
+                          <span className="text-accent">{autoIn}</span>
+                        </>
+                      ) : ("")}
                     </>
                   )
                 ) : (
@@ -310,6 +322,9 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         </div>
       }
     >
+      {/* Cards stretch to equal height (grid default). The mt-auto actions row
+          is the card's last child, so a stretched card's spare room appears
+          above the buttons — the button rows line up at the same baseline. */}
       <div className="grid sm:grid-cols-2 xl:grid-cols-3" style={{ gap: "var(--density-card-gap)" }}>
         {list.map((m) => (
           <ModelCard
@@ -328,16 +343,19 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         ))}
       </div>
 
-      <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted">
-        <span className="inline-flex items-center gap-1">
-          <GearIcon className="h-2.5 w-2.5" /> one model at a time — starting one stops the other first
-        </span>
-        <span>·</span>
-        <span>every action runs the repo&apos;s own script on the host</span>
-        <span>·</span>
+      {/* Whisper line tucked into the panel's own bottom padding — absolutely
+          positioned so it costs the body no height, no border-top and no dot
+          separators; phrases just breathe apart via the column gap. Only the
+          3-column (2xl) layout has that much spare padding below the cards, so
+          below 2xl it stays in normal flow instead. */}
+      <footer
+        className="pointer-events-none flex flex-wrap items-center gap-x-4 text-[9px] leading-none text-muted/60 2xl:absolute 2xl:bottom-[3px]"
+        style={{ left: "var(--density-panel-pad)", right: "var(--density-panel-pad)" }}
+      >
+        <span>one model at a time — starting one stops the other first</span>
+        <span>actions run the repo&apos;s own script on the host</span>
         <span>closing a transcript never stops a model</span>
-        <span>·</span>
-        <span>drag a card onto another to reorder the list</span>
+        <span>drag a card onto another to reorder</span>
       </footer>
     </Panel>
   );

@@ -19,10 +19,11 @@
  * with zero browser tabs open, and a model that comes up at 02:00 needs to be
  * reported as up at 02:00.
  */
-import { ModelRegistry } from "./ModelRegistry.js";
+import { ModelRegistry, normalizeRepoUrl } from "./ModelRegistry.js";
 import { ModelJobManager } from "./ModelJobManager.js";
 import { ModelScheduler } from "./ModelScheduler.js";
 import { probeModels, buildModelStatus } from "./ModelProbe.js";
+import { execOnHost, shQuote } from "./hostExec.js";
 import { getSchedulerConfig, updateSchedulerConfig } from "./schedulerStore.js";
 import { MODEL_PROBE_INTERVAL_MS } from "../config.js";
 
@@ -69,6 +70,30 @@ export class ModelLauncher {
       void this.refresh();
     }
     this.scheduler.start();
+    void this.detectRepoUrls();
+  }
+
+  /**
+   * Fill in `repoUrl` for kits that do not have one yet: the repos base is not
+   * bind-mounted into this container, so the origin URL is read with one short
+   * host `git` call per model, once at startup. Existing values are never
+   * overwritten (they may have been set deliberately through the API).
+   */
+  async detectRepoUrls() {
+    const missing = this.registry.models.filter((m) => !m.repoUrl);
+    for (const m of missing) {
+      try {
+        const res = await execOnHost(`git -C ${shQuote(m.dir)} remote get-url origin 2>/dev/null`, {
+          timeoutMs: 6000,
+        });
+        if (res.code !== 0 || res.error) continue;
+        const url = normalizeRepoUrl(res.stdout);
+        if (!url) continue;
+        this.registry.updateModel(m.id, { repoUrl: url });
+      } catch {
+        /* a repo without a remote (or without git) simply has no link */
+      }
+    }
   }
 
   stopTimers() {
@@ -170,6 +195,7 @@ export class ModelLauncher {
       port: m.port,
       position: m.position ?? null,
       apiPath: m.apiPath,
+      repoUrl: m.repoUrl,
       hasLogs: Boolean(m.logsScript),
       canRestart: Boolean(m.restartScript),
       startArgs: m.startArgs?.length ? m.startArgs : null,
