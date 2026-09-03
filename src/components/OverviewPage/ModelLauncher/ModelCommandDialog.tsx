@@ -109,8 +109,18 @@ export function ModelCommandDialog() {
             <span>{title}</span>
           </div>
           <p className="mt-1 text-xs font-normal text-muted">
-            Runs on the host via <span className="font-tabular">nsenter</span> as the repo owner —
-            closing this window does not stop the script.
+            {target.action === "logs" ? (
+              <>
+                Tailing this container's logs —{" "}
+                <span className="font-tabular">closing this window stops the tail</span>. The model
+                keeps running.
+              </>
+            ) : (
+              <>
+                Runs on the host via <span className="font-tabular">nsenter</span> as the repo owner
+                — closing this window does not stop the script.
+              </>
+            )}
             {target.stopping && target.stopping.length > 0 && (
               <> Stopping {target.stopping.length} other model{target.stopping.length > 1 ? "s" : ""} first.</>
             )}
@@ -123,23 +133,15 @@ export function ModelCommandDialog() {
 
         <div className="modal-sheet__footer">
           <div className="modal-sheet__footer-actions" style={{ marginLeft: "auto" }}>
-            {running && (
+            {running && target.action !== "logs" && (
               <button
                 type="button"
                 onClick={() => void handleCancel()}
                 disabled={cancelling}
-                className={
-                  target.action === "logs"
-                    ? "rounded border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-50"
-                    : "rounded border border-danger/40 px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
-                }
-                title={
-                  target.action === "logs"
-                    ? "Stop following the logs. The model keeps running untouched."
-                    : "Kill the script's process group. Containers already started by Docker keep running."
-                }
+                className="rounded border border-danger/40 px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                title="Kill the script's process group. Containers already started by Docker keep running."
               >
-                {cancelling ? "Stopping…" : target.action === "logs" ? "Stop tailing" : "Cancel script"}
+                {cancelling ? "Cancelling…" : "Cancel script"}
               </button>
             )}
             <button
