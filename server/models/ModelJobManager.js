@@ -36,7 +36,7 @@ import {
   MODEL_JOB_HISTORY,
 } from "../config.js";
 import { atomicWrite } from "../util/atomicWrite.js";
-import { buildScriptCommand, buildChainedCommand, spawnOnHost } from "./hostExec.js";
+import { buildScriptCommand, buildChainedCommand, spawnOnHost, shQuote } from "./hostExec.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -234,7 +234,10 @@ export class ModelJobManager {
 
     const scriptKey = `${action}Script`;
     const script = model[scriptKey];
-    if (!script) {
+    // Logs have a universal fallback: every model with a container can be
+    // tailed with `docker logs -f`, even when the repo ships no logs.sh.
+    const dockerLogsFallback = !script && action === "logs" && Boolean(model.container);
+    if (!script && !dockerLogsFallback) {
       const e = new Error(
         action === "logs"
           ? `Model ${modelId} has no logs script configured`
@@ -258,11 +261,18 @@ export class ModelJobManager {
     }
 
     const args = action === "start" && Array.isArray(model.startArgs) ? model.startArgs : [];
-    const cmd = buildScriptCommand({ dir: model.dir, script, args });
+    const cmd = dockerLogsFallback
+      ? `docker logs -f --tail 500 ${shQuote(model.container)}`
+      : buildScriptCommand({ dir: model.dir, script, args });
 
     const job = this._createJob(model, action, meta);
+    if (dockerLogsFallback) job.script = `docker logs -f ${model.container}`;
     // Announce what is about to run — the transcript is the audit trail.
-    job.transcript.append(`$ ./${script}${args.length ? ` ${args.join(" ")}` : ""}   [${model.dir}]\n`);
+    job.transcript.append(
+      dockerLogsFallback
+        ? `$ ${job.script}\n`
+        : `$ ./${script}${args.length ? ` ${args.join(" ")}` : ""}   [${model.dir}]\n`
+    );
 
     const timeoutMs =
       Number.isFinite(meta.timeoutMs) && meta.timeoutMs > 0

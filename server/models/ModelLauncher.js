@@ -196,7 +196,7 @@ export class ModelLauncher {
       position: m.position ?? null,
       apiPath: m.apiPath,
       repoUrl: m.repoUrl,
-      hasLogs: Boolean(m.logsScript),
+      hasLogs: Boolean(m.logsScript || m.container),
       canRestart: Boolean(m.restartScript),
       startArgs: m.startArgs?.length ? m.startArgs : null,
       schedule: m.schedule,
