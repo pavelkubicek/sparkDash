@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { deleteModelJob, fetchModelJob } from "../../../api/modelClient";
 import type { ModelAction, ModelJob } from "../../../api/modelTypes";
+import { formatLogLine } from "./logFormat";
 
 const POLL_MS = 500;
 /** Stick-to-bottom slack, matching TerminalCard's behaviour. */
@@ -107,6 +108,25 @@ export function LogConsole({ jobId, onSettled }: LogConsoleProps) {
     textLengthRef.current = text.length;
   }, [text]);
 
+  // Build the coloured transcript from the raw text. The transcript only grows
+  // (delta-appended) or resets, so recomputing on `text` change is cheap enough;
+  // formatLogLine is a pure per-line function. Every raw line is preserved —
+  // nothing is filtered out, only dimmed/coloured.
+  const formatted = useMemo(() => {
+    const lines = text.split("\n");
+    const out: ReactNode[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const { base, nodes } = formatLogLine(lines[i]);
+      out.push(
+        <span key={i} className={base || undefined}>
+          {nodes}
+          {i < lines.length - 1 ? "\n" : ""}
+        </span>
+      );
+    }
+    return out;
+  }, [text]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
@@ -114,7 +134,7 @@ export function LogConsole({ jobId, onSettled }: LogConsoleProps) {
         onScroll={handleScroll}
         className="showcase-term__body max-h-[52vh] min-h-[16rem] flex-1 overflow-auto"
       >
-        {text ? <pre className="showcase-term__answer">{text}</pre> : null}
+        {text ? <pre className="showcase-term__answer">{formatted}</pre> : null}
         {!text && job?.status === "running" && <pre className="showcase-term__answer">…</pre>}
         {!text && !job && error && (
           <pre className="showcase-term__error">{`[error] ${error}`}</pre>
