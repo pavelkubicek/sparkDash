@@ -113,6 +113,15 @@ export function ModelCard({
 
   const jobRunning = model.job?.status === "running";
 
+  // The job chip is an error affordance only: show it when the newest job
+  // actually failed — errored, timed out, or exited non-zero. A hand-cancel
+  // (which is normal: closing a start tail, a redeploy) is not an error.
+  const jobFailed =
+    model.job != null &&
+    (model.job.status === "error" ||
+      model.job.timedOut === true ||
+      (model.job.status === "done" && typeof model.job.exitCode === "number" && model.job.exitCode !== 0));
+
   // Probe confidence: "down" is only certain when at least one signal said no.
   const downCertain = model.status.containerUp === false || model.status.portUp === false;
 
@@ -291,12 +300,12 @@ export function ModelCard({
         </div>
       )}
 
-      {/* Last job chip — the way back into a transcript. Rendered ONLY when a
-          job exists and sits ABOVE the actions row, so the button row is always
-          the card's last child and mt-auto pins it to the bottom. (An
-          always-mounted mt-auto wrapper below the buttons left a strip of dead
-          space under them on every job-less card.) */}
-      {model.job && (
+      {/* Job chip — surfaced ONLY when the last job failed, so a healthy or
+          merely-running model never shows it. A transcript is the way to see
+          WHY it failed, so the chip opens it and the tooltip carries the error
+          line. Healthy/completed/cancelled-by-hand jobs are silent — their
+          state is already visible via the status dot and the logs link. */}
+      {model.job && jobFailed && (
         <button
           type="button"
           onClick={() =>
@@ -307,24 +316,15 @@ export function ModelCard({
               action: model.job!.action,
             })
           }
-          className="flex min-w-0 items-center gap-1.5 self-start text-[10px] text-muted transition-colors hover:text-accent"
-          title="Open this job's transcript"
+          className="flex min-w-0 items-center gap-1.5 self-start text-[10px] text-danger transition-colors hover:text-danger/80"
+          title={`${model.job.error || `${model.job.action} ${model.job.status}`}${
+            typeof model.job.exitCode === "number" ? ` (exit ${model.job.exitCode})` : ""
+          } — open transcript`}
         >
-          <span
-            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-              model.job.status === "running" || (running && model.job.status === "cancelled")
-                ? "bg-accent"
-                : model.job.status === "done"
-                  ? "bg-success"
-                  : "bg-danger"
-            }`}
-          />
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
           <span className="truncate font-tabular">
-            {model.job.action}
-            {!(running && model.job.status === "cancelled") && ` · ${model.job.status}`}
-            {!(running && model.job.status === "cancelled") && typeof model.job.exitCode === "number"
-              ? ` · exit ${model.job.exitCode}`
-              : ""}
+            {model.job.action} failed
+            {typeof model.job.exitCode === "number" ? ` · exit ${model.job.exitCode}` : ""}
           </span>
         </button>
       )}
