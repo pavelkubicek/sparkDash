@@ -36,7 +36,7 @@ import {
   MODEL_JOB_HISTORY,
 } from "../config.js";
 import { atomicWrite } from "../util/atomicWrite.js";
-import { buildScriptCommand, spawnOnHost } from "./hostExec.js";
+import { buildScriptCommand, buildChainedCommand, spawnOnHost } from "./hostExec.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
