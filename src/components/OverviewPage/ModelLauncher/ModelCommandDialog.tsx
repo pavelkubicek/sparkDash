@@ -128,10 +128,18 @@ export function ModelCommandDialog() {
                 type="button"
                 onClick={() => void handleCancel()}
                 disabled={cancelling}
-                className="rounded border border-danger/40 px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
-                title="Kill the script's process group. Containers already started by Docker keep running."
+                className={
+                  target.action === "logs"
+                    ? "rounded border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-50"
+                    : "rounded border border-danger/40 px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                }
+                title={
+                  target.action === "logs"
+                    ? "Stop following the logs. The model keeps running untouched."
+                    : "Kill the script's process group. Containers already started by Docker keep running."
+                }
               >
-                {cancelling ? "Cancelling…" : "Cancel script"}
+                {cancelling ? "Stopping…" : target.action === "logs" ? "Stop tailing" : "Cancel script"}
               </button>
             )}
             <button
