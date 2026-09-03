@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useModalPresence } from "../../../hooks/useModalPresence";
-import { closeModelCommandDialog, useModelCommandDialog } from "../../../hooks/useModelCommandDialog";
+import {
+  closeModelCommandDialog,
+  useModelCommandDialog,
+  type ModelCommandTarget,
+} from "../../../hooks/useModelCommandDialog";
 import { deleteModelJob } from "../../../api/modelClient";
 import type { ModelJob } from "../../../api/modelTypes";
 import { LogConsole, releaseJob } from "./LogConsole";
@@ -59,11 +63,22 @@ export function ModelCommandDialog() {
     setCancelling(false);
   }, [target?.jobId]);
 
-  // Release the transcript when the dialog goes away entirely.
+  // Release the transcript ONLY when the dialog genuinely goes away (or the
+  // user switches to a different job). Deliberately NOT driven by `mounted`:
+  // presence keeps `mounted` false until the enter animation flips it, so a
+  // mounted-based guard fires on OPEN and would cancel a freshly-started logs
+  // tail before it can stream. We remember the previous target and release it
+  // when it disappears / changes — a true close or job switch, never an open.
+  const prevTarget = useRef<ModelCommandTarget | null | undefined>(undefined);
   useEffect(() => {
-    if (mounted || !target) return;
-    releaseJob(target.jobId, target.action);
-  }, [mounted, target]);
+    const prev = prevTarget.current;
+    prevTarget.current = target;
+    // Undefined on the very first commit: nothing to release.
+    if (prev === undefined) return;
+    if (prev && (!target || prev.jobId !== target.jobId)) {
+      releaseJob(prev.jobId, prev.action);
+    }
+  }, [target]);
 
   const onSettled = useCallback((job: ModelJob) => setSettled(job), []);
 
