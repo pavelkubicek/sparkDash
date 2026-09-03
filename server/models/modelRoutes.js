@@ -162,19 +162,20 @@ export function registerModelRoutes(app, launcher, hooks = {}) {
   /**
    * Cancel / drop a job.
    *
-   * A `logs` tail is always safe to cancel (it only kills the tail). A finished
-   * job just loses its in-memory record. A running *mutating* job is NOT
-   * cancelled by an ordinary DELETE: closing the transcript modal mid-start
-   * must leave the script and its container alone (start.sh tails the logs
-   * forever by design). Only an explicit ?force=1 — the modal's "Cancel
-   * script" button — tears the process group down.
+   * Closing the transcript modal must never stop anything: a running job —
+   * start, stop, restart *or* a `logs` tail — is merely detached (the view
+   * releases) unless ?force=1 is present. That keeps the logs tail alive so
+   * reopening the same model shows live output instead of a stale "cancelled"
+   * record (logs are deduped per model, so the reused job would otherwise
+   * already be dead). Only the modal's "Cancel script" button (force=1) tears
+   * the process group down; a finished job just loses its in-memory record.
    */
   app.delete("/api/models/jobs/:id", (req, res) => {
     const force = req.query.force === "1" || req.query.force === "true";
     const job = launcher.jobs.peek(req.params.id);
     if (!job) return res.status(404).json({ error: "Model job not found" });
 
-    if (job.status === "running" && job.action !== "logs" && !force) {
+    if (job.status === "running" && !force) {
       // Release the transcript view without disturbing the run.
       return res.json({
         success: true,
