@@ -260,6 +260,14 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
                 {scheduler.enabled && autoIn ? (
                   <span className="text-accent">{autoIn}</span>
                 ) : null}
+                {scheduler.enabled
+                  ? (() => {
+                      const name = scheduler.override ? overrideName : targetModelName;
+                      return name ? (
+                        <span className="text-muted">({name})</span>
+                      ) : null;
+                    })()
+                  : null}
               </span>
 
               {scheduler.enabled && scheduler.override && (
