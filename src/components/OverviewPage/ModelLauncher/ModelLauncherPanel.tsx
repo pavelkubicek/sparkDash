@@ -235,7 +235,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
                 </span>
               )}
               <span
-                className="hidden text-[11px] text-muted lg:inline"
+                className="text-[11px] text-muted"
                 title={
                   scheduler.enabled
                     ? scheduler.override
