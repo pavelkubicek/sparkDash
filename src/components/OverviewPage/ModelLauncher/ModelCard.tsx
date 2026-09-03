@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ModelInfo } from "../../../api/modelTypes";
-import { restartModel, startModel, stopModel } from "../../../api/modelClient";
+import { restartModel, startModel, stopModel, tailModelLogs } from "../../../api/modelClient";
 import { openModelCommandDialog } from "../../../hooks/useModelCommandDialog";
 import { openModelScheduleDialog } from "../../../hooks/useModelScheduleDialog";
 import { openModelEditDialog } from "../../../hooks/useModelEditDialog";
@@ -9,6 +9,7 @@ import {
   GearIcon,
   GithubIcon,
   GripIcon,
+  LogsIcon,
   PowerOffIcon,
   PowerOnIcon,
   RotateIcon,
@@ -88,6 +89,25 @@ export function ModelCard({
       setTimeout(() => setError(null), 8000);
     } finally {
       setPending(null);
+    }
+  }
+
+  // Tail a running container's logs in the transcript modal. Read-only job —
+  // it does not take the single mutating slot, so it isn't gated by `busy`.
+  async function runLogs() {
+    setError(null);
+    try {
+      const res = await tailModelLogs(model.id);
+      openModelCommandDialog({
+        jobId: res.jobId,
+        modelId: model.id,
+        modelName: model.name,
+        action: "logs",
+      });
+      onActionStarted?.();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "logs failed");
+      setTimeout(() => setError(null), 8000);
     }
   }
 
@@ -185,8 +205,26 @@ export function ModelCard({
           from the chips (it lives in the name tooltip); start args stay out of
           the card too — the job transcript already echoes them. */}
       <div className="space-y-1">
-        {model.description && (
-          <p className="line-clamp-2 text-[11px] leading-snug text-muted">{model.description}</p>
+        {(model.description || model.repoUrl) && (
+          <div className="flex items-start gap-1.5">
+            {model.description && (
+              <p className="line-clamp-2 flex-1 text-[11px] leading-snug text-muted">
+                {model.description}
+              </p>
+            )}
+            {model.repoUrl && (
+              <a
+                href={model.repoUrl}
+                target="_blank"
+                rel="noreferrer"
+                onDragStart={(e) => e.preventDefault()}
+                className="shrink-0 text-muted transition-colors hover:text-text"
+                title={model.repoUrl}
+              >
+                <GithubIcon className="h-3.5 w-3.5" />
+              </a>
+            )}
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
           {model.container && (
@@ -225,6 +263,17 @@ export function ModelCard({
               :{model.port}
             </span>
           )}
+          {model.hasLogs && model.status.containerUp === true && (
+            <button
+              type="button"
+              onClick={() => void runLogs()}
+              onDragStart={(e) => e.preventDefault()}
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 font-tabular text-muted transition-colors hover:bg-surface-hover hover:text-accent"
+              title="Tail this container's logs"
+            >
+              <LogsIcon className="h-3 w-3" /> logs
+            </button>
+          )}
         </div>
       </div>
 
@@ -233,30 +282,12 @@ export function ModelCard({
           tooltip and the :8000 chip colour already carry that; this line is
           instead a muted summary of the model's active schedule windows. */}
       {error && <p className="break-words text-[11px] text-danger">{error}</p>}
-      {!error && (schedLine || model.repoUrl) && (
+      {!error && schedLine && (
         <div className="flex items-center gap-1.5 text-[11px] text-muted">
-          {schedLine ? (
-            <>
-              <CalendarIcon className="h-3 w-3 shrink-0 opacity-70" />
-              <span className="min-w-0 flex-1 truncate" title={schedLine}>
-                {schedLine}
-              </span>
-            </>
-          ) : (
-            <span className="flex-1" />
-          )}
-          {model.repoUrl && (
-            <a
-              href={model.repoUrl}
-              target="_blank"
-              rel="noreferrer"
-              onDragStart={(e) => e.preventDefault()}
-              className="shrink-0 text-muted transition-colors hover:text-text"
-              title={model.repoUrl}
-            >
-              <GithubIcon className="h-3.5 w-3.5" />
-            </a>
-          )}
+          <CalendarIcon className="h-3 w-3 shrink-0 opacity-70" />
+          <span className="min-w-0 flex-1 truncate" title={schedLine}>
+            {schedLine}
+          </span>
         </div>
       )}
 

@@ -344,3 +344,14 @@ export function GithubIcon({ className = "" }: { className?: string }) {
     </svg>
   );
 }
+
+/** Terminal/log lines — used to tail a running model's logs. */
+export function LogsIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...baseProps(className)}>
+      <polyline points="4 7 8 11 4 15" />
+      <line x1="11" y1="15" x2="19" y2="15" />
+      <line x1="11" y1="9" x2="15" y2="9" />
+    </svg>
+  );
+}
