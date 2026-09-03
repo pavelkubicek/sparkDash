@@ -5,8 +5,9 @@ import { openModelCommandDialog } from "../../../hooks/useModelCommandDialog";
 import { openModelScheduleDialog } from "../../../hooks/useModelScheduleDialog";
 import { openModelEditDialog } from "../../../hooks/useModelEditDialog";
 import {
-  ExternalLinkIcon,
+  CalendarIcon,
   GearIcon,
+  GithubIcon,
   GripIcon,
   PowerOffIcon,
   PowerOnIcon,
@@ -232,10 +233,31 @@ export function ModelCard({
           tooltip and the :8000 chip colour already carry that; this line is
           instead a muted summary of the model's active schedule windows. */}
       {error && <p className="break-words text-[11px] text-danger">{error}</p>}
-      {!error && schedLine && (
-        <p className="truncate text-[11px] text-muted" title={schedLine}>
-          {schedLine}
-        </p>
+      {!error && (schedLine || model.repoUrl) && (
+        <div className="flex items-center gap-1.5 text-[11px] text-muted">
+          {schedLine ? (
+            <>
+              <CalendarIcon className="h-3 w-3 shrink-0 opacity-70" />
+              <span className="min-w-0 flex-1 truncate" title={schedLine}>
+                {schedLine}
+              </span>
+            </>
+          ) : (
+            <span className="flex-1" />
+          )}
+          {model.repoUrl && (
+            <a
+              href={model.repoUrl}
+              target="_blank"
+              rel="noreferrer"
+              onDragStart={(e) => e.preventDefault()}
+              className="shrink-0 text-muted transition-colors hover:text-text"
+              title={model.repoUrl}
+            >
+              <GithubIcon className="h-3.5 w-3.5" />
+            </a>
+          )}
+        </div>
       )}
 
       {/* Last job chip — the way back into a transcript. Rendered ONLY when a
@@ -321,19 +343,6 @@ export function ModelCard({
         </button>
 
         <div className="ml-auto flex items-center gap-1">
-          {model.repoUrl && (
-            <a
-              href={model.repoUrl}
-              target="_blank"
-              rel="noreferrer"
-              onDragStart={(e) => e.preventDefault()}
-              className="flex items-center gap-1 rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-surface-hover hover:text-text"
-              title={model.repoUrl}
-            >
-              <ExternalLinkIcon className="h-3 w-3" />
-              Github
-            </a>
-          )}
           <button
             type="button"
             onClick={() => openModelScheduleDialog(model.id)}

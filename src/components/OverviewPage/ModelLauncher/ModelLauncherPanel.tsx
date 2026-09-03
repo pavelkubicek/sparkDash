@@ -8,7 +8,7 @@ import {
   updateSchedulerConfig,
 } from "../../../api/modelClient";
 import { Panel } from "../../ui/Panel";
-import { BoltIcon, PlusIcon, RotateIcon } from "../../ui/icons";
+import { BoltIcon, CalendarIcon, PlusIcon, RotateIcon } from "../../ui/icons";
 import { ModelCard } from "./ModelCard";
 import { openNewModelDialog } from "../../../hooks/useModelEditDialog";
 
@@ -235,46 +235,31 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
                 </span>
               )}
               <span
-                className="text-[11px] text-muted"
+                className="inline-flex items-center gap-1 text-[11px] text-muted"
                 title={
                   scheduler.enabled
                     ? scheduler.override
                       ? `Manual choice is holding${
                           overrideName ? ` for ${overrideName}` : " (nothing running)"
-                        } — the schedule re-asserts at the next window boundary`
+                        } — the schedule re-asserts at the next window boundary${
+                          autoIn ? ` (auto in ${autoIn})` : ""
+                        }`
                       : scheduler.window
-                        ? `${targetModelName ?? "nothing"} should be up (${scheduler.window.label}, ${scheduler.tz})`
+                        ? `${targetModelName ?? "nothing"} should be up (${scheduler.window.label}, ${scheduler.tz})${
+                            autoIn ? ` · auto in ${autoIn}` : ""
+                          }`
                         : `No window active in ${scheduler.tz} — nothing should run`
                     : "Automation is off — schedules are inert"
                 }
               >
-                {scheduler.enabled ? (
-                  scheduler.override ? (
-                    <>
-                      manual{overrideName ? ` · ${overrideName}` : " · all stopped"}
-                      {autoIn ? (
-                        <>
-                          {" · auto in "}
-                          <span className="text-accent">{autoIn}</span>
-                        </>
-                      ) : (
-                        " · auto on next boundary"
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      scheduler → {targetModelName ?? "nothing"}
-                      {autoIn ? (
-                        <>
-                          {" · "}
-                          <span className="text-accent">{autoIn}</span>
-                        </>
-                      ) : ("")}
-                    </>
-                  )
-                ) : (
-                  <>schedules inert</>
-                )}
+                <CalendarIcon
+                  className={`h-3.5 w-3.5 shrink-0 ${
+                    scheduler.enabled && !scheduler.override ? "text-accent" : ""
+                  }`}
+                />
+                {scheduler.enabled && autoIn ? (
+                  <span className="text-accent">{autoIn}</span>
+                ) : null}
               </span>
 
               {scheduler.enabled && scheduler.override && (
