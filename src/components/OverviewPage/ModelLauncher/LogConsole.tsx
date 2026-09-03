@@ -139,7 +139,11 @@ export function LogConsole({ jobId, onSettled }: LogConsoleProps) {
           >
             {job.status}
           </span>
-          {job.script && <span className="font-tabular">./{job.script}</span>}
+          {job.script && (
+            <span className="font-tabular">
+              {job.script.includes(" ") ? job.script : `./${job.script}`}
+            </span>
+          )}
           {typeof job.exitCode === "number" && <span className="font-tabular">exit {job.exitCode}</span>}
           <span className="font-tabular">{job.totalChars.toLocaleString()} chars</span>
           {job.source === "scheduler" && (
