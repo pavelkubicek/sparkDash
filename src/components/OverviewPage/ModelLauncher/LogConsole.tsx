@@ -140,11 +140,6 @@ export function LogConsole({ jobId, onSettled }: LogConsoleProps) {
           <pre className="showcase-term__error">{`[error] ${error}`}</pre>
         )}
         {error && text ? <pre className="showcase-term__error">{`[error] ${error}`}</pre> : null}
-        {job?.truncated && (
-          <pre className="showcase-term__answer">
-            {"\n[console] older output trimmed — this view keeps the most recent part of the transcript\n"}
-          </pre>
-        )}
       </div>
       {job && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
