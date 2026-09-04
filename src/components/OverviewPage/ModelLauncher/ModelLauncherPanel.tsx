@@ -144,11 +144,12 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
   }, [scheduler]);
 
   const scheduledNowId = scheduler?.activeModelId ?? null;
+  const nextModelId = scheduler?.nextModelId ?? null;
   const autoIn = boundaryMs != null ? countdown(boundaryMs, now) : null;
-  const targetModelName =
-    scheduledNowId != null
-      ? list.find((m) => m.id === scheduledNowId)?.name ?? scheduledNowId
-      : null;
+  // The model the schedule switches to at the upcoming boundary — what the
+  // header surfaces (the current model is already visible on its own card).
+  const nextModelName =
+    nextModelId != null ? list.find((m) => m.id === nextModelId)?.name ?? nextModelId : null;
   const overrideName =
     scheduler?.override?.modelId != null
       ? list.find((m) => m.id === scheduler?.override?.modelId)?.name ?? scheduler?.override?.modelId
@@ -245,9 +246,11 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
                           autoIn ? ` (auto in ${autoIn})` : ""
                         }`
                       : scheduler.window
-                        ? `${targetModelName ?? "nothing"} should be up (${scheduler.window.label}, ${scheduler.tz})${
-                            autoIn ? ` · auto in ${autoIn}` : ""
-                          }`
+                        ? `Starts next: ${nextModelName ?? "nothing"}${
+                            scheduler.nextWindow
+                              ? ` (${scheduler.nextWindow.label}, ${scheduler.tz})`
+                              : ` (gap — nothing follows ${scheduler.window.label}, ${scheduler.tz})`
+                          }${autoIn ? ` · in ${autoIn}` : ""}`
                         : `No window active in ${scheduler.tz} — nothing should run`
                     : "Automation is off — schedules are inert"
                 }
@@ -262,7 +265,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
                 ) : null}
                 {scheduler.enabled
                   ? (() => {
-                      const name = scheduler.override ? overrideName : targetModelName;
+                      const name = scheduler.override ? overrideName : nextModelName;
                       return name ? (
                         <span className="text-muted">({name})</span>
                       ) : null;

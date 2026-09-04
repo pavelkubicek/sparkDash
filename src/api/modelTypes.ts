@@ -109,6 +109,10 @@ export interface SchedulerStatus {
   dayType?: DayType;
   window: SchedulerWindowInfo | null;
   activeModelId: string | null;
+  /** The model the schedule switches to at the upcoming boundary (null = gap). */
+  nextModelId?: string | null;
+  /** The window that owns that next model (null when nothing follows). */
+  nextWindow?: SchedulerWindowInfo | null;
   override: { modelId: string | null } | null;
   /** Absolute epoch ms — stable between boundaries (payload stays byte-stable). */
   nextBoundary: { epochMs: number; clock: string } | null;

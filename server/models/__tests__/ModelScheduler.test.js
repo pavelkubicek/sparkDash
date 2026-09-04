@@ -201,3 +201,34 @@ test("statusBlock carries no Date.now()-derived field (diff-cache safe)", async 
   assert.equal(JSON.stringify(a), JSON.stringify(b));
   assert.ok(a.nextBoundary.epochMs > WEEKDAY_MON_0200);
 });
+
+test("statusBlock.nextModelId is the model starting at the next boundary", async () => {
+  // qwen owns the day (08:00→18:00), glm the night (18:00→08:00). At noon the
+  // active model is qwen, but the NEXT one to start (at the 18:00 boundary) is glm.
+  const { sched } = makeScheduler({
+    models: [
+      { id: "glm", weekday: NIGHT },
+      { id: "qwen", weekday: DAY },
+    ],
+    status: { qwen: { running: true } },
+  });
+  const s = sched.statusBlock(WEEKDAY_NOON);
+  assert.equal(s.activeModelId, "qwen");
+  assert.equal(s.nextModelId, "glm");
+  assert.equal(s.nextWindow.owner, "glm");
+  // Stable between boundaries (diff-cache safe).
+  assert.equal(
+    JSON.stringify(sched.statusBlock(at(2026, 1, 5, 14, 0))),
+    JSON.stringify(s)
+  );
+});
+
+test("statusBlock.nextModelId is null when the boundary leads into a gap", async () => {
+  // glm owns only the night window; at 06:00 the night window ends into an
+  // unowned gap (no day schedule), so nothing is scheduled to start next.
+  const { sched } = makeScheduler({ models: [{ id: "glm", weekday: NIGHT }] });
+  const s = sched.statusBlock(at(2026, 1, 5, 6, 0));
+  assert.equal(s.activeModelId, "glm");
+  assert.equal(s.nextModelId, null);
+  assert.equal(s.nextWindow, null);
+});

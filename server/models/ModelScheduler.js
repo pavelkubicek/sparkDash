@@ -134,12 +134,21 @@ export class ModelScheduler {
     const parts = zonedParts(nowMs, cfg.tz || this.tz);
     const active = this._activeWindowFor(nowMs, cfg);
     const override = this._overrideInForce(parts, active);
+    const nextBoundaryInfo = this._nextWindowInfo(nowMs, cfg, active);
     return {
       enabled: true,
       tz: cfg.tz || this.tz,
       dayType: parts.dayType,
       window: active ? { start: active.start, end: active.end, label: active.label, owner: active.owner } : null,
       activeModelId: this._targetFromWindow(active),
+      // The model the schedule will switch to at the upcoming boundary (and the
+      // window it owns it). Null when nothing is scheduled to take over — e.g.
+      // a day window ending into an unowned gap, in which case the next model
+      // is simply 'nothing'. Stable between boundaries (diff-cache safe).
+      nextModelId: nextBoundaryInfo?.owner ?? null,
+      nextWindow: nextBoundaryInfo
+        ? { start: nextBoundaryInfo.start, end: nextBoundaryInfo.end, label: nextBoundaryInfo.label, owner: nextBoundaryInfo.owner }
+        : null,
       // A manual click is only worth surfacing while it still holds.
       override: override ? { modelId: this._state.override.modelId } : null,
       // Absolute epoch ms of the next window boundary — stable between
@@ -318,6 +327,29 @@ export class ModelScheduler {
 
   _targetFromWindow(active) {
     return active?.owner ?? null;
+  }
+
+  /**
+   * The window that owns the GPU just AFTER the upcoming boundary, i.e. what
+   * the schedule switches to next. Only meaningful while a window is active
+   * (that is when the UI counts down to a boundary). Evaluated exactly at the
+   * boundary epoch — the active window is end-exclusive, so the following
+   * window owns that minute. Derived from `boundaryEpoch`, which is fixed
+   * between boundaries, so the WS payload stays byte-identical across ticks
+   * (diff-cache safe) rather than depending on the wall clock. The day type
+   * flips automatically when the boundary crosses midnight or a weekend edge,
+   * because we re-resolve parts at the probed instant.
+   * Returns null when the boundary leads into an unowned gap (nothing follows).
+   */
+  _nextWindowInfo(nowMs, cfg, active) {
+    if (!active) return null;
+    const tz = cfg.tz || this.tz;
+    const parts = zonedParts(nowMs, tz);
+    const probeMs = boundaryEpoch(parts, active, nowMs); // the boundary instant
+    const nextParts = zonedParts(probeMs, tz);
+    const nextWindows = this._windowsFor(probeMs, cfg);
+    const win = resolveActiveWindow(nextWindows, nextParts.minute);
+    return win && win.owner ? win : null;
   }
 
   /** Does the manual override still apply at this instant? */
