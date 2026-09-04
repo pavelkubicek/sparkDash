@@ -23,6 +23,9 @@ import type {
   SparkConfig,
   SparkTestResponse,
   StartDecodeBenchRequest,
+  PrefillBenchJob,
+  PrefillBenchListResponse,
+  StartPrefillBenchRequest,
 } from "./types";
 
 const BASE = "";
@@ -209,6 +212,51 @@ export function clearDecodeBenchHistory(
   const q =
     port != null && Number.isInteger(port) ? `?port=${encodeURIComponent(port)}` : "";
   return apiFetch(`/api/sparks/${id}/llm/bench${q}`, { method: "DELETE" });
+}
+
+// ─── LLM prefill benchmark ────────────────────────────
+export function startPrefillBench(
+  id: string,
+  body: StartPrefillBenchRequest
+): Promise<PrefillBenchJob> {
+  return apiFetch(`/api/sparks/${id}/llm/prefill-bench`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getPrefillBench(
+  id: string,
+  benchId: string
+): Promise<PrefillBenchJob> {
+  return apiFetch(`/api/sparks/${id}/llm/prefill-bench/${benchId}`);
+}
+
+export function listPrefillBench(
+  id: string,
+  port?: number
+): Promise<PrefillBenchListResponse> {
+  const q =
+    port != null && Number.isInteger(port) ? `?port=${encodeURIComponent(port)}` : "";
+  return apiFetch(`/api/sparks/${id}/llm/prefill-bench${q}`);
+}
+
+export function cancelPrefillBench(
+  id: string,
+  benchId: string
+): Promise<PrefillBenchJob> {
+  return apiFetch(`/api/sparks/${id}/llm/prefill-bench/${benchId}`, {
+    method: "DELETE",
+  });
+}
+
+export function clearPrefillBenchHistory(
+  id: string,
+  port?: number
+): Promise<{ success: boolean }> {
+  const q =
+    port != null && Number.isInteger(port) ? `?port=${encodeURIComponent(port)}` : "";
+  return apiFetch(`/api/sparks/${id}/llm/prefill-bench${q}`, { method: "DELETE" });
 }
 
 // ─── LLM Prompt Showcase ──────────────────────────────

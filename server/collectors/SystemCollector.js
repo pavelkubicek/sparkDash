@@ -1047,26 +1047,29 @@ export class SystemCollector {
     }
   }
 
-  async _getRemoteCpu() {
-    try {
-      const cmd = [
-        "cat /proc/stat | head -1",
-        "echo '---'",
-        "cat /proc/cpuinfo | grep -E 'CPU architecture|aarch64' | head -1",
-        "echo '---'",
-        // Same priority as local `_getCPUTemperature()`: real x86 CPU sensors
-        // first (hottest input), acpitz/thermal as board/SoC fallback. GB10
-        // also exposes nvme/mlx5 sensors; the name allowlist keeps those out.
-        // Each category emits its hottest value on its own line;
-        // `_parseSensorTemp` returns the first plausible line, so
-        // coretemp/k10temp/zenpower wins over acpitz over thermal zones.
-        // On GB10 (ARM) only acpitz exists → that is the SoC/board temp.
-        'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in coretemp|k10temp|zenpower) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
-        'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in acpitz) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; done;; esac; done | sort -nr | head -1',
-        "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -nr | head -1",
-      ].join("; ");
+  /**
+   * One SSH round trip: /proc/stat, CPU arch, then the same hwmon-then-thermal
+   * sensor dump local `_getCPUTemperature()` uses. `|| true` on the thermal
+   * glob keeps a missing zone from failing the whole CPU poll (sshExec treats
+   * any non-zero exit as a hard error).
+   */
+  _buildRemoteCpuCommand() {
+    return [
+      "cat /proc/stat | head -1",
+      "echo '---'",
+      "cat /proc/cpuinfo | grep -E 'CPU architecture|aarch64' | head -1",
+      "echo '---'",
+      // GB10 also exposes nvme/mlx5 sensors; the name allowlist keeps those out.
+      'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in coretemp|k10temp|zenpower|acpitz) for t in "$h"/temp*_input; do cat "$t" 2>/dev/null; break; done;; esac; done',
+      "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null || true",
+    ].join("; ");
+  }
 
-      const output = await sshExec(this.spark, cmd);
+  async _getRemoteCpu(sshExecutor = sshExec) {
+    try {
+      const cmd = this._buildRemoteCpuCommand();
+
+      const output = await sshExecutor(this.spark, cmd);
       const sections = output.split("---");
       const statOut = sections[0]?.trim() || "";
       const cpuinfoOut = sections[1]?.trim() || "";

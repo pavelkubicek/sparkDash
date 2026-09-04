@@ -1,32 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  cancelDecodeBench,
-  clearDecodeBenchHistory,
-  getDecodeBench,
-  listDecodeBench,
-  startDecodeBench,
+  cancelPrefillBench,
+  clearPrefillBenchHistory,
+  getPrefillBench,
+  listPrefillBench,
+  startPrefillBench,
 } from "../../api/client";
-import type { DecodeBenchJob, DecodeBenchPromptType } from "../../api/types";
+import type { PrefillBenchJob } from "../../api/types";
 import { useModalPresence } from "../../hooks/useModalPresence";
 import {
-  DECODE_BENCH_DEFAULT_TYPE,
-  DECODE_BENCH_TYPE_META,
-  decodeBenchTypeLabel,
-  normalizeDecodeBenchType,
-} from "../../shared/llmPrompts.js";
+  PREFILL_CONTEXT_SIZES,
+  PREFILL_DEFAULT_CONTEXT_SIZES,
+  formatContextSize,
+} from "../../shared/prefillBench.js";
 
-const CONCURRENCY_OPTIONS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 24, 32] as const;
-const DEFAULT_SELECTED = [1, 2];
-const DEFAULT_MAX_TOKENS = 400;
-const DEFAULT_PROMPT_TYPE: DecodeBenchPromptType = DECODE_BENCH_DEFAULT_TYPE;
-
-interface BenchmarkDialogProps {
+interface PrefillBenchDialogProps {
   open: boolean;
   onClose: () => void;
   sparkId: string;
   llmPort: number;
   modelId: string | null;
+  contextLength: number | null;
 }
 
 function useEscape(onClose: () => void, enabled: boolean) {
@@ -40,7 +35,6 @@ function useEscape(onClose: () => void, enabled: boolean) {
   }, [onClose, enabled]);
 }
 
-/** Lock body scroll while the modal is open (important on iOS). */
 function useBodyScrollLock(locked: boolean) {
   useEffect(() => {
     if (!locked) return;
@@ -61,7 +55,7 @@ function formatDuration(ms: number): string {
   return `${m}m ${rem.toFixed(0)}s`;
 }
 
-function statusLabel(status: DecodeBenchJob["status"]): string {
+function statusLabel(status: PrefillBenchJob["status"]): string {
   switch (status) {
     case "running":
       return "Running";
@@ -81,64 +75,61 @@ function formatTtft(ms: number): string {
   return `${Math.round(ms)}ms`;
 }
 
-/**
- * Build a plain-text benchmark summary for the clipboard.
- * Format: "<model> | decode tok/s results:" header, then one line per
- * concurrency level with decode tok/s and key metrics.
- */
-function buildShareText(job: DecodeBenchJob, modelId: string | null): string {
-  const name = modelId || "unknown model";
-  const typeLabel = decodeBenchTypeLabel(job.config?.promptType);
-  const head = `${name} | decode tok/s results (${typeLabel}):`;
+function defaultSelected(contextLength: number | null): number[] {
+  const cap =
+    contextLength != null && contextLength > 0 ? contextLength : Number.POSITIVE_INFINITY;
+  const fitted = PREFILL_DEFAULT_CONTEXT_SIZES.filter((n: number) => n <= cap);
+  if (fitted.length) return [...fitted];
+  const allowed = PREFILL_CONTEXT_SIZES.filter((n: number) => n <= cap);
+  return allowed.length ? [allowed[allowed.length - 1]] : [PREFILL_CONTEXT_SIZES[0]];
+}
 
-  const lines = job.results
-    .slice()
-    .sort((a, b) => a.concurrency - b.concurrency)
-    .map((r) => {
-      if (r.totalDecodeTokens > 0 || r.totalCompletionTokens > 0) {
-        const agg = r.aggregateDecodeTps > 0 ? r.aggregateDecodeTps : r.meanDecodeTps;
-        return `×${r.concurrency}  ${agg.toFixed(1)} agg  ${r.meanDecodeTps.toFixed(1)}/str  · TTFT ${formatTtft(r.meanTtftMs)}`;
-      }
-      return `×${r.concurrency}  failed${r.error ? ` — ${r.error}` : ""}`;
-    });
-
+function buildShareText(job: PrefillBenchJob, modelId: string | null): string {
+  const name = modelId || job.config?.modelId || "unknown model";
+  const head = `${name} | prefill tok/s results:`;
+  const lines = job.results.map((r) => {
+    const label = formatContextSize(r.targetTokens);
+    if (r.error && r.prefillTps <= 0) {
+      return `${label}  failed${r.error ? ` — ${r.error}` : ""}`;
+    }
+    const actual =
+      r.promptTokens > 0 ? `${r.promptTokens} tok` : `${r.targetTokens} tok`;
+    return `${label}  ${r.prefillTps.toFixed(1)} tok/s  · TTFT ${formatTtft(r.ttftMs)}  · ${actual}`;
+  });
   return [head, "", ...lines].join("\n");
 }
 
-function ResultRow({ r }: { r: DecodeBenchJob["results"][number] }) {
+function ResultRow({ r }: { r: PrefillBenchJob["results"][number] }) {
   return (
     <article className="bench-result-row" title={r.error || undefined}>
       <div className="bench-result-row__load">
-        <span className="bench-result-row__badge">×{r.concurrency}</span>
+        <span className="bench-result-row__badge">{formatContextSize(r.targetTokens)}</span>
         <div className="bench-result-row__facts">
           <span>
-            TTFT <strong>{formatTtft(r.meanTtftMs)}</strong>
+            TTFT <strong>{formatTtft(r.ttftMs)}</strong>
           </span>
           <span className="bench-result-row__sep" aria-hidden>
             ·
           </span>
-          <span className={r.streamsFailed ? "text-warning" : undefined}>
-            <strong>
-              {r.streamsOk}/{r.streamsOk + r.streamsFailed}
-            </strong>{" "}
-            streams
+          <span>
+            <strong>{r.promptTokens > 0 ? r.promptTokens.toLocaleString() : "—"}</strong>{" "}
+            tokens
           </span>
         </div>
       </div>
 
       <div className="bench-result-row__speeds">
         <div className="bench-result-row__metric">
-          <span className="bench-result-row__label">Aggregate</span>
+          <span className="bench-result-row__label">Prefill</span>
           <span className="bench-result-row__value bench-result-row__value--accent">
-            {(r.aggregateDecodeTps > 0 ? r.aggregateDecodeTps : r.meanDecodeTps).toFixed(1)}
+            {r.prefillTps.toFixed(1)}
             <span className="bench-result-row__unit">tok/s</span>
           </span>
         </div>
         <div className="bench-result-row__metric">
-          <span className="bench-result-row__label">Stream</span>
+          <span className="bench-result-row__label">TTFT</span>
           <span className="bench-result-row__value">
-            {r.meanDecodeTps.toFixed(1)}
-            <span className="bench-result-row__unit">tok/s</span>
+            {formatTtft(r.ttftMs)}
           </span>
         </div>
       </div>
@@ -146,17 +137,16 @@ function ResultRow({ r }: { r: DecodeBenchJob["results"][number] }) {
   );
 }
 
-export function BenchmarkDialog({
+export function PrefillBenchDialog({
   open,
   onClose,
   sparkId,
   llmPort,
   modelId,
-}: BenchmarkDialogProps) {
-  const [selected, setSelected] = useState<number[]>([...DEFAULT_SELECTED]);
-  const [maxTokensDraft, setMaxTokensDraft] = useState(String(DEFAULT_MAX_TOKENS));
-  const [promptType, setPromptType] = useState<DecodeBenchPromptType>(DEFAULT_PROMPT_TYPE);
-  const [job, setJob] = useState<DecodeBenchJob | null>(null);
+  contextLength,
+}: PrefillBenchDialogProps) {
+  const [selected, setSelected] = useState<number[]>(() => defaultSelected(contextLength));
+  const [job, setJob] = useState<PrefillBenchJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [loadingLast, setLoadingLast] = useState(false);
@@ -172,42 +162,23 @@ export function BenchmarkDialog({
   }, []);
 
   const isRunning = job?.status === "running";
-
   const { mounted, visible } = useModalPresence(open);
 
   useEscape(onClose, open && !starting);
   useBodyScrollLock(mounted);
 
-  const applyJobConfig = useCallback((j: DecodeBenchJob) => {
-    if (Array.isArray(j.config?.concurrencies) && j.config.concurrencies.length > 0) {
-      setSelected([...j.config.concurrencies].sort((a, b) => a - b));
-    }
-    if (j.config?.maxTokens != null) {
-      setMaxTokensDraft(String(j.config.maxTokens));
-    }
-    // Last-run type is shown on results; the picker always defaults to Structured
-    // for the next Run. Only a still-running job pins the picker.
-    if (j.status === "running" && j.config?.promptType) {
-      setPromptType(normalizeDecodeBenchType(j.config.promptType));
-    } else {
-      setPromptType(DEFAULT_PROMPT_TYPE);
-    }
-  }, []);
-
   const startPolling = useCallback(
     (benchId: string) => {
       stopPoll();
       pollRef.current = setInterval(() => {
-        void getDecodeBench(sparkId, benchId)
+        void getPrefillBench(sparkId, benchId)
           .then((j) => {
             setJob(j);
             setError(null);
             if (j.status !== "running") stopPoll();
           })
           .catch((err: Error) => {
-            // Server --watch / restart can drop the in-memory job for a moment.
-            // Recover via list, or show a clear interrupt message instead of a bare 404.
-            void listDecodeBench(sparkId, llmPort)
+            void listPrefillBench(sparkId, llmPort)
               .then((data) => {
                 if (data.active) {
                   setJob(data.active);
@@ -219,11 +190,11 @@ export function BenchmarkDialog({
                   }
                   return;
                 }
-                const finished =
+                const recovered =
                   data.history?.find((j) => j.benchId === benchId) ||
                   (data.last?.benchId === benchId ? data.last : null);
-                if (finished) {
-                  setJob(finished);
+                if (recovered) {
+                  setJob(recovered);
                   setError(null);
                   stopPoll();
                   return;
@@ -252,27 +223,35 @@ export function BenchmarkDialog({
   useEffect(() => {
     if (!open) {
       stopPoll();
-      setPromptType(DEFAULT_PROMPT_TYPE);
       return;
     }
-    setError(null);
     let cancelled = false;
     setLoadingLast(true);
-    listDecodeBench(sparkId, llmPort)
+    setError(null);
+    void listPrefillBench(sparkId, llmPort)
       .then((data) => {
         if (cancelled) return;
         if (data.active) {
           setJob(data.active);
-          applyJobConfig(data.active);
-          if (data.active.status === "running") {
-            startPolling(data.active.benchId);
+          if (Array.isArray(data.active.config?.contextSizes)) {
+            setSelected(
+              data.active.config.contextSizes.filter(
+                (n) => contextLength == null || contextLength <= 0 || n <= contextLength
+              )
+            );
           }
-          return;
-        }
-        if (data.last) {
+          if (data.active.status === "running") startPolling(data.active.benchId);
+        } else if (data.last) {
           setJob(data.last);
-          applyJobConfig(data.last);
-          return;
+          if (Array.isArray(data.last.config?.contextSizes)) {
+            const next = data.last.config.contextSizes.filter(
+              (n) => contextLength == null || contextLength <= 0 || n <= contextLength
+            );
+            setSelected(next.length ? next : defaultSelected(contextLength));
+          }
+        } else {
+          setJob(null);
+          setSelected(defaultSelected(contextLength));
         }
       })
       .catch((err: Error) => {
@@ -283,12 +262,10 @@ export function BenchmarkDialog({
       });
     return () => {
       cancelled = true;
-      stopPoll();
     };
-  }, [open, sparkId, llmPort, stopPoll, startPolling, applyJobConfig]);
+  }, [open, sparkId, llmPort, contextLength, startPolling, stopPoll]);
 
   useEffect(() => () => stopPoll(), [stopPoll]);
-
   useEffect(
     () => () => {
       if (copyResetRef.current != null) clearTimeout(copyResetRef.current);
@@ -296,8 +273,11 @@ export function BenchmarkDialog({
     []
   );
 
-  const toggleConcurrency = (n: number) => {
-    if (isRunning || starting) return;
+  const sizeFits = (n: number) =>
+    contextLength == null || contextLength <= 0 || n <= contextLength;
+
+  const toggleSize = (n: number) => {
+    if (isRunning || starting || !sizeFits(n)) return;
     setSelected((prev) => {
       if (prev.includes(n)) {
         if (prev.length === 1) return prev;
@@ -308,25 +288,19 @@ export function BenchmarkDialog({
   };
 
   const handleStart = async () => {
-    if (selected.length === 0) {
-      setError("Select at least one concurrency level");
-      return;
-    }
-    const maxTokens = parseInt(maxTokensDraft.trim(), 10);
-    if (!Number.isInteger(maxTokens) || maxTokens < 64 || maxTokens > 2048) {
-      setError("Max tokens must be an integer between 64 and 2048");
+    const sizes = selected.filter(sizeFits);
+    if (sizes.length === 0) {
+      setError("Select at least one context size that fits this model");
       return;
     }
     setStarting(true);
     setError(null);
     setJob(null);
     try {
-      const started = await startDecodeBench(sparkId, {
+      const started = await startPrefillBench(sparkId, {
         port: llmPort,
-        concurrencies: selected,
-        maxTokens,
+        contextSizes: sizes,
         modelId: modelId || undefined,
-        promptType,
       });
       setJob(started);
       startPolling(started.benchId);
@@ -340,7 +314,7 @@ export function BenchmarkDialog({
   const handleCancel = async () => {
     if (!job || job.status !== "running") return;
     try {
-      const j = await cancelDecodeBench(sparkId, job.benchId);
+      const j = await cancelPrefillBench(sparkId, job.benchId);
       setJob(j);
       startPolling(job.benchId);
     } catch (err: unknown) {
@@ -382,7 +356,7 @@ export function BenchmarkDialog({
     if (!job || job.status === "running") return;
     setError(null);
     try {
-      await clearDecodeBenchHistory(sparkId, llmPort);
+      await clearPrefillBenchHistory(sparkId, llmPort);
       stopPoll();
       setJob(null);
     } catch (err: unknown) {
@@ -403,10 +377,13 @@ export function BenchmarkDialog({
 
   const showConfig = (!job || job.status === "running") && !loadingLast;
   const showResults = job && job.status !== "running";
+  const ctxHint =
+    contextLength != null && contextLength > 0
+      ? `Model context ${formatContextSize(contextLength)} — larger sizes are disabled.`
+      : "Unique-prefix prompts; TTFT is time to first token. 128k–300k can take tens of minutes.";
 
   const dialog = (
     <div className={`bench-overlay${visible ? " is-open" : ""}`} role="presentation">
-      {/* Scrim — click to close when not running */}
       <button
         type="button"
         className="bench-overlay__scrim"
@@ -420,12 +397,12 @@ export function BenchmarkDialog({
         className="bench-sheet"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="bench-title"
+        aria-labelledby="prefill-bench-title"
       >
         <header className="bench-sheet__header">
           <div className="bench-sheet__header-text">
-            <h2 id="bench-title" className="bench-sheet__title">
-              Decode benchmark
+            <h2 id="prefill-bench-title" className="bench-sheet__title">
+              Prefill benchmark
             </h2>
             <p className="bench-sheet__subtitle">
               Port {llmPort}
@@ -451,86 +428,31 @@ export function BenchmarkDialog({
             <section className="bench-sheet__section">
               <div className="bench-field">
                 <div className="bench-field__head">
-                  <h3 className="bench-sheet__section-title">Type</h3>
-                  <p className="bench-sheet__hint">
-                    {DECODE_BENCH_TYPE_META.find((t) => t.id === promptType)?.hint}
-                    {" · temp 0, thinking off"}
-                  </p>
+                  <h3 className="bench-sheet__section-title">Context size</h3>
+                  <p className="bench-sheet__hint">{ctxHint}</p>
                 </div>
-                <div
-                  className="bench-type-grid"
-                  role="radiogroup"
-                  aria-label="Decode benchmark type"
-                >
-                  {DECODE_BENCH_TYPE_META.map((t) => {
-                    const on = promptType === t.id;
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={on}
-                        title={t.hint}
-                        disabled={isRunning || starting}
-                        onClick={() => setPromptType(t.id)}
-                        className={`bench-conc-btn${on ? " is-on" : ""}`}
-                      >
-                        {t.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="bench-field">
-                <div className="bench-field__head">
-                  <h3 className="bench-sheet__section-title">Concurrency</h3>
-                  <p className="bench-sheet__hint">
-                    Levels run sequentially; each opens that many parallel streams.
-                  </p>
-                </div>
-                <div className="bench-conc-grid">
-                  {CONCURRENCY_OPTIONS.map((n) => {
+                <div className="bench-conc-grid" role="group" aria-label="Context sizes">
+                  {PREFILL_CONTEXT_SIZES.map((n: number) => {
                     const on = selected.includes(n);
+                    const fits = sizeFits(n);
                     return (
                       <button
                         key={n}
                         type="button"
-                        disabled={isRunning || starting}
-                        onClick={() => toggleConcurrency(n)}
+                        disabled={isRunning || starting || !fits}
+                        title={
+                          fits
+                            ? `${n.toLocaleString()} tokens`
+                            : `Exceeds model context (${contextLength?.toLocaleString()} tokens)`
+                        }
+                        onClick={() => toggleSize(n)}
                         className={`bench-conc-btn${on ? " is-on" : ""}`}
                       >
-                        {n}
+                        {formatContextSize(n)}
                       </button>
                     );
                   })}
                 </div>
-              </div>
-
-              <div className="bench-field">
-                <div className="bench-field__head">
-                  <label htmlFor="bench-max-tokens" className="bench-sheet__section-title">
-                    Max tokens / stream
-                  </label>
-                  <p className="bench-sheet__hint">
-                    Default 400 · temp 0, thinking off
-                    {promptType === "structured" ? " · count 1→200" : ""}
-                  </p>
-                </div>
-                <input
-                  id="bench-max-tokens"
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  disabled={isRunning || starting}
-                  value={maxTokensDraft}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === "" || /^\d+$/.test(raw)) setMaxTokensDraft(raw);
-                  }}
-                  className="bench-input"
-                  size={6}
-                />
               </div>
             </section>
           )}
@@ -543,11 +465,8 @@ export function BenchmarkDialog({
                 <div className="bench-progress__row">
                   <span className="bench-progress__status">
                     Running
-                    {job.config?.promptType
-                      ? ` · ${decodeBenchTypeLabel(job.config.promptType)}`
-                      : ""}
-                    {job.progress.currentConcurrency != null
-                      ? ` · ×${job.progress.currentConcurrency}`
+                    {job.progress.currentContext != null
+                      ? ` · ${formatContextSize(job.progress.currentContext)}`
                       : ""}
                   </span>
                   <span className="bench-progress__meta">
@@ -567,9 +486,9 @@ export function BenchmarkDialog({
               </div>
               {job.results.length > 0 && (
                 <div className="bench-results">
-                  <div className="bench-results__caption">Completed levels</div>
+                  <div className="bench-results__caption">Completed sizes</div>
                   {job.results.map((r) => (
-                    <ResultRow key={r.concurrency} r={r} />
+                    <ResultRow key={r.targetTokens} r={r} />
                   ))}
                 </div>
               )}
@@ -579,14 +498,11 @@ export function BenchmarkDialog({
           {showResults && (
             <section className="bench-sheet__section">
               <div className="bench-status-row">
-                <span
-                  className={`bench-status-pill bench-status-pill--${job.status}`}
-                >
+                <span className={`bench-status-pill bench-status-pill--${job.status}`}>
                   {statusLabel(job.status)}
                 </span>
                 <span className="bench-status-meta">
-                  {decodeBenchTypeLabel(job.config.promptType)} · {job.config.maxTokens} tok ·{" "}
-                  {job.config.concurrencies.join(", ")} conc
+                  {job.config.contextSizes.map(formatContextSize).join(", ")}
                   {job.durationMs != null ? ` · ${formatDuration(job.durationMs)}` : ""}
                 </span>
               </div>
@@ -596,22 +512,23 @@ export function BenchmarkDialog({
               {job.results.length > 0 && (
                 <div className="bench-results bench-results--table">
                   <div className="bench-results__head" aria-hidden="true">
-                    <span>Load</span>
+                    <span>Context</span>
                     <span className="bench-results__head-speeds">
-                      <span>Aggregate</span>
-                      <span>Stream</span>
+                      <span>Prefill</span>
+                      <span>TTFT</span>
                     </span>
                   </div>
                   {job.results.map((r) => (
-                    <ResultRow key={r.concurrency} r={r} />
+                    <ResultRow key={r.targetTokens} r={r} />
                   ))}
                 </div>
               )}
 
               {job.results.length > 0 && (
                 <p className="bench-legend">
-                  <strong>Aggregate</strong> — total decode tok/s across all concurrent streams.{" "}
-                  <strong>Stream</strong> — per-stream average decode.
+                  <strong>Prefill</strong> — prompt tokens ÷ time to first token.{" "}
+                  <strong>TTFT</strong> — request start to first streamed token. Each size
+                  uses a unique prefix so prefix-cache does not inflate later sizes.
                 </p>
               )}
             </section>
@@ -620,7 +537,11 @@ export function BenchmarkDialog({
 
         <footer className="bench-sheet__footer">
           {job?.status === "running" ? (
-            <button type="button" className="bench-btn bench-btn--ghost" onClick={() => void handleCancel()}>
+            <button
+              type="button"
+              className="bench-btn bench-btn--ghost"
+              onClick={() => void handleCancel()}
+            >
               Cancel
             </button>
           ) : job ? (
@@ -661,7 +582,7 @@ export function BenchmarkDialog({
                 type="button"
                 className="bench-btn bench-btn--primary"
                 onClick={() => void handleStart()}
-                disabled={starting || selected.length === 0}
+                disabled={starting || selected.filter(sizeFits).length === 0}
               >
                 {starting ? "Starting…" : "Run benchmark"}
               </button>
