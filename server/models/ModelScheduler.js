@@ -134,7 +134,7 @@ export class ModelScheduler {
     const parts = zonedParts(nowMs, cfg.tz || this.tz);
     const active = this._activeWindowFor(nowMs, cfg);
     const override = this._overrideInForce(parts, active);
-    const nextBoundaryInfo = this._nextWindowInfo(nowMs, cfg, active);
+    const nextChange = this._nextScheduleChange(nowMs, cfg, active);
     return {
       enabled: true,
       tz: cfg.tz || this.tz,
@@ -145,17 +145,17 @@ export class ModelScheduler {
       // window it owns it). Null when nothing is scheduled to take over — e.g.
       // a day window ending into an unowned gap, in which case the next model
       // is simply 'nothing'. Stable between boundaries (diff-cache safe).
-      nextModelId: nextBoundaryInfo?.owner ?? null,
-      nextWindow: nextBoundaryInfo
-        ? { start: nextBoundaryInfo.start, end: nextBoundaryInfo.end, label: nextBoundaryInfo.label, owner: nextBoundaryInfo.owner }
+      nextModelId: nextChange?.window?.owner ?? null,
+      nextWindow: nextChange?.window
+        ? { start: nextChange.window.start, end: nextChange.window.end, label: nextChange.window.label, owner: nextChange.window.owner }
         : null,
       // A manual click is only worth surfacing while it still holds.
       override: override ? { modelId: this._state.override.modelId } : null,
       // Absolute epoch ms of the next window boundary — stable between
       // boundaries, so the WS payload stays byte-identical between ticks and
       // the diff cache holds. The UI renders the countdown from its own clock.
-      nextBoundary: active
-        ? { epochMs: boundaryEpoch(parts, active, nowMs), clock: active.end }
+      nextBoundary: nextChange
+        ? { epochMs: nextChange.epochMs, clock: nextChange.clock }
         : null,
       lastDecision: this._state.lastDecision,
     };
@@ -329,27 +329,26 @@ export class ModelScheduler {
     return active?.owner ?? null;
   }
 
-  /**
-   * The window that owns the GPU just AFTER the upcoming boundary, i.e. what
-   * the schedule switches to next. Only meaningful while a window is active
-   * (that is when the UI counts down to a boundary). Evaluated exactly at the
-   * boundary epoch — the active window is end-exclusive, so the following
-   * window owns that minute. Derived from `boundaryEpoch`, which is fixed
-   * between boundaries, so the WS payload stays byte-identical across ticks
-   * (diff-cache safe) rather than depending on the wall clock. The day type
-   * flips automatically when the boundary crosses midnight or a weekend edge,
-   * because we re-resolve parts at the probed instant.
-   * Returns null when the boundary leads into an unowned gap (nothing follows).
-   */
-  _nextWindowInfo(nowMs, cfg, active) {
+  /** Find the first future minute whose scheduled owner differs from now. */
+  _nextScheduleChange(nowMs, cfg, active) {
     if (!active) return null;
     const tz = cfg.tz || this.tz;
     const parts = zonedParts(nowMs, tz);
-    const probeMs = boundaryEpoch(parts, active, nowMs); // the boundary instant
-    const nextParts = zonedParts(probeMs, tz);
-    const nextWindows = this._windowsFor(probeMs, cfg);
-    const win = resolveActiveWindow(nextWindows, nextParts.minute);
-    return win && win.owner ? win : null;
+    const [year, month, day] = parts.dateKey.split("-").map(Number);
+    const currentMinuteEpoch =
+      Date.UTC(year, month - 1, day) + parts.minute * 60_000 - parts.offsetMin * 60_000;
+
+    // Weekday/weekend schedules repeat within seven days. Scan one extra day
+    // so an all-week reservation cleanly reports that no change is coming.
+    for (let offset = 1; offset <= 8 * 1440; offset += 1) {
+      const probeMs = currentMinuteEpoch + offset * 60_000;
+      const probeParts = zonedParts(probeMs, tz);
+      const window = resolveActiveWindow(this._windowsFor(probeMs, cfg), probeParts.minute);
+      if ((window?.owner ?? null) !== active.owner) {
+        return { epochMs: probeMs, clock: fmt(probeParts.minute), window };
+      }
+    }
+    return null;
   }
 
   /** Does the manual override still apply at this instant? */
@@ -386,24 +385,6 @@ export class ModelScheduler {
 
 function fmt(minute) {
   return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
-}
-
-/** Next boundary of the active window (its end), as absolute epoch ms. */
-function boundaryEpoch(parts, active, nowMs) {
-  const target = active.endMin;
-  let epoch =
-    Date.UTC(...parts.dateKey.split("-").map((v, i) => (i === 1 ? Number(v) - 1 : Number(v)))) +
-    target * 60_000 -
-    parts.offsetMin * 60_000;
-  if (epoch <= nowMs - 60_000) epoch += 1440 * 60_000;
-  return epoch;
-}
-
-function nextBoundaryLabel(active, minute) {
-  const delta = ((active.endMin - minute + 1440) % 1440) || 1440;
-  const h = Math.floor(delta / 60);
-  const m = delta % 60;
-  return `${h > 0 ? `${h} h ` : ""}${m} min`;
 }
 
 function readJson(p) {

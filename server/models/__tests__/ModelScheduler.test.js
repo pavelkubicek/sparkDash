@@ -16,6 +16,10 @@ function at(y, mo, d, h, mi) {
   return Date.UTC(y, mo - 1, d, h - 1, mi, 0);
 }
 
+function atSummer(y, mo, d, h, mi) {
+  return Date.UTC(y, mo - 1, d, h - 2, mi, 0);
+}
+
 class FakeJobs {
   constructor() {
     this.calls = [];
@@ -231,4 +235,26 @@ test("statusBlock.nextModelId is null when the boundary leads into a gap", async
   assert.equal(s.activeModelId, "glm");
   assert.equal(s.nextModelId, null);
   assert.equal(s.nextWindow, null);
+});
+
+test("statusBlock skips same-model weekend continuation", () => {
+  const { sched } = makeScheduler({
+    models: [
+      { id: "qwen", weekday: [{ start: "08:40", end: "18:00" }] },
+      {
+        id: "deepseek",
+        weekday: [{ start: "18:00", end: "08:40" }],
+        weekend: [{ start: "00:00", end: "00:00" }],
+      },
+    ],
+  });
+
+  const fridayEvening = atSummer(2026, 9, 4, 18, 30);
+  const mondayMorning = atSummer(2026, 9, 7, 8, 40);
+  const s = sched.statusBlock(fridayEvening);
+
+  assert.equal(s.activeModelId, "deepseek");
+  assert.equal(s.nextModelId, "qwen");
+  assert.equal(s.nextBoundary.epochMs, mondayMorning);
+  assert.equal(s.nextBoundary.clock, "08:40");
 });
