@@ -424,9 +424,25 @@ Copy `.env.example` to `.env` if needed:
 
 ### Power controls (shutdown / Wake-on-LAN)
 
-- **Shutdown** (per Spark or **Shutdown All** on Overview) runs over SSH:  
-  `sudo -n /usr/local/bin/spark-shutdown`  
-  Install that script on each Spark and allow passwordless sudo for it only.
+- **Shutdown** (per Spark or **Shutdown All** on Overview):
+  - **Remote Sparks** run over SSH: a guard verifies the host script and passwordless
+    sudo, then backgrounds `sudo -n /usr/local/bin/spark-shutdown` so SSH returns before
+    the host dies. Provision each remote once with (set `USER` to that Spark's SSH user;
+    you will be prompted for its password once):
+
+    ```bash
+    ssh -t USER@SPARK_IP 'sudo sh -c "printf \"#!/bin/sh\nexec systemctl poweroff\n\" > /usr/local/bin/spark-shutdown && chmod 0755 /usr/local/bin/spark-shutdown && echo \"USER ALL=(ALL) NOPASSWD: /usr/local/bin/spark-shutdown\" > /etc/sudoers.d/spark-shutdown && chmod 0440 /etc/sudoers.d/spark-shutdown && visudo -cf /etc/sudoers.d/spark-shutdown && echo PROVISIONED"'
+    ```
+
+  - **Local (dashboard) Spark**: inside the provided Docker container (privileged,
+    `pid: host`) the server powers off the host through host systemd directly —
+    `nsenter -t 1 -m -- systemctl poweroff` — no script and no sudo needed in the
+    container. Run on a bare host (`npm run dev`, no Docker) it falls back to the same
+    `sudo -n /usr/local/bin/spark-shutdown` contract, so install the script there too.
+- **Honest acknowledgement** — both shutdown routes wait a short ack window (~1.5 s)
+  after *requesting* the power-off, so a missing script, a sudo that wants a password,
+  or a missing binary comes back as a real error instead of a fake “Shutdown initiated”.
+  The response still lands seconds before the host actually goes down.
 - **Wake** / **Wake All** send a UDP magic packet (port 9). The MAC is taken from the **enP7s7** interface automatically while the Spark is online (persisted as `detectedMacAddress`). Optionally set a **MAC override** in Edit Spark. Broadcast is derived as `/24` from LAN IP, or `255.255.255.255` if LAN IP is missing.
 - Batch shutdown only targets **online** Sparks; offline nodes are skipped.
 - Same trust model as the rest of the API: **do not expose port 5555** beyond a trusted network — power actions are not separately authenticated.

@@ -13,6 +13,10 @@ Format: version sections are listed newest first.
 - **Active plans in the Spark Dev Engine panel** — the overview panel now lists the engine's in-flight plan runs (queued / processing / creating-ticket) in its own section directly above **Active tickets**. Each row shows the plan status, the ticket it creates or refines, iteration, plan length and age, and jumps to the plan's page in the engine web UI. Served by a new `/api/dev-engine/plans` bridge route that drops the bulky plan markdown and reports `content_length` instead, so the 5s poll stays small.
 - **AI Proxy cached-token statistics** — the proxy now reports `cached_tokens` (input tokens served from the prompt cache) in its observer statistics. The AI Proxy box footer gains a third **cache** column (today's cached tokens, hit-rate % of input on hover) and the statistics dialog gains a **Cached tokens** summary card plus a **Cached** column with cache-hit bars in the by-model and daily breakdowns.
 
+### Fixed
+- **Shutdown / Shutdown All actually works in Docker** — the container had no `sudo` and no host script, yet the routes acknowledged the local Spark with “Shutdown initiated” *before* attempting `spawn`, so failures only hit the console (`spawn sudo ENOENT`). The local Spark now powers off host systemd directly via `nsenter -t 1 -m` inside the privileged container (bare-host runs keep the `sudo -n /usr/local/bin/spark-shutdown` path), and both routes wait a short ack window so missing binaries, sudo password prompts and missing scripts surface as real errors.
+- **Remote shutdown bash syntax error** — the SSH guard was joined with `"; "`, producing `… 2>&1 &; sleep 0.3`: every remote shutdown died at parse time (`syntax error near unexpected token ';'`) regardless of the host script. The command is now joined by newlines.
+
 ---
 
 ## [1.8.6] — 2026-09-01
