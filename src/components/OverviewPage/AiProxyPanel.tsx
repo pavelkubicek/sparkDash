@@ -360,9 +360,7 @@ export function AiProxyPanel({ llmMetrics }: { llmMetrics?: LlmMetrics[] }) {
                     ? `Cached tokens today — ${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}% of input served from the prompt cache`
                     : "Cached tokens today — input tokens served from the prompt cache"
                 }
-              >
-                cache
-              </span>
+              > cache</span>
             </div>
           </div>
         </div>
