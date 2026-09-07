@@ -11,6 +11,7 @@ Format: version sections are listed newest first.
 
 ### Added
 - **Active plans in the Spark Dev Engine panel** — the overview panel now lists the engine's in-flight plan runs (queued / processing / creating-ticket) in its own section directly above **Active tickets**. Each row shows the plan status, the ticket it creates or refines, iteration, plan length and age, and jumps to the plan's page in the engine web UI. Served by a new `/api/dev-engine/plans` bridge route that drops the bulky plan markdown and reports `content_length` instead, so the 5s poll stays small.
+- **AI Proxy cached-token statistics** — the proxy now reports `cached_tokens` (input tokens served from the prompt cache) in its observer statistics. The AI Proxy box footer gains a third **cache** column (today's cached tokens, hit-rate % of input on hover) and the statistics dialog gains a **Cached tokens** summary card plus a **Cached** column with cache-hit bars in the by-model and daily breakdowns.
 
 ---
 

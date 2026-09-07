@@ -335,8 +335,8 @@ export function AiProxyPanel({ llmMetrics }: { llmMetrics?: LlmMetrics[] }) {
               </div>
             </div>
           )}
-          {/* Spark-style footer: today's requests + total tokens */}
-          <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
+          {/* Spark-style footer: today's requests + total + cached tokens */}
+          <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
             <div className="text-center">
               <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                 {totals ? totals.request_count.toLocaleString() : "—"}
@@ -348,6 +348,21 @@ export function AiProxyPanel({ llmMetrics }: { llmMetrics?: LlmMetrics[] }) {
                 {totals ? formatTokens(totals.total_tokens) : "—"}
               </span>
               <span className="text-sm font-normal text-muted" title="Total tokens today"> tok</span>
+            </div>
+            <div className="border-l border-border text-center">
+              <span className="font-tabular text-[28px] font-bold leading-none text-bar">
+                {totals ? formatTokens(totals.cached_tokens ?? 0) : "—"}
+              </span>
+              <span
+                className="text-sm font-normal text-muted"
+                title={
+                  totals && totals.input_tokens > 0
+                    ? `Cached tokens today — ${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}% of input served from the prompt cache`
+                    : "Cached tokens today — input tokens served from the prompt cache"
+                }
+              >
+                cache
+              </span>
             </div>
           </div>
         </div>

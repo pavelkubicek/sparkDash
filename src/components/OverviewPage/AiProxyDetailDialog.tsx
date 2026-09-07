@@ -120,27 +120,36 @@ function SummaryCard({
   label,
   value,
   tone,
+  sub,
 }: {
   label: string;
   value: string;
   tone?: string;
+  sub?: string;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-surface-elevated/60 px-3 py-2.5">
       <span className="text-[11px] uppercase tracking-wide text-muted">{label}</span>
       <span className={`font-tabular text-lg font-bold leading-tight ${tone ?? "text-text"} truncate`}>{value}</span>
+      {sub && <span className="truncate text-[10px] text-muted">{sub}</span>}
     </div>
   );
+}
+
+function cachePct(cached: number, input: number): string | null {
+  return input > 0 ? `${Math.min(100, Math.round((cached / input) * 100))}% of input` : null;
 }
 
 function ModelBreakdownTable({
   rows,
   maxInput,
   maxOutput,
+  maxCached,
 }: {
   rows: AiProxyModelStat[];
   maxInput: number;
   maxOutput: number;
+  maxCached: number;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -150,13 +159,17 @@ function ModelBreakdownTable({
             <th className="py-1 pr-3 font-normal">Model</th>
             <th className="py-1 pr-3 font-normal">Requests</th>
             <th className="py-1 pr-3 font-normal">Input</th>
+            <th className="py-1 pr-3 font-normal" title="Input tokens served from the prompt cache">
+              Cached
+            </th>
             <th className="py-1 pr-3 font-normal">Output</th>
             <th className="py-1 text-right font-normal">Total</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => {
-            const total = row.request_count + row.total_tokens;
+            const cached = row.cached_tokens ?? 0;
+            const pct = cachePct(cached, row.input_tokens);
             return (
               <tr key={row.model} className="border-t border-border/60">
                 <td className="max-w-[10rem] truncate py-1.5 pr-3 text-text" title={row.model}>
@@ -171,6 +184,14 @@ function ModelBreakdownTable({
                       <div className="h-full rounded-full bg-accent" style={{ width: `${tokenBarWidth(row.input_tokens, maxInput)}%` }} />
                     </div>
                     <span className="font-tabular text-xs text-muted">{formatTokens(row.input_tokens)}</span>
+                  </div>
+                </td>
+                <td className="py-1.5 pr-3" title={pct ?? undefined}>
+                  <div className="flex items-center gap-2">
+                    <div className="h-1 w-16 overflow-hidden rounded-full bg-border">
+                      <div className="h-full rounded-full bg-bar" style={{ width: `${tokenBarWidth(cached, maxCached)}%` }} />
+                    </div>
+                    <span className="font-tabular text-xs text-muted">{formatTokens(cached)}</span>
                   </div>
                 </td>
                 <td className="py-1.5 pr-3">
@@ -210,6 +231,7 @@ function DailyBreakdownTable({ stats }: { stats: AiProxyStats }) {
         const total = rows.reduce((n, r) => n + r.total_tokens, 0);
         const maxInput = Math.max(0, ...rows.map((r) => r.input_tokens));
         const maxOutput = Math.max(0, ...rows.map((r) => r.output_tokens));
+        const maxCached = Math.max(0, ...rows.map((r) => r.cached_tokens ?? 0));
         return (
           <div key={period} className="rounded-md border border-border bg-surface-elevated/40">
             <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
@@ -221,7 +243,7 @@ function DailyBreakdownTable({ stats }: { stats: AiProxyStats }) {
               </span>
             </div>
             <div className="px-3 py-2">
-              <ModelBreakdownTable rows={rows} maxInput={maxInput} maxOutput={maxOutput} />
+              <ModelBreakdownTable rows={rows} maxInput={maxInput} maxOutput={maxOutput} maxCached={maxCached} />
             </div>
           </div>
         );
@@ -332,6 +354,7 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
   const totals = stats?.totals ?? null;
   const maxInput = Math.max(0, ...(stats?.byModel ?? []).map((r) => r.input_tokens));
   const maxOutput = Math.max(0, ...(stats?.byModel ?? []).map((r) => r.output_tokens));
+  const maxCached = Math.max(0, ...(stats?.byModel ?? []).map((r) => r.cached_tokens ?? 0));
 
   return createPortal(
     <div
@@ -467,7 +490,7 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
                 </p>
               )}
               {/* Summary cards */}
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
                 <SummaryCard
                   label="Requests"
                   value={totals.request_count.toLocaleString()}
@@ -477,6 +500,12 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
                   label="Input tokens"
                   value={formatTokens(totals.input_tokens)}
                   tone="text-text"
+                />
+                <SummaryCard
+                  label="Cached tokens"
+                  value={formatTokens(totals.cached_tokens ?? 0)}
+                  tone="text-bar"
+                  sub={cachePct(totals.cached_tokens ?? 0, totals.input_tokens) ?? undefined}
                 />
                 <SummaryCard
                   label="Output tokens"
@@ -500,6 +529,7 @@ export function AiProxyDetailDialog({ open, onClose }: AiProxyDetailDialogProps)
                     rows={stats.byModel}
                     maxInput={maxInput}
                     maxOutput={maxOutput}
+                    maxCached={maxCached}
                   />
                 ) : (
                   <p className="text-xs text-muted">No requests in this period.</p>

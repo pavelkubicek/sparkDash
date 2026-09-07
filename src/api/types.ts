@@ -897,6 +897,8 @@ export interface AiProxyTotals {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /** Input tokens served from the prompt cache (prefix-cache hits). Absent on older proxy builds. */
+  cached_tokens?: number;
 }
 
 /** One model row in the statistics breakdown. */
@@ -906,6 +908,8 @@ export interface AiProxyModelStat {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /** Input tokens served from the prompt cache. Absent on older proxy builds. */
+  cached_tokens?: number;
 }
 
 /** One day+model row in the daily breakdown. */
@@ -916,6 +920,8 @@ export interface AiProxyDailyStat {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /** Input tokens served from the prompt cache. Absent on older proxy builds. */
+  cached_tokens?: number;
 }
 
 export interface AiProxyStats {
