@@ -14,6 +14,17 @@ import { normalizeSchedulerConfig } from "../../src/shared/modelSchedules.js";
 
 const DEFAULTS = Object.freeze({ enabled: false, tz: MODEL_SCHEDULER_TZ });
 
+/**
+ * The operator's effective zone. "UTC" and a missing zone are treated as
+ * "unset" — scheduling on UTC is exactly the silent DST drift this module
+ * exists to prevent, so both always resolve to MODEL_SCHEDULER_TZ. A real,
+ * different zone is honoured as-is.
+ */
+function resolveTz(tz) {
+  if (!tz || tz === "UTC") return MODEL_SCHEDULER_TZ;
+  return tz;
+}
+
 let _config = { ...DEFAULTS };
 let _loaded = false;
 
@@ -37,16 +48,18 @@ function _persist() {
 
 /** Lazy so importing index.js never fails when the file is absent. */
 export function loadSchedulerConfig() {
-  _config = normalizeSchedulerConfig({ ...DEFAULTS, ..._readFromDisk() });
-  // Keep the operator's zone unless it is missing entirely.
-  if (!_config.tz || _config.tz === "UTC") _config.tz = MODEL_SCHEDULER_TZ;
+  const cfg = normalizeSchedulerConfig({ ...DEFAULTS, ..._readFromDisk() });
+  _config = { ...cfg, tz: resolveTz(cfg.tz) };
   _loaded = true;
   _persist();
   return { ..._config };
 }
 
 export function getSchedulerConfig() {
-  if (!_loaded) return normalizeSchedulerConfig(_readFromDisk());
+  if (!_loaded) {
+    const cfg = normalizeSchedulerConfig(_readFromDisk());
+    return { ...cfg, tz: resolveTz(cfg.tz) };
+  }
   return { ..._config };
 }
 
@@ -67,7 +80,8 @@ export function updateSchedulerConfig(patch) {
       e.status = 400;
       throw e;
     }
-    next.tz = tz;
+    // "UTC" means "operator's zone" (see resolveTz), never a real schedule zone.
+    next.tz = resolveTz(tz);
   }
   _config = normalizeSchedulerConfig(next);
   _loaded = true;
