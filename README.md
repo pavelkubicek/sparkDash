@@ -425,6 +425,8 @@ Copy `.env.example` to `.env` if needed:
 | `MODEL_JOB_TIMEOUT_MS` | `1800000` | Hard cap for one start/stop/restart job (ms); caps the whole cross-Spark chain |
 | `MODEL_PROBE_INTERVAL_MS` | `5000` | Model liveness probe cadence (ms) |
 | `MODEL_SCHEDULER_TZ` | `Europe/Prague` | Time zone for scheduler windows (DST-safe) |
+| `AI_PROXY_HOST` | _(loopback)_ | Host running the AI proxy (:3001) when it is **not** the dashboard machine |
+| `DEV_ENGINE_API_HOST` / `DEV_ENGINE_WEBUI_HOST` | _(loopback)_ | Host running the Spark Dev Engine API (:10000) / Web UI (:10001) |
 
 > The listener defaults to `127.0.0.1` (loopback) so the dashboard — which can SSH into and
 > power off your Sparks — isn't reachable on the LAN by default. Set `BIND_HOST` to the host's

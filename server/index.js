@@ -156,7 +156,11 @@ function clientKey(req) {
 // Proxies the (proprietary) AI proxy's observer API through the sparkDash
 // server so the browser never needs CORS and the integration stays self-
 // contained. Routes are unauthenticated like the rest of the LAN dashboard.
-const AI_PROXY_BASE = `http://127.0.0.1:${AI_PROXY_PORT}`;
+// *_HOST env vars name the machine the service actually runs on (deployment
+// config — same convention as MODEL_REPOS_BASE); unset means co-located with
+// the dashboard, which keeps the loopback defaults for single-host installs.
+const AI_PROXY_HOST = process.env.AI_PROXY_HOST || "";
+const AI_PROXY_BASE = `http://${AI_PROXY_HOST || "127.0.0.1"}:${AI_PROXY_PORT}`;
 const AI_PROXY_TIMEOUT_MS = 5000;
 
 async function aiProxyFetch(path, init) {
@@ -242,12 +246,24 @@ function requestBaseUrl(req, port) {
 }
 
 /**
- * Base observer URL for "jump to proxy" links — domain-agnostic.
- * The proxy is reachable on the same hostname the user is currently viewing
- * sparkDash from, just a different port.
+ * Browser-facing base URL for an integrated service. When its host is
+ * configured (service runs on another machine), the link must point THERE —
+ * the dashboard's own host would be a dead port. Unconfigured = co-located:
+ * derive from the request so LAN/domain access keeps working.
+ */
+function integrationBaseUrl(req, host, port) {
+  if (!host) return requestBaseUrl(req, port);
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  return `${proto}://${host}:${port}`;
+}
+
+/**
+ * Base observer URL for "jump to proxy" links. With AI_PROXY_HOST set the
+ * proxy lives on another machine and the link must carry that hostname;
+ * otherwise the proxy is co-located and the request's own hostname applies.
  */
 app.get("/api/ai-proxy/observer-url", (req, res) => {
-  res.json({ url: `${requestBaseUrl(req, AI_PROXY_PORT)}/observer` });
+  res.json({ url: `${integrationBaseUrl(req, AI_PROXY_HOST, AI_PROXY_PORT)}/observer` });
 });
 
 // ─── Spark Dev Engine bridge ─────────────────────────────
@@ -255,7 +271,9 @@ app.get("/api/ai-proxy/observer-url", (req, res) => {
 // server so the browser never needs CORS. Like the AI proxy bridge, routes are
 // unauthenticated like the rest of the LAN dashboard. On any upstream failure
 // respond 502 so the UI can show a graceful offline state.
-const DEV_ENGINE_API_BASE = `http://127.0.0.1:${DEV_ENGINE_API_PORT}`;
+const DEV_ENGINE_API_HOST = process.env.DEV_ENGINE_API_HOST || "";
+const DEV_ENGINE_WEBUI_HOST = process.env.DEV_ENGINE_WEBUI_HOST || "";
+const DEV_ENGINE_API_BASE = `http://${DEV_ENGINE_API_HOST || "127.0.0.1"}:${DEV_ENGINE_API_PORT}`;
 const DEV_ENGINE_TIMEOUT_MS = 5000;
 
 async function devEngineFetch(path, init) {
@@ -340,9 +358,9 @@ app.post("/api/dev-engine/slots-config", (req, res) => {
   void devEnginePost(req, res, "/api/slots-config");
 });
 
-/** Web UI base URL for "jump to engine" links — domain-agnostic. */
+/** Web UI base URL for "jump to engine" links — configured host, else request origin. */
 app.get("/api/dev-engine/webui-url", (req, res) => {
-  res.json({ url: requestBaseUrl(req, DEV_ENGINE_WEBUI_PORT) });
+  res.json({ url: integrationBaseUrl(req, DEV_ENGINE_WEBUI_HOST, DEV_ENGINE_WEBUI_PORT) });
 });
 
 // ─── REST API ────────────────────────────────────────────
