@@ -35,10 +35,8 @@ services:
       # Spark Dev Engine integration ports (API + Web UI)
       - DEV_ENGINE_API_PORT=10000
       - DEV_ENGINE_WEBUI_PORT=10001
-      # AI proxy + dev engine live on spark1 (see docker-compose.yml note)
+      # AI proxy lives on spark1; dev engine is co-located (see docker-compose.yml)
       - AI_PROXY_HOST=spark1.lan
-      - DEV_ENGINE_API_HOST=spark1.lan
-      - DEV_ENGINE_WEBUI_HOST=spark1.lan
       - NODE_ENV=development
       - HOST_PROC_PATH=/host/proc
       - HOST_SYS_PATH=/host/sys
