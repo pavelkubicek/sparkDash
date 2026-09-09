@@ -76,6 +76,7 @@ Full history: [CHANGELOG.md](./CHANGELOG.md)
 | **Prompt Showcase** | Full-page multi-terminal LLM streaming demo (up to 32 prompts) with live tok/s and copy-out |
 | **vLLM health** | KV cache %, run/wait queue, TTFT/E2E/ITL p95, preemptions, prefix cache, MTP accept from Prometheus `/metrics` |
 | **Multiple LLM ports** | Monitor several LLM servers on different ports simultaneously — each gets its own panel with independent backend detection and metrics |
+| **Model Launcher** | One-click start/stop/restart/logs of model repos from Overview — each card runs on its **assigned Spark** over SSH (machine-agnostic dashboard), with a time-window scheduler guaranteeing one model at a time |
 | **GPU processes** | See the top GPU processes by VRAM usage directly in the GPU panel, including process name and memory allocation |
 | **Spark uptime** | System uptime displayed inline on each Spark header for at-a-glance availability |
 | **Power controls** | Graceful shutdown (SSH host script) and Wake-on-LAN; batch actions on Overview |
@@ -230,6 +231,21 @@ Asked of **each node about itself**. Peer state is never the verdict. The probe 
 | `tailscaleMonitoring` | `false` | Run `tailscale status --json` and show the Tailnet card |
 
 Env (optional): `POLL_INTERVAL_TAILSCALE` (default `30000`), `TAILSCALE_PROBE_TIMEOUT_MS` (default `8000`).
+
+---
+
+## Model Launcher
+
+The Overview page carries one card per model repo (Qwen / DeepSeek / GLM kits on this deployment). Start / Stop / Restart / Logs run the repo's own `start.sh` / `stop.sh` / … and the live transcript streams into a modal with cancel. A time-window scheduler (weekday/weekend windows, explicit `TZ`) enforces exactly one model at a time and self-heals.
+
+**Machine-agnostic by design** — every card names the Spark where its repo actually lives:
+
+- `sparkId` (required for any action, chosen in the card's gear → edit dialog) decides where the scripts run. Everything executes there over the Spark's existing SSH connection — the same `sshpass`/key auth the monitors use, passwords from the encrypted store. The dashboard's own machine needs no repos, no docker, no GPU.
+- Liveness is probed the same way: `docker ps` on the assigned Spark, `/v1/models` against that Spark's probe host (its LAN IP — loopback binds are only visible from the machine itself).
+- An exclusive stop→start across two Sparks runs one chained command per machine, in order (stop the incumbent's Spark first); job timeout caps the whole job; cancelling kills the SSH session, and containers already handed to `dockerd` keep running.
+- Config values (`dir`, script names, args, container) pass a strict allowlist server-side and are single-quote-shielded on the wire, so a config value can never become shell syntax.
+
+Env (optional): `MODEL_REPOS_BASE` (allowlist base for card dirs — as the path looks **on the target Sparks**), `MODEL_JOB_TIMEOUT_MS` (`1800000`), `MODEL_PROBE_INTERVAL_MS` (`5000`), `MODEL_SCHEDULER_TICK_MS` (`30000`), `MODEL_SCHEDULER_TZ` (`Europe/Prague`).
 
 ---
 
@@ -405,6 +421,10 @@ Copy `.env.example` to `.env` if needed:
 | `HOST_SYS_PATH` | `/host/sys` | Host sys mount |
 | `HOST_ROOT_PATH` | `/host/root` | Host root mount |
 | `SSH_IDENTITY_FILE` | _(unset)_ | Path **inside the process** to a private key (`ssh -i`). Use when the bind-mount is not a default OpenSSH name. |
+| `MODEL_REPOS_BASE` | `/home/pavelkubicek/cluster/docker` | Allowlist base for Model Launcher card dirs — the path **as it exists on the target Sparks** |
+| `MODEL_JOB_TIMEOUT_MS` | `1800000` | Hard cap for one start/stop/restart job (ms); caps the whole cross-Spark chain |
+| `MODEL_PROBE_INTERVAL_MS` | `5000` | Model liveness probe cadence (ms) |
+| `MODEL_SCHEDULER_TZ` | `Europe/Prague` | Time zone for scheduler windows (DST-safe) |
 
 > The listener defaults to `127.0.0.1` (loopback) so the dashboard — which can SSH into and
 > power off your Sparks — isn't reachable on the LAN by default. Set `BIND_HOST` to the host's

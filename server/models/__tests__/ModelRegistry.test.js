@@ -42,6 +42,15 @@ test("validateModelConfig enforces the script / container / port allowlists", ()
   assert.throws(() => validateModelConfig({ ...VALID, id: "jobs" }, BASE), /Invalid model id/);
 });
 
+test("sparkId: optional, allowlisted, and trimmed into storage", () => {
+  assert.equal(validateModelConfig(VALID, BASE).sparkId, null);
+  assert.equal(validateModelConfig({ ...VALID, sparkId: "" }, BASE).sparkId, null);
+  assert.equal(validateModelConfig({ ...VALID, sparkId: " spark1-lan " }, BASE).sparkId, "spark1-lan");
+  assert.throws(() => validateModelConfig({ ...VALID, sparkId: "../etc" }, BASE), /sparkId/);
+  assert.throws(() => validateModelConfig({ ...VALID, sparkId: "spark 1" }, BASE), /sparkId/);
+  assert.throws(() => validateModelConfig({ ...VALID, sparkId: 42 }, BASE), /sparkId/);
+});
+
 test("startArgs are restricted to single flag tokens", () => {
   // A valueless flag and a --flag=value are both fine.
   assert.doesNotThrow(() => validateModelConfig({ ...VALID, startArgs: ["--host", "--port=8000"] }, BASE));

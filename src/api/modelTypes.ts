@@ -28,8 +28,12 @@ export interface ModelStatus {
 export interface ModelInfo {
   id: string;
   name: string;
-  /** Absolute host path of the repo (validated inside the repos base). */
+  /** Absolute path of the repo ON `sparkId` (validated inside the repos base). */
   dir: string;
+  /** Spark whose machine runs the scripts (null = unassigned → no actions). */
+  sparkId: string | null;
+  /** Display name of the assigned Spark; equals sparkId when it was removed. */
+  sparkName: string | null;
   description: string | null;
   container: string | null;
   port: number | null;
@@ -52,6 +56,8 @@ export interface ModelConfig {
   id: string;
   name?: string;
   dir: string;
+  /** Target Spark id for scripts/probes — set in the card's edit dialog. */
+  sparkId?: string | null;
   description?: string | null;
   startScript: string;
   stopScript: string;

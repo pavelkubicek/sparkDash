@@ -39,5 +39,7 @@ services:
       - HOST_PROC_PATH=/host/proc
       - HOST_SYS_PATH=/host/sys
       - HOST_ROOT_PATH=/host/root
+      # Model Launcher allowlist base on the target Sparks (see docker-compose.yml)
+      - MODEL_REPOS_BASE=/home/pavelkubicek/cluster/docker
       # Operator local timezone — scheduler windows must not drift with UTC.
       - TZ=Europe/Prague

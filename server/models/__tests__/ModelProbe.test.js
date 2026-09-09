@@ -8,32 +8,87 @@ const GLM = { id: "glm", name: "GLM", container: "glm-head", port: 8000 };
 const DS = { id: "ds", name: "DeepSeek", container: null, port: 8000 };
 const MODELS = [QWEN, GLM, DS];
 
+/** Containers for the legacy single-host default target. */
+const cmap = (setOrNull) => new Map([["local", setOrNull]]);
+const SSH_A = { kind: "ssh", key: "ssh:sparkA", label: "sparkA", spark: { id: "sparkA", lanIp: "10.0.0.10", ssh: { host: "10.0.0.10", user: "u", auth: "pass", password: "p" } } };
+const SSH_B = { kind: "ssh", key: "ssh:sparkB", label: "sparkB", spark: { id: "sparkB", lanIp: "10.0.0.11", ssh: { host: "10.0.0.11", user: "u", auth: "pass", password: "p" } } };
+
 // ─── portsNeedingProbe ─────────────────────────────────────
 test("a port owned by a confirmed container needs no HTTP probe at all", () => {
-  const containers = new Set(["vllm-fn"]); // qwen is up
-  assert.deepEqual([...portsNeedingProbe(MODELS, containers)], []);
+  assert.deepEqual([...portsNeedingProbe(MODELS, cmap(new Set(["vllm-fn"])))], []);
 });
 
 test("with nothing running the (single unique) port is probed once", () => {
-  const containers = new Set(["unrelated"]);
-  assert.deepEqual([...portsNeedingProbe(MODELS, containers)], ["8000"]);
+  assert.deepEqual([...portsNeedingProbe(MODELS, cmap(new Set(["unrelated"])))], ["local:8000"]);
 });
 
 test("docker failure falls back to probing every configured port", () => {
-  assert.deepEqual([...portsNeedingProbe(MODELS, null)], ["8000"]);
+  assert.deepEqual([...portsNeedingProbe(MODELS, cmap(null))], ["local:8000"]);
 });
 
 test("forcePorts overrides the skip (start job readiness, manual refresh)", () => {
-  const containers = new Set(["vllm-fn"]);
-  assert.deepEqual([...portsNeedingProbe(MODELS, containers, new Set(["8000"]))], ["8000"]);
+  assert.deepEqual(
+    [...portsNeedingProbe(MODELS, cmap(new Set(["vllm-fn"])), new Set(["8000"]))],
+    ["local:8000"]
+  );
 });
 
 test("distinct ports are tracked independently", () => {
   const a = { id: "a", container: "ca", port: 8000 };
   const b = { id: "b", container: "cb", port: 8001 };
   const c = { id: "c", container: null, port: 8002 };
-  const up = new Set(["ca"]); // a owns 8000; 8001/8002 still open questions
-  assert.deepEqual([...portsNeedingProbe([a, b, c], up)], ["8001", "8002"]);
+  const up = cmap(new Set(["ca"])); // a owns 8000; 8001/8002 still open questions
+  assert.deepEqual(
+    [...portsNeedingProbe([a, b, c], up)].sort(),
+    ["local:8001", "local:8002"]
+  );
+});
+
+// ─── the machine-agnostic core: ports contend per machine ─
+test("the same port on two Sparks is probed on BOTH machines", () => {
+  const a = { id: "a", container: "ca", port: 8000, sparkId: "sparkA" };
+  const b = { id: "b", container: "cb", port: 8000, sparkId: "sparkB" };
+  const keyOf = (m) => (m.sparkId === "sparkA" ? "ssh:sparkA" : "ssh:sparkB");
+  const containers = new Map([
+    ["ssh:sparkA", new Set(["other"])],
+    ["ssh:sparkB", new Set(["other"])],
+  ]);
+  assert.deepEqual(
+    [...portsNeedingProbe([a, b], containers, new Set(), keyOf)].sort(),
+    ["ssh:sparkA:8000", "ssh:sparkB:8000"]
+  );
+});
+
+test("a container on ANOTHER spark never settles this spark's port question", () => {
+  const a = { id: "a", name: "A", container: "ca", port: 8000, sparkId: "sparkA" };
+  const containers = new Map([
+    ["ssh:sparkA", new Set(["unrelated"])],
+    ["ssh:sparkB", new Set(["ca"])], // same name, wrong machine — not a's
+  ]);
+  const wanted = portsNeedingProbe([a], containers, new Set(), (m) => `ssh:${m.sparkId}`);
+  assert.deepEqual([...wanted], ["ssh:sparkA:8000"]);
+
+  const st = buildModelStatus([a], {
+    containers,
+    ports: {},
+    keys: { a: "ssh:sparkA" },
+    checkedAt: 1,
+  });
+  assert.equal(st.a.containerUp, false, "ca on sparkB must not read as a's container");
+});
+
+test("an unresolvable target gets the reason as status, not a false down", () => {
+  const st = buildModelStatus([GLM], {
+    containers: new Map(),
+    ports: {},
+    keys: { glm: null },
+    reasons: { glm: "Model glm has no Spark assigned" },
+    checkedAt: 1,
+  });
+  assert.equal(st.glm.running, false);
+  assert.equal(st.glm.containerUp, null);
+  assert.equal(st.glm.portUp, null);
+  assert.match(st.glm.error, /no Spark assigned/);
 });
 
 // ─── probeModels wiring ────────────────────────────────────
@@ -62,11 +117,49 @@ test("probeModels probes exactly once when the port is unowned", async () => {
   assert.deepEqual(calls, ["8000"]); // three models, one unique port, one GET
 });
 
+test("probeModels asks every target once and probes ports on their own machine", async () => {
+  const ps = [];
+  const ports = [];
+  const a = { id: "a", container: "ca", port: 8000, sparkId: "sparkA" };
+  const b = { id: "b", container: "cb", port: 8000, sparkId: "sparkB" };
+  const targets = { a: SSH_A, b: SSH_B };
+  const res = await probeModels([a, b], {
+    targetFor: (m) => targets[m.id],
+    listContainers: async (target) => {
+      ps.push(target.key);
+      return new Set(); // nothing running anywhere
+    },
+    fetchPort: async (p, _t, host) => {
+      ports.push(`${host}:${p}`);
+      return { ok: false, modelId: null, status: null, error: "refused" };
+    },
+  });
+  assert.deepEqual(ps.sort(), ["ssh:sparkA", "ssh:sparkB"]); // one docker ps per machine
+  assert.deepEqual(ports.sort(), ["10.0.0.10:8000", "10.0.0.11:8000"]); // LAN host, not loopback
+  assert.equal(res.keys.a, "ssh:sparkA");
+  assert.equal(res.keys.b, "ssh:sparkB");
+});
+
+test("probeModels on an unassigned model sends no traffic at all", async () => {
+  const res = await probeModels([GLM], {
+    targetFor: () => ({ kind: null, error: "Model glm has no Spark assigned" }),
+    listContainers: async () => {
+      throw new Error("must not be called");
+    },
+    fetchPort: async () => {
+      throw new Error("must not be called");
+    },
+  });
+  assert.equal(res.keys.glm, null);
+  assert.match(res.reasons.glm, /no Spark assigned/);
+});
+
 // ─── buildModelStatus with skipped ports ───────────────────
 test("skipped port: owner reads up, the others read held-by — without portChecked", () => {
   const st = buildModelStatus(MODELS, {
-    containers: new Set(["vllm-fn"]),
+    containers: cmap(new Set(["vllm-fn"])),
     ports: {}, // probeModels probed nothing
+    keys: { qwen: "local", glm: "local", ds: "local" },
     checkedAt: 123,
   });
   assert.equal(st.qwen.running, true);
@@ -84,9 +177,12 @@ test("skipped port: owner reads up, the others read held-by — without portChec
 
 test("a port whose verdict is unknown stays unknown (portChecked false, portUp null)", () => {
   // docker failed AND nothing answered — statuses must not hard-say "down".
-  const st = buildModelStatus([GLM], { containers: null, ports: {}, checkedAt: 1 });
-  // containers null forces "probe everything", so this shape means docker died
-  // between the probe decision and status build — defend the null anyway.
+  const st = buildModelStatus([GLM], {
+    containers: cmap(null),
+    ports: {},
+    keys: { glm: "local" },
+    checkedAt: 1,
+  });
   assert.equal(st.glm.running, false);
   assert.equal(st.glm.containerUp, null);
   assert.match(st.glm.error, /docker ps unavailable/);
@@ -94,8 +190,9 @@ test("a port whose verdict is unknown stays unknown (portChecked false, portUp n
 
 test("probed port keeps the old semantics exactly (regression)", () => {
   const st = buildModelStatus(MODELS, {
-    containers: new Set(), // nothing up
-    ports: { 8000: { ok: true, modelId: "deepseek-v4", status: 200, error: null } },
+    containers: cmap(new Set()), // nothing up
+    ports: { "local:8000": { ok: true, modelId: "deepseek-v4", status: 200, error: null } },
+    keys: { qwen: "local", glm: "local", ds: "local" },
     checkedAt: 1,
   });
   // No container claims 8000 → the bare answer counts for everyone probing it.
@@ -108,8 +205,10 @@ test("probed port keeps the old semantics exactly (regression)", () => {
 
 test("probed port answered while another container owns it → held by other", () => {
   const st = buildModelStatus(MODELS, {
-    containers: new Set(["vllm-fn"]),
-    ports: { 8000: { ok: true, modelId: "other", status: 200, error: null } }, // forced probe
+    containers: cmap(new Set(["vllm-fn"])),
+    // forced probe:
+    ports: { "local:8000": { ok: true, modelId: "other", status: 200, error: null } },
+    keys: { qwen: "local", glm: "local", ds: "local" },
     checkedAt: 1,
   });
   assert.equal(st.qwen.running, true); // container proves it

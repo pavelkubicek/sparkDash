@@ -22,21 +22,27 @@
 import { ModelRegistry, normalizeRepoUrl } from "./ModelRegistry.js";
 import { ModelJobManager } from "./ModelJobManager.js";
 import { ModelScheduler } from "./ModelScheduler.js";
-import { probeModels, buildModelStatus } from "./ModelProbe.js";
-import { execOnHost, shQuote } from "./hostExec.js";
+import { execOnTarget, resolveRunTarget, shQuote } from "./hostExec.js";
+import { probeModels, buildModelStatus, containersKnown } from "./ModelProbe.js";
 import { getSchedulerConfig, updateSchedulerConfig } from "./schedulerStore.js";
 import { MODEL_PROBE_INTERVAL_MS } from "../config.js";
 
 export class ModelLauncher {
   /**
-   * @param {{ onModelsChange?: () => void, onStatusChange?: () => void }} [hooks]
-   *   server callbacks — used to force a WS broadcast instead of waiting a tick.
+   * @param {{ onStatusChange?: () => void, getSpark?: (id: string) => object|null }} [hooks]
+   *   server callbacks — `onStatusChange` forces a WS broadcast; `getSpark`
+   *   is the SparkRegistry lookup INCLUDING ssh.password that decides WHERE
+   *   every model's scripts run (the model's assigned Spark, over SSH).
    */
   constructor(hooks = {}) {
     this.onStatusChange = hooks.onStatusChange || (() => {});
+    this.getSpark = hooks.getSpark || (() => null);
+    /** A model's run target is its assigned Spark — never the dashboard's box. */
+    this._targetFor = (model) => resolveRunTarget(model, this.getSpark);
     this.registry = new ModelRegistry();
     this.jobs = new ModelJobManager({
       getModel: (id) => this.registry.getModel(id),
+      getSpark: (id) => this.getSpark(id),
       onChange: () => this._notify(),
       afterSettle: async () => {
         // A stop/start changes liveness immediately — don't wait for the tick.
@@ -75,17 +81,22 @@ export class ModelLauncher {
 
   /**
    * Fill in `repoUrl` for kits that do not have one yet: the repos base is not
-   * bind-mounted into this container, so the origin URL is read with one short
-   * host `git` call per model, once at startup. Existing values are never
-   * overwritten (they may have been set deliberately through the API).
+   * bind-mounted into this container (and lives on the model's Spark anyway),
+   * so the origin URL is read with one short `git` call per model *on that
+   * Spark*, once at startup. Existing values are never overwritten (they may
+   * have been set deliberately through the API).
    */
   async detectRepoUrls() {
     const missing = this.registry.models.filter((m) => !m.repoUrl);
     for (const m of missing) {
+      const target = this._targetFor(m);
+      if (target.kind === null) continue; // the probe pass surfaces the reason
       try {
-        const res = await execOnHost(`git -C ${shQuote(m.dir)} remote get-url origin 2>/dev/null`, {
-          timeoutMs: 6000,
-        });
+        const res = await execOnTarget(
+          target,
+          `git -C ${shQuote(m.dir)} remote get-url origin 2>/dev/null`,
+          { timeoutMs: 6000 }
+        );
         if (res.code !== 0 || res.error) continue;
         const url = normalizeRepoUrl(res.stdout);
         if (!url) continue;
@@ -146,11 +157,11 @@ export class ModelLauncher {
       if (opts.forcePorts === "all") {
         for (const m of models) if (m.port != null) forced.add(String(m.port));
       }
-      const result = await probeModels(models, { forcePorts: forced });
+      const result = await probeModels(models, { forcePorts: forced, targetFor: this._targetFor });
       const next = buildModelStatus(models, { ...result, checkedAt: undefined });
       const changed = JSON.stringify(next) !== JSON.stringify(this._status);
       this._status = next;
-      this._lastProbeOkAt = result.containers === null ? this._lastProbeOkAt : Date.now();
+      this._lastProbeOkAt = containersKnown(result) ? Date.now() : this._lastProbeOkAt;
       // Readiness frees the mutating slot (see releaseReadyStart): a start job
       // whose model is serving has done its job, even though start.sh is still
       // tailing logs. Port-first so we do not cut the transcript the moment
@@ -190,6 +201,10 @@ export class ModelLauncher {
       id: m.id,
       name: m.name,
       dir: m.dir,
+      sparkId: m.sparkId ?? null,
+      /** Display name of the assigned Spark (its id if the Spark was removed —
+       *  the status error tells the whole story in that case). */
+      sparkName: m.sparkId ? this.getSpark(m.sparkId)?.name ?? m.sparkId : null,
       description: m.description,
       container: m.container,
       port: m.port,

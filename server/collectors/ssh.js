@@ -55,16 +55,21 @@ function sshpassAvailable() {
 }
 
 /**
- * Execute a command on a remote Spark via SSH.
+ * Build the argv + env that runs `cmd` on `spark` over SSH.
  *
- * @param {Object} spark - Spark config object
+ * Exported for the model launcher's *streaming* spawner
+ * (server/models/hostExec.js → spawnOnTarget): a long `start.sh` tail must be
+ * streamed, and `sshExec` buffers. Both paths share this builder so auth
+ * handling, validation, and the option set can never drift apart.
+ *
+ * Throws on missing/invalid config. The returned `args` never contain the
+ * password — it travels in `env.SSHPASS` (`sshpass -e`).
+ *
+ * @param {Object} spark - Spark config object (ssh.password may be present)
  * @param {string} cmd - Command to execute (passed as a single remote argv via bash -c)
- * @param {{ timeoutMs?: number }} [options]
- * @returns {Promise<string>} - Trimmed stdout
+ * @returns {{ file: string, args: string[], env: Record<string, string|undefined>, targetHost: string }}
  */
-export async function sshExec(spark, cmd, options = {}) {
-  const timeoutMs =
-    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 10000;
+export function buildSshInvocation(spark, cmd) {
   const { host, user, auth, password } = spark.ssh || {};
   const targetHost = host || spark.lanIp;
 
@@ -95,8 +100,6 @@ export async function sshExec(spark, cmd, options = {}) {
   const remote = `${user}@${targetHost}`;
   // Remote command as a single argument — ssh does not invoke a local shell for it
   // when using execFile without a shell. `--` stops option parsing before destination.
-  let file;
-  let args;
   // Minimal child env — only what ssh/sshpass actually need. Spreading the full
   // `process.env` would leak every host var (AWS_*, GITHUB_TOKEN, etc.) into the
   // child; this whitelist scopes to PATH, HOME, USER/LOGNAME (ssh logging +
@@ -111,6 +114,8 @@ export async function sshExec(spark, cmd, options = {}) {
     ...(process.env.SSH_AUTH_SOCK ? { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK } : {}),
   };
 
+  let file;
+  let args;
   if (auth === "pass") {
     if (!password) {
       throw new Error(
@@ -134,6 +139,22 @@ export async function sshExec(spark, cmd, options = {}) {
     }
     args.push("--", remote, cmd);
   }
+
+  return { file, args, env, targetHost };
+}
+
+/**
+ * Execute a command on a remote Spark via SSH.
+ *
+ * @param {Object} spark - Spark config object
+ * @param {string} cmd - Command to execute (passed as a single remote argv via bash -c)
+ * @param {{ timeoutMs?: number }} [options]
+ * @returns {Promise<string>} - Trimmed stdout
+ */
+export async function sshExec(spark, cmd, options = {}) {
+  const timeoutMs =
+    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 10000;
+  const { file, args, env, targetHost } = buildSshInvocation(spark, cmd);
 
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout: timeoutMs, env, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {

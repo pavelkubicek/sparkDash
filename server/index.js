@@ -1516,12 +1516,18 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
   }
 });
 
-// ─── Model launcher (Overview panel: start/stop model repos on the host) ───
+// ─── Model launcher (Overview panel: start/stop model repos on their Sparks) ───
 // Registered before the static handler; every path is /api-scoped. The
 // forceBroadcast reference is a hoisted function declaration below, so the
 // launcher can push job/probe/scheduler changes to clients immediately
-// instead of waiting for the next poll tick.
-const modelLauncher = initModelLauncher({ onStatusChange: () => forceBroadcast() });
+// instead of waiting for the next poll tick. getSpark hands the launcher the
+// live SparkRegistry lookup (including the encrypted-at-rest SSH password) —
+// model scripts run on the Spark assigned to each card, over SSH, so the
+// dashboard itself is machine-agnostic.
+const modelLauncher = initModelLauncher({
+  onStatusChange: () => forceBroadcast(),
+  getSpark: (id) => registry.getSpark(id),
+});
 registerModelRoutes(app, modelLauncher, { forceBroadcast });
 
 // ─── Static files (built frontend) ───────────────────────
@@ -1697,12 +1703,12 @@ function shutdown(signal) {
     console.error("[sparkDash] failed to flush LLM daily history:", err.message);
   }
   // Finalize model jobs so polls after a --watch/reload don't 404. Does NOT
-  // touch host scripts or containers — a restart of the dashboard must never
-  // take someone's running model with it.
+  // touch the Sparks' scripts or containers — a restart of the dashboard must
+  // never take someone's running model with it.
   try {
     modelLauncher.stopTimers();
     modelLauncher.interruptAll(
-      "Interrupted — sparkDash restarted while the script was running (the script and any container it started keep running on the host)"
+      "Interrupted — sparkDash restarted while the script was running (the script and any container it started keep running on its Spark)"
     );
   } catch (err) {
     console.error("[sparkDash] failed to finalize model jobs:", err.message);

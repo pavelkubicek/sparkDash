@@ -236,6 +236,21 @@ export function ModelCard({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
+          {model.sparkId ? (
+            <span
+              className="rounded bg-border/60 px-1.5 py-0.5 font-tabular"
+              title={`scripts and probes run over SSH on ${model.sparkName} (${model.sparkId})`}
+            >
+              ⇄ {model.sparkName}
+            </span>
+          ) : (
+            <span
+              className="rounded bg-danger/15 px-1.5 py-0.5 font-tabular text-danger"
+              title="No Spark assigned — actions refuse until the card names the machine where its scripts live"
+            >
+              no spark
+            </span>
+          )}
           {model.container && (
             <span
               className={`rounded px-1.5 py-0.5 font-tabular ${
@@ -259,7 +274,7 @@ export function ModelCard({
                   ? "bg-success/15 text-success"
                   : "bg-border/60 text-muted"
               }`}
-              title={`127.0.0.1:${model.port}/v1/models: ${
+              title={`:${model.port}/v1/models on ${model.sparkName || "the dashboard host"}: ${
                 model.status.portChecked === false
                   ? model.status.portUp
                     ? "held by this model's container (not probed)"

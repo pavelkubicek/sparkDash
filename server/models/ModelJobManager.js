@@ -36,7 +36,13 @@ import {
   MODEL_JOB_HISTORY,
 } from "../config.js";
 import { atomicWrite } from "../util/atomicWrite.js";
-import { buildScriptCommand, buildChainedCommand, spawnOnHost, shQuote } from "./hostExec.js";
+import {
+  buildScriptCommand,
+  buildChainedCommand,
+  resolveRunTarget,
+  spawnOnTarget,
+  shQuote,
+} from "./hostExec.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -142,16 +148,18 @@ export class ModelJobManager {
    * @param {object} [opts]
    * @param {string} [opts.activePath]
    * @param {(modelId: string) => object|null} [opts.getModel] registry lookup
-   *   returning a validated model config (id/name/dir/scripts/args).
+   *   returning a validated model config (id/name/dir/scripts/args/sparkId).
+   * @param {(id: string) => object|null} [opts.getSpark] SparkRegistry lookup
+   *   INCLUDING ssh.password — every job runs on the model's assigned Spark,
+   *   not on the machine the dashboard happens to be hosted by.
    * @param {() => void} [opts.onChange] called after any state change so the
    *   server can force a WS broadcast.
    * @param {(jobId: string) => Promise<void>|void} [opts.afterSettle] hook run
    *   when a job finishes (the server uses it to re-probe liveness immediately).
-   * @param {(job: object) => Promise<object>} [opts.spawn] spawn override (tests)
    */
   constructor(opts = {}) {
     this.getModel = opts.getModel || (() => null);
-    this.onChange = opts.onChange || (() => {});
+    this.getSpark = opts.getSpark || (() => null);
     this.afterSettle = opts.afterSettle || (async () => {});
     this.activePath = opts.activePath || ACTIVE_PATH;
     /** @type {Map<string, object>} jobId → job */
@@ -221,7 +229,7 @@ export class ModelJobManager {
 
   // ─── Commands ───────────────────────────────────────────
   /**
-   * Queue a model script on the host.
+   * Queue a model script on the Spark assigned to the card (over SSH).
    * @param {string} modelId
    * @param {"start"|"stop"|"restart"|"logs"} action
    * @param {{ source?: string, timeoutMs?: number }} [meta]
@@ -231,6 +239,8 @@ export class ModelJobManager {
     if (!["start", "stop", "restart", "logs"].includes(action)) throw err400(`Unknown action: ${action}`);
     const model = this.getModel(modelId);
     if (!model) throw err400(`Model ${modelId} not found`);
+    const target = resolveRunTarget(model, this.getSpark);
+    if (target.kind === null) throw err400(target.error);
 
     const scriptKey = `${action}Script`;
     const script = model[scriptKey];
@@ -288,7 +298,7 @@ export class ModelJobManager {
     job.timeoutMs = timeoutMs;
     this._checkpointActive();
     this._notify();
-    this._spawnJob(job, cmd, timeoutMs);
+    this._spawnJob(job, [{ target, cmd }], timeoutMs);
 
     return { jobId: job.jobId, status: "running", stoppingJobId: null };
   }
@@ -324,7 +334,17 @@ export class ModelJobManager {
     return job;
   }
 
-  async _spawnJob(job, cmd, timeoutMs) {
+  /**
+   * Run the job's chunks sequentially. An exclusive Start that crosses Sparks
+   * is several chained commands (one per machine); the single global timeout
+   * caps the WHOLE job, so each chunk only gets the remaining budget, and a
+   * cancel kills whatever chunk is in flight (containers survive — same rule
+   * as the old single-host chain).
+   * @param {object} job
+   * @param {{ target: object, cmd: string }[]} chunks
+   * @param {number} timeoutMs 0 = run until cancelled
+   */
+  async _spawnJob(job, chunks, timeoutMs) {
     // Chunk boundaries are arbitrary (pipe reads), so split lines out here and
     // keep partial lines in the buffer to avoid interleaving a token across
     // two transcript appends.
@@ -342,11 +362,40 @@ export class ModelJobManager {
       this._notifyThrottled();
     };
 
-    const res = await spawnOnHost(cmd, {
-      onData: push,
-      timeoutMs,
-      signal: job._abort.signal,
-    });
+    const deadline =
+      Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : 0;
+    let res = {
+      code: 0,
+      signal: null,
+      timedOut: false,
+      cancelled: false,
+      spawned: true,
+      error: null,
+    };
+    for (const chunk of chunks) {
+      // Audit line: which machine executes this chunk.
+      job.transcript.append(
+        `» ${chunk.target.kind === "ssh" ? "ssh" : "host"} · ${chunk.target.label}\n`
+      );
+      if (job._abort.signal.aborted) {
+        res = { code: null, signal: null, timedOut: false, cancelled: true, spawned: true, error: null };
+        break;
+      }
+      let chunkTimeout = 0; // 0 = no cap (tail-until-cancelled, or untimed job)
+      if (deadline) {
+        chunkTimeout = deadline - Date.now();
+        if (chunkTimeout <= 0) {
+          res = { code: null, signal: null, timedOut: true, cancelled: false, spawned: true, error: null };
+          break;
+        }
+      }
+      res = await spawnOnTarget(chunk.target, chunk.cmd, {
+        onData: push,
+        timeoutMs: chunkTimeout,
+        signal: job._abort.signal,
+      });
+      if (res.cancelled || res.timedOut) break;
+    }
 
     if (partial) {
       job.transcript.append(partial);
@@ -540,7 +589,8 @@ export class ModelJobManager {
    * Start a model while another one holds the GPU: run the incumbent's stop.sh
    * first, then the target's start.sh, in ONE job so the transcript tells the
    * whole story ("Qwen's stop.sh, then GLM's start.sh") and the single-mutating
-   * slot is never released between the two steps.
+   * slot is never released between the two steps. When the two live on
+   * different Sparks the chain becomes one command per machine, run in order.
    * @param {string} targetId
    * @param {string[]} stopFirstIds
    * @param {{ source?: string }} [meta]
@@ -556,7 +606,12 @@ export class ModelJobManager {
     for (const id of stopFirstIds) {
       const m = this.getModel(id);
       if (!m?.stopScript) continue;
+      // A step that cannot be placed must fail the WHOLE start, not be
+      // skipped: silently not stopping the incumbent double-books the GPU.
+      const t = resolveRunTarget(m, this.getSpark);
+      if (t.kind === null) throw err400(t.error);
       steps.push({
+        target: t,
         dir: m.dir,
         script: m.stopScript,
         label: `stop ${m.name || id}`,
@@ -564,7 +619,10 @@ export class ModelJobManager {
         action: "stop",
       });
     }
+    const targetRun = resolveRunTarget(target, this.getSpark);
+    if (targetRun.kind === null) throw err400(targetRun.error);
     steps.push({
+      target: targetRun,
       dir: target.dir,
       script: target.startScript,
       args: Array.isArray(target.startArgs) ? target.startArgs : [],
@@ -574,8 +632,16 @@ export class ModelJobManager {
     });
 
     // One mutating job that *is* the chain; the job's model is the target.
+    // Consecutive steps sharing a Spark stay ONE chained command (the
+    // transcript tells the whole stop→start story); the chain only splits
+    // when the incumbent lives on a different machine than the target.
+    const chunks = [];
+    for (const s of steps) {
+      const last = chunks[chunks.length - 1];
+      if (last && last.target.key === s.target.key) last.steps.push(s);
+      else chunks.push({ target: s.target, steps: [s] });
+    }
     const job = this._createJob(target, "start", meta, { chained: stopFirstIds.length > 0 });
-    const cmd = buildChainedCommand(steps.map((s) => ({ dir: s.dir, script: s.script, args: s.args, label: s.label })));
     job.transcript.append(
       steps.map((s) => `$ ${s.label}: ./${s.script}${s.args?.length ? ` ${s.args.join(" ")}` : ""}   [${s.dir}]`).join("\n") + "\n"
     );
@@ -584,7 +650,14 @@ export class ModelJobManager {
     this._checkpointActive();
     this._notify();
     job.timeoutMs = MODEL_JOB_TIMEOUT_MS;
-    this._spawnJob(job, cmd, MODEL_JOB_TIMEOUT_MS);
+    this._spawnJob(
+      job,
+      chunks.map((c) => ({
+        target: c.target,
+        cmd: buildChainedCommand(c.steps.map((s) => ({ dir: s.dir, script: s.script, args: s.args, label: s.label }))),
+      })),
+      MODEL_JOB_TIMEOUT_MS
+    );
     return { jobId: job.jobId, status: "running", stoppingJobIds: stopFirstIds };
   }
 

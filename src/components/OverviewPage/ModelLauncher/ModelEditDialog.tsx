@@ -12,6 +12,8 @@ import {
 } from "../../../hooks/useModelEditDialog";
 import { addModel, deleteModel, fetchModels, updateModel } from "../../../api/modelClient";
 import type { ModelConfig } from "../../../api/modelTypes";
+import { fetchSparks } from "../../../api/client";
+import type { SparkConfig } from "../../../api/types";
 import { GearIcon, RotateIcon } from "../../ui/icons";
 
 function useEscape(onClose: () => void, enabled: boolean) {
@@ -40,6 +42,7 @@ function useBodyScrollLock(locked: boolean) {
 interface Draft {
   id: string;
   name: string;
+  sparkId: string;
   dir: string;
   description: string;
   startScript: string;
@@ -55,6 +58,7 @@ interface Draft {
 const BLANK: Draft = {
   id: "",
   name: "",
+  sparkId: "",
   dir: "",
   description: "",
   startScript: "start.sh",
@@ -71,6 +75,7 @@ function toDraft(m: ModelConfig): Draft {
   return {
     id: m.id,
     name: m.name ?? m.id,
+    sparkId: m.sparkId ?? "",
     dir: m.dir,
     description: m.description ?? "",
     startScript: m.startScript ?? "",
@@ -97,6 +102,7 @@ function localErrors(target: string, d: Draft): string[] {
     else if (RESERVED_MODEL_IDS.has(d.id)) e.push(`id "${d.id}" is reserved`);
   }
   if (!d.dir.trim()) e.push("dir is required");
+  if (!d.sparkId) e.push("choose the Spark whose machine runs this model's scripts");
   if (!SCRIPT_RE.test(d.startScript.trim())) e.push("start script must look like start.sh");
   if (!SCRIPT_RE.test(d.stopScript.trim())) e.push("stop script must look like stop.sh");
   for (const [label, v] of [
@@ -158,6 +164,23 @@ export function ModelEditDialog() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Editable target list for the "run on Spark" select. */
+  const [sparks, setSparks] = useState<SparkConfig[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetchSparks()
+      .then(({ sparks }) => {
+        if (!cancelled) setSparks(sparks);
+      })
+      .catch(() => {
+        /* empty select; the save still round-trips the server allowlist */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open || target == null) return;
@@ -204,6 +227,7 @@ export function ModelEditDialog() {
     id: draft.id.trim(),
     name: draft.name.trim() || draft.id.trim(),
     dir: draft.dir.trim(),
+    sparkId: draft.sparkId || null,
     description: orNull(draft.description),
     startScript: draft.startScript.trim(),
     stopScript: draft.stopScript.trim(),
@@ -261,8 +285,9 @@ export function ModelEditDialog() {
             <span>{target === "new" ? "Add model" : `Edit ${target}`}</span>
           </div>
           <p className="mt-1 text-xs font-normal text-muted">
-            Scripts run on the host inside the repo directory. Only names matching the allowlist are
-            accepted, so a config value can never become shell syntax.
+            Scripts run inside the repo directory on the selected Spark, over SSH
+            (password auth today, keys after the migration). Only allowlisted names
+            are accepted, so a config value can never become shell syntax.
           </p>
         </header>
 
@@ -292,8 +317,25 @@ export function ModelEditDialog() {
                   />
                 </Field>
               </div>
+              <Field
+                label="run on Spark"
+                hint="Where the repo lives: start/stop/logs and liveness probes all execute there."
+              >
+                <select
+                  value={draft.sparkId}
+                  onChange={(e) => patch({ sparkId: e.target.value })}
+                  className={INPUT}
+                >
+                  <option value="">— choose a Spark —</option>
+                  {sparks.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.ssh?.host || s.lanIp || "no host"})
+                    </option>
+                  ))}
+                </select>
+              </Field>
 
-              <Field label="Repo directory" hint="Absolute path, or relative to the configured repos base.">
+              <Field label="Repo directory" hint="Path on the selected Spark — absolute, or relative to the configured repos base.">
                 <input
                   type="text"
                   value={draft.dir}

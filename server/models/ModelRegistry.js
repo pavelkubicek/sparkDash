@@ -4,13 +4,18 @@
  *
  * Cloned from SparkRegistry's CRUD template (atomicWrite + onChange) but the
  * security surface is different: these configs name directories and scripts
- * that the dashboard executes on the HOST via nsenter. Everything that reaches
- * disk is therefore passed through a strict allowlist here and nowhere else:
+ * that the dashboard executes on the model's assigned Spark (over SSH; nsenter
+ * only for a local Spark without SSH). Everything that reaches disk is
+ * therefore passed through a strict allowlist here and nowhere else:
  *
  *  - `dir`        repo directory, resolved against MODEL_REPOS_BASE; the
  *                 absolute path must stay inside the base (no `..`, no
  *                 absolute escapes, no symlinked-out — the base itself is
  *                 operator-set env, only traversal is defended).
+ *  - `sparkId`    the Spark whose machine runs the scripts: same id charset
+ *                 as spark ids; existence is NOT checked here (the registry
+ *                 stays decoupled from SparkRegistry) — job start resolves it
+ *                 and fails with a clear error when the Spark is missing.
  *  - scripts      bare filenames matching /^[A-Za-z0-9._-]{1,64}\.sh$/; they
  *                 are invoked as `./<name>` inside the repo (cwd), never
  *                 interpolated into a shell pipeline.
@@ -183,6 +188,19 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
     );
   }
 
+  // The Spark where this model's scripts live and run (over SSH). Optional at
+  // rest — a card can be created before the fleet is wired — but a job (and a
+  // probe pass) refuses to run without it: resolveRunTarget names the missing
+  // assignment in the error the operator sees.
+  let sparkId = null;
+  if (config.sparkId != null && config.sparkId !== "") {
+    if (typeof config.sparkId === "string" && MODEL_ID_RE.test(config.sparkId.trim())) {
+      sparkId = config.sparkId.trim();
+    } else {
+      errors.push("sparkId must be a spark id matching [A-Za-z0-9._-]{1,64}");
+    }
+  }
+
   if (errors.length) throw new Error(errors.join("; "));
 
   const description =
@@ -194,6 +212,7 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
     id: config.id,
     name,
     dir,
+    sparkId,
     startScript: scripts.startScript,
     stopScript: scripts.stopScript,
     restartScript: scripts.restartScript,

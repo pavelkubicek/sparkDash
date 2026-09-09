@@ -8,33 +8,48 @@
  * Two independent signals, OR'd together:
  *   1. `docker ps --format '{{.Names}}' | grep -qx <name>` — the container the
  *      repo's start.sh creates. Cheap and definitive when configured.
- *   2. `GET http://127.0.0.1:<port>/v1/models` — answers for a model whose
+ *   2. `GET http://<probe host>:<port>/v1/models` — answers for a model whose
  *      server is ready to serve, even if the container is named differently
- *      (or runs on the worker only). Loopback because host network_mode makes
- *      the container's own binds reachable here and start.sh defaults to
- *      --host 127.0.0.1.
+ *      (or runs on the worker only).
  *
- * The docker check is a single host exec for *all* models per tick (one
- * `docker ps`, matched locally), not one exec per model. Port checks run in
- * parallel with a short timeout.
+ * Both signals are TARGET-AWARE: a model's container lives on the Spark
+ * assigned to its card, and its port only answers where it is bound. One
+ * `docker ps` per distinct target (a local exec, or a single SSH round-trip
+ * per Spark — never one exec per model), and ports are asked against the
+ * Spark's probe host (`llmProbeHost`, the same rule the LLM panel uses). A
+ * model whose target cannot be resolved (no Spark assigned, Spark deleted)
+ * gets an error status and produces no traffic at all.
+ *
+ * Port attribution only contends WITHIN one machine: two models on different
+ * Sparks may share port 8000 and both be up — each owns its own :8000 verdict.
  */
-import { execOnHost } from "./hostExec.js";
+import { execOnTarget } from "./hostExec.js";
+import { llmProbeHost } from "../collectors/llmHost.js";
 import { LLM_PROBE_TIMEOUT_MS } from "../config.js";
 
-/** Escape a container name for use as a fixed-string grep pattern. */
-function grepFixed(name) {
-  // grep -F takes the pattern literally; single-quote it for sh.
-  return `'${String(name).replace(/'/g, `'\\''`)}'`;
+/** The implicit target when a caller has no target resolution (legacy/dev). */
+export const LOCAL_TARGET = { kind: "local", key: "local", label: "local host" };
+
+/** (target key, port) pair key — ports contend per machine, not globally. */
+function pk(key, port) {
+  return `${key}:${port}`;
+}
+
+/** Split a pk back into [key, port] (keys themselves contain ':'). */
+function upk(portKey) {
+  const i = portKey.lastIndexOf(":");
+  return [portKey.slice(0, i), portKey.slice(i + 1)];
 }
 
 /**
- * List running container names on the host with one command.
- * Returns null on failure (dockerd unreachable / nsenter missing) so callers
- * can distinguish "not running" from "unknown".
+ * List running container names on one target with one command.
+ * Returns null on failure (dockerd unreachable / SSH down / nsenter missing)
+ * so callers can distinguish "not running" from "unknown".
+ * @param {ReturnType<import("./hostExec.js").resolveRunTarget>} [target]
  * @returns {Promise<Set<string>|null>}
  */
-export async function listRunningContainers() {
-  const res = await execOnHost("docker ps --format '{{.Names}}' 2>/dev/null", {
+export async function listRunningContainers(target = LOCAL_TARGET) {
+  const res = await execOnTarget(target, "docker ps --format '{{.Names}}' 2>/dev/null", {
     timeoutMs: 6000,
   });
   if (res.error || (res.code !== 0 && !res.stdout)) return null;
@@ -47,11 +62,25 @@ export async function listRunningContainers() {
 }
 
 /**
+ * The HTTP host that can reach a port ON A TARGET: loopback for the local
+ * host, the Spark's LAN IP for an SSH target (loopback binds are then only
+ * reachable from that machine — same accepted trade-off as the LLM panel).
+ * @param {ReturnType<import("./hostExec.js").resolveRunTarget>} target
+ */
+export function probeHostFor(target) {
+  if (!target || target.kind !== "ssh") return "127.0.0.1";
+  return llmProbeHost(target.spark) || target.spark?.ssh?.host || "127.0.0.1";
+}
+
+/**
  * Probe one candidate port for an OpenAI-compatible /v1/models.
+ * @param {number|string} port
+ * @param {number} [timeoutMs]
+ * @param {string} [host] probe host — loopback unless the model lives remote
  * @returns {Promise<{ ok: boolean, modelId: string|null, status: number|null, error: string|null }>}
  */
-export async function probeModelPort(port, timeoutMs = LLM_PROBE_TIMEOUT_MS) {
-  const url = `http://127.0.0.1:${port}/v1/models`;
+export async function probeModelPort(port, timeoutMs = LLM_PROBE_TIMEOUT_MS, host = "127.0.0.1") {
+  const url = `http://${host}:${port}/v1/models`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     const text = await res.text().catch(() => "");
@@ -81,29 +110,58 @@ export async function probeModelPort(port, timeoutMs = LLM_PROBE_TIMEOUT_MS) {
  * answers on :8000" does NOT prove *this* model is up. When a container for
  * that port is confirmed up, that container owns the port and the other
  * models probing it are told the port is held elsewhere. Only when no
- * container claims the port does a bare port answer prove liveness.
+ * container claims the port does a bare port answer prove liveness. All of
+ * this is scoped to ONE machine: the same port on a different Spark is a
+ * different question with a different answer.
  *
  * @param {object[]} models registry configs
- * @param {{ containers: Set<string>|null, ports: Record<string, {ok:boolean, modelId:string|null, error:string|null}>, checkedAt?: number }} result
+ * @param {{ containers: Map<string, Set<string>|null>, ports: Record<string, {ok:boolean, modelId:string|null, error:string|null}>, keys: Record<string, string|null>, reasons?: Record<string, string>, checkedAt?: number }} result
+ *   `ports` is keyed by `${targetKey}:${port}` (see probeModels)
  * @returns {Record<string, { running: boolean, containerUp: boolean, portUp: boolean,
- *   modelId: string|null, checkedAt: number, error: string|null }>}
+ *   portChecked: boolean, modelId: string|null, checkedAt: number, error: string|null }>}
  */
 export function buildModelStatus(models, result) {
   const out = {};
-  const containers = result?.containers;
+  const containers = result?.containers; // Map<targetKey, Set|null>
   const ports = result?.ports || {};
-  // port → model that owns it via a confirmed-up container.
-  const portOwner = {};
+  const keys = result?.keys || {};
+  const reasons = result?.reasons || {};
+  // A result without `keys` is the legacy single-host shape: everything local.
+  const keyOf = (m) => (result?.keys ? (keys[m.id] ?? null) : "local");
+
+  // (key,port) → model that owns it via a confirmed-up container.
+  const portOwner = new Map();
   if (containers) {
     for (const m of models) {
       if (m.port == null || !m.container) continue;
-      if (containers.has(m.container)) portOwner[String(m.port)] = m;
+      const key = keyOf(m);
+      if (key == null) continue;
+      const set = containers.get(key);
+      if (set && set.has(m.container)) portOwner.set(pk(key, m.port), m);
     }
   }
+
   for (const m of models) {
-    const containerUp = containers ? Boolean(m.container && containers.has(m.container)) : null;
-    const portRes = m.port != null ? ports[String(m.port)] || null : null;
-    const owner = m.port != null ? portOwner[String(m.port)] : null;
+    const key = keyOf(m);
+    if (key == null) {
+      // Unresolvable target: no traffic was sent, nothing is known except
+      // that the operator must fix the assignment. Never read as "down".
+      out[m.id] = {
+        running: false,
+        containerUp: null,
+        portUp: null,
+        portChecked: false,
+        modelId: null,
+        checkedAt: result?.checkedAt ?? null,
+        error: reasons[m.id] || "No Spark assigned",
+      };
+      continue;
+    }
+    const set = containers ? containers.get(key) : null;
+    const containerUp = set ? Boolean(m.container && set.has(m.container)) : null;
+    const portKey = m.port != null ? pk(key, m.port) : null;
+    const portRes = portKey ? ports[portKey] || null : null;
+    const owner = portKey ? portOwner.get(portKey) || null : null;
     const heldByOther =
       portRes?.ok && owner && owner.id !== m.id ? owner.name || owner.id : null;
 
@@ -119,17 +177,17 @@ export function buildModelStatus(models, result) {
     if (portRes) {
       portUp = portRes.ok ? !heldByOther : false;
       modelId = heldByOther ? null : portRes.modelId ?? null;
-    } else if (owner && containers) {
+    } else if (owner && set) {
       portChecked = false; // docker ps settled it, no HTTP needed
       portUp = owner.id === m.id;
     } else if (m.port != null) {
       portChecked = false; // docker failed and this port was not asked
     }
-
     // Unknown container status (docker check failed) must not read as down.
     const running = Boolean(containerUp === true || (portChecked && portUp === true));
     const errors = [];
-    if (containers === null && m.container) errors.push("docker ps unavailable");
+    if (!set && m.container)
+      errors.push(key === "local" ? "docker ps unavailable" : `docker ps unavailable on ${key}`);
     if (heldByOther) errors.push(`:${m.port} answering but held by ${heldByOther}`);
     else if (!portChecked && owner && owner.id !== m.id)
       errors.push(`:${m.port} held by ${owner.name || owner.id}`);
@@ -149,82 +207,139 @@ export function buildModelStatus(models, result) {
 }
 
 /**
- * Which ports still need an HTTP probe, given the running-container list.
+ * Which (target,port) pairs still need an HTTP probe, given the
+ * running-container lists.
  *
- * Only ONE model can run at a time (that is what this panel exists to
- * guarantee), so the container list already settles most questions:
+ * Only ONE model can run at a time per machine (that is what this panel exists
+ * to guarantee), so the container list already settles most questions — on
+ * each machine independently:
  *
- *  - Port P is *owned* by the model whose container is confirmed up on P. That
- *    model's liveness is proven by the container, and every other model on P is
- *    known not to be the one answering — a GET for either would only re-derive
- *    what docker already told us. Skipped.
+ *  - Port P is *owned* by the model whose container is confirmed up on P of
+ *    that target. That model's liveness is proven by the container, and every
+ *    other model probing P there is known not to be the one answering — a GET
+ *    for either would only re-derive what docker already told us. Skipped.
  *  - A port nobody owns is probed: either it is refused (cheap) or something
  *    unscheduled answers it, which is news worth having.
- *  - `forcePorts` (a start/restart job in flight, or the manual Refresh button)
- *    are always probed — readiness detection has to watch the port flip up
- *    while the container exists but is still loading weights.
+ *  - `forcePorts` (a start/restart job in flight, or the manual Refresh
+ *    button) are always probed — readiness detection has to watch the port
+ *    flip up while the container exists but is still loading weights.
  *
  * @param {object[]} models
- * @param {Set<string>|null} containers running container names, or null when unknown
- * @param {Set<string>} [forcePorts] port keys that must be probed regardless
- * @returns {Set<string>} port keys to probe
+ * @param {Map<string, Set<string>|null>} containers targetKey → running names (or null when unknown)
+ * @param {Set<string>} [forcePorts] port numbers (as strings) that must be probed regardless
+ * @param {(model: object) => string|null} [keyOf] model → target key, null = unresolvable
+ * @returns {Set<string>} `${targetKey}:${port}` keys to probe
  */
-export function portsNeedingProbe(models, containers, forcePorts = new Set()) {
+export function portsNeedingProbe(models, containers, forcePorts = new Set(), keyOf = () => "local") {
   const wanted = new Set();
   const owners = new Set();
   if (containers) {
     for (const m of models) {
-      if (m.port != null && m.container && containers.has(m.container)) owners.add(String(m.port));
+      const key = keyOf(m);
+      if (key == null || m.port == null || !m.container) continue;
+      const set = containers.get(key);
+      if (set && set.has(m.container)) owners.add(pk(key, m.port));
     }
   }
   for (const m of models) {
+    const key = keyOf(m);
+    if (key == null) continue; // unassigned: no traffic, error status instead
     if (!Number.isInteger(m.port) || m.port < 1 || m.port > 65535) continue;
-    const key = String(m.port);
-    if (forcePorts.has(key)) wanted.add(key);
-    else if (owners.has(key)) continue; // settled by docker ps
-    else wanted.add(key);
+    const portKey = pk(key, m.port);
+    if (forcePorts.has(String(m.port))) wanted.add(portKey);
+    else if (owners.has(portKey)) continue; // settled by docker ps
+    else wanted.add(portKey);
   }
   return wanted;
 }
 
 /**
- * Poll every model once. Never throws; on infrastructure failure it reports
- * null containers so the caller can keep the previous status.
+ * Poll every model once. Never throws; on infrastructure failure a target's
+ * container list reports null so the caller can keep the previous status.
  *
- * The container list is fetched first because it decides how much HTTP work is
+ * Container lists are fetched first because they decide how much HTTP work is
  * left (see portsNeedingProbe): with one model running that is normally a
  * single `docker ps` and ZERO port probes.
  *
  * @param {object[]} models
- * @param {{ portTimeoutMs?: number, fetchPort?: typeof probeModelPort, listContainers?: typeof listRunningContainers, forcePorts?: Iterable<string|number> }} [opts]
+ * @param {{ portTimeoutMs?: number, fetchPort?: typeof probeModelPort, listContainers?: typeof listRunningContainers, forcePorts?: Iterable<string|number>, targetFor?: (model: object) => object }} [opts]
+ *   `targetFor` maps a model to its run target (hostExec.resolveRunTarget
+ *   shape); the default probes everything on the local host.
  */
 export async function probeModels(models, opts = {}) {
+  const targetFor = opts.targetFor || (() => LOCAL_TARGET);
   const listContainers = opts.listContainers || listRunningContainers;
   const fetchPort = opts.fetchPort || probeModelPort;
   const portTimeoutMs = opts.portTimeoutMs || LLM_PROBE_TIMEOUT_MS;
   const forcePorts = new Set(Array.from(opts.forcePorts || []).map(String));
 
-  const containers = await Promise.resolve()
-    .then(() => listContainers())
-    .catch(() => null);
+  // Resolve every model's target exactly once; ports and containers share it.
+  const keys = {};
+  const reasons = {};
+  /** @type {Map<string, object>} targetKey → target */
+  const byTarget = new Map();
+  for (const m of models) {
+    let t;
+    try {
+      t = targetFor(m);
+    } catch (err) {
+      t = { kind: null, error: err?.message || String(err) };
+    }
+    if (!t || t.kind === null) {
+      keys[m.id] = null;
+      reasons[m.id] = t?.error || "No run target";
+      continue;
+    }
+    keys[m.id] = t.key || LOCAL_TARGET.key;
+    if (!byTarget.has(keys[m.id])) byTarget.set(keys[m.id], t);
+  }
+  const keyOf = (m) => keys[m.id] ?? null;
 
-  const wantedPorts = [...portsNeedingProbe(models, containers, forcePorts)];
+  const containers = new Map(
+    await Promise.all(
+      [...byTarget.entries()].map(async ([key, target]) => {
+        const set = await Promise.resolve()
+          .then(() => listContainers(target))
+          .catch(() => null);
+        return [key, set ?? null];
+      })
+    )
+  );
+
+  const wantedPorts = [...portsNeedingProbe(models, containers, forcePorts, keyOf)];
   const portResults = await Promise.all(
-    wantedPorts.map(async (p) => {
-      const r = await fetchPort(p, portTimeoutMs).catch((err) => ({
-        ok: false,
-        modelId: null,
-        status: null,
-        error: err?.message || String(err),
-      }));
-      return [String(p), r];
+    wantedPorts.map(async (portKey) => {
+      const [key, port] = upk(portKey);
+      const r = await fetchPort(port, portTimeoutMs, probeHostFor(byTarget.get(key))).catch(
+        (err) => ({
+          ok: false,
+          modelId: null,
+          status: null,
+          error: err?.message || String(err),
+        })
+      );
+      return [portKey, r];
     })
   );
 
   return {
     containers,
     ports: Object.fromEntries(portResults),
+    keys,
+    reasons,
     // Caller replaces this before diffing; kept out of the WS payload.
     checkedAt: Date.now(),
   };
+}
+
+/**
+ * Did at least one target answer `docker ps` this tick? ModelLauncher uses
+ * this (instead of the old single `containers === null` check) to decide
+ * whether the probe pass as a whole was informative.
+ * @param {Awaited<ReturnType<typeof probeModels>>} result
+ */
+export function containersKnown(result) {
+  if (!result?.containers) return false;
+  for (const set of result.containers.values()) if (set !== null) return true;
+  return false;
 }
