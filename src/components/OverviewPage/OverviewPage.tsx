@@ -300,7 +300,7 @@ function SparkCard({
             )}
             {!gpuMonitored && (
               <MetricBar
-                label="CPU"
+                label="Usage - CPU"
                 value={cpuUsage}
                 max={100}
                 color={cpuUsage >= 90 ? "bg-danger" : "bg-bar-usage"}
