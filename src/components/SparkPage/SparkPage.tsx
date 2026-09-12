@@ -231,13 +231,15 @@ export function SparkPage({ spark, temperatureUnit, onEdit }: SparkPageProps) {
         {resourcesOpen && (
           <>
             {spark.gpuMonitoring === false ? (
-              /* GPU-less machine: RAM (+ CPU temp) → Network → Storage [→ Tailnet]; no GPU panel */
+              /* GPU-less machine: CPU usage (+ temp) & RAM → Network → Storage [→ Tailnet]; no GPU panel */
               <>
-                <RamPanel
-                  ram={metrics.ram}
+                <CpuPanel
                   cpu={metrics.cpu}
+                  ram={metrics.ram}
+                  unifiedMemory={metrics.unifiedMemory}
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
+                  tempLabel="CPU temp"
                   className="md:col-span-2"
                 />
                 <NetworkPanel

@@ -9,6 +9,10 @@ interface CpuPanelProps {
   ram: RamMetrics | null;
   unifiedMemory: UnifiedMemoryMetrics | null;
   sparkId: string;
+  /** Temperature unit conversion; default celsius (Spark pages, historical behavior). */
+  temperatureUnit?: "celsius" | "fahrenheit";
+  /** Temp row label — GB10 machines default to "SoC temp"; gpu-less hosts pass "CPU temp". */
+  tempLabel?: string;
   className?: string;
 }
 
@@ -23,7 +27,15 @@ function formatMb(mb: number): string {
  * Each box carries its own header (icon + label); the container has no heading.
  * Lives below the stock Resources grid (GPU | Storage + Network).
  */
-export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPanelProps) {
+export function CpuPanel({
+  cpu,
+  ram,
+  unifiedMemory,
+  sparkId,
+  temperatureUnit = "celsius",
+  tempLabel,
+  className,
+}: CpuPanelProps) {
   const cpuHistory = useMetricsHistoryTail(sparkId, "cpu.usage");
 
   const usage = cpu?.usage ?? 0;
@@ -68,10 +80,21 @@ export function CpuPanel({ cpu, ram, unifiedMemory, sparkId, className }: CpuPan
           </div>
           {temperature > 0 && (
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted" title="Board/SoC ACPI zone (no coretemp on GB10)">
-                SoC temp
+              <span
+                className="text-muted"
+                title={
+                  tempLabel
+                    ? "Package/CPU sensor (coretemp / k10temp)"
+                    : "Board/SoC ACPI zone (no coretemp on GB10)"
+                }
+              >
+                {tempLabel ?? "SoC temp"}
               </span>
-              <span className="font-tabular text-[13px] text-text">{temperature}°C</span>
+              <span className="font-tabular text-[13px] text-text">
+                {temperatureUnit === "fahrenheit"
+                  ? `${Math.round((temperature * 9) / 5 + 32)}°F`
+                  : `${temperature}°C`}
+              </span>
             </div>
           )}
         </div>

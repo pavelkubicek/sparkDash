@@ -108,6 +108,7 @@ function SparkCard({
   const gpuMonitored = spark.gpuMonitoring !== false;
   const online = spark.online;
 
+  const cpuUsage = spark.metrics.cpu?.usage ?? 0;
   const usage = gpu?.usage ?? 0;
   const tempRaw = gpu?.temperature ?? 0;
   const displayTemp = temperatureUnit === "fahrenheit" ? celsiusToFahrenheit(tempRaw) : tempRaw;
@@ -295,6 +296,15 @@ function SparkCard({
                 max={100}
                 color={usageBarColor}
                 caption={`${usage}%`}
+              />
+            )}
+            {!gpuMonitored && (
+              <MetricBar
+                label="CPU"
+                value={cpuUsage}
+                max={100}
+                color={cpuUsage >= 90 ? "bg-danger" : "bg-bar-usage"}
+                caption={`${cpuUsage}%`}
               />
             )}
           </div>
