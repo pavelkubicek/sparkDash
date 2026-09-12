@@ -67,6 +67,11 @@ export interface SparkConfig {
    */
   llmMonitoring?: boolean;
   /**
+   * Opt-out: machines without an NVIDIA GPU set this to false — GPU/VRAM/Usage
+   * metrics are not collected and the GPU sections are hidden (default true).
+   */
+  gpuMonitoring?: boolean;
+  /**
    * Probe local ComfyUI and show the ComfyUI card (default false; all roles).
    */
   comfyMonitoring?: boolean;
@@ -488,6 +493,8 @@ export interface SparkSnapshot {
   workerHeadId?: string | null;
   /** Standalone: whether LLM is probed (head always true, worker always false) */
   llmMonitoring?: boolean;
+  /** Standalone/LLM flag sibling: false hides GPU/VRAM/Usage for GPU-less machines */
+  gpuMonitoring?: boolean;
   /** LLM server port (first port, for backward compat) */
   llmPort: number;
   /** All LLM server ports configured for this Spark */

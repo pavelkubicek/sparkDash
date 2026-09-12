@@ -105,6 +105,7 @@ function SparkCard({
 }) {
   const gpu = spark.metrics.gpu;
   const um = spark.metrics.unifiedMemory;
+  const gpuMonitored = spark.gpuMonitoring !== false;
   const online = spark.online;
 
   const usage = gpu?.usage ?? 0;
@@ -211,7 +212,7 @@ function SparkCard({
         </span>
       </div>
 
-      {!online || !gpu ? (
+  {!online || (!gpu && gpuMonitored) ? (
         <div className="flex h-[120px] items-center justify-center">
           <span className="text-[13px] text-muted">
             {online ? "Waiting for metrics…" : "Host unreachable"}
@@ -239,24 +240,28 @@ function SparkCard({
                 />
               );
             })()}
-            <MetricBar
-              label="VRAM"
-              value={vramUsed}
-              max={vramTotal}
-              color={vramBarColor}
-              caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
-            />
-            <MetricBar
-              label={
-                spark.kind === "host" || (spark.metrics.cpu?.temperature ?? 0) > 0
-                  ? "GPU"
-                  : "Temperature"
-              }
-              value={displayTemp}
-              max={temperatureUnit === "fahrenheit" ? 212 : 100}
-              color={tempBarColor}
-              caption={tempLabel}
-            />
+            {gpuMonitored && (
+              <MetricBar
+                label="VRAM"
+                value={vramUsed}
+                max={vramTotal}
+                color={vramBarColor}
+                caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
+              />
+            )}
+            {gpuMonitored && (
+              <MetricBar
+                label={
+                  spark.kind === "host" || (spark.metrics.cpu?.temperature ?? 0) > 0
+                    ? "GPU"
+                    : "Temperature"
+                }
+                value={displayTemp}
+                max={temperatureUnit === "fahrenheit" ? 212 : 100}
+                color={tempBarColor}
+                caption={tempLabel}
+              />
+            )}
             {(spark.metrics.cpu?.temperature ?? 0) > 0 && (() => {
               const cpuRaw = spark.metrics.cpu?.temperature ?? 0;
               const cpuDisplay =
@@ -283,21 +288,25 @@ function SparkCard({
                 Thermal throttle
               </div>
             )}
-            <MetricBar
-              label="Usage"
-              value={usage}
-              max={100}
-              color={usageBarColor}
-              caption={`${usage}%`}
-            />
+            {gpuMonitored && (
+              <MetricBar
+                label="Usage"
+                value={usage}
+                max={100}
+                color={usageBarColor}
+                caption={`${usage}%`}
+              />
+            )}
           </div>
 
           {/* Secondary stats */}
           <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-border pt-3.5">
-            <MiniStat
-              label="GPU Power"
-              value={`${gpu?.power?.draw ?? 0}W / ${gpu?.power?.limit ?? 0}W`}
-            />
+            {gpuMonitored && (
+              <MiniStat
+                label="GPU Power"
+                value={`${gpu?.power?.draw ?? 0}W / ${gpu?.power?.limit ?? 0}W`}
+              />
+            )}
             <MiniStat
               label="CPU Power"
               value={`${spark.metrics.cpu?.draw ?? 0}W / ${spark.metrics.cpu?.tdp ?? 0}W`}

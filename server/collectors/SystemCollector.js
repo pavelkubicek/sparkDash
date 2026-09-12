@@ -1458,7 +1458,7 @@ export class SystemCollector {
         : null;
 
       return {
-        device: "Linux GPU host",
+        device: gpuChip ? "Linux GPU host" : "Linux server",
         cpuModel,
         cpuCores,
         totalMemoryGB,

@@ -230,7 +230,33 @@ export function SparkPage({ spark, temperatureUnit, onEdit }: SparkPageProps) {
         />
         {resourcesOpen && (
           <>
-            {spark.kind === "host" ? (
+            {spark.gpuMonitoring === false ? (
+              /* GPU-less machine: RAM (+ CPU temp) → Network → Storage [→ Tailnet]; no GPU panel */
+              <>
+                <RamPanel
+                  ram={metrics.ram}
+                  cpu={metrics.cpu}
+                  sparkId={spark.id}
+                  temperatureUnit={temperatureUnit}
+                  className="md:col-span-2"
+                />
+                <NetworkPanel
+                  network={metrics.network}
+                  sparkId={spark.id}
+                  disabledInterfaces={disabledInterfaces}
+                  onDisabledChange={setDisabledInterfaces}
+                />
+                <StoragePanel
+                  storage={metrics.storage}
+                  sparkId={spark.id}
+                  disabledDevices={disabledDevices}
+                  onDisabledChange={setDisabledDevices}
+                  storagePollDisabled={storagePollDisabled}
+                  onStoragePollModeChange={handleStoragePollModeChange}
+                />
+                {tailscaleOn && <TailscalePanel tailscale={metrics.tailscale ?? null} />}
+              </>
+            ) : spark.kind === "host" ? (
               /* Hosts: GPU spans the full left column; RAM → Network → Storage [→ Tailnet] stack in the right column */
               <>
                 <GpuPanel

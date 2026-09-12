@@ -30,6 +30,7 @@ function placeholderSnapshot(
     workerLabel?: string | null;
     workerHeadId?: string | null;
     llmMonitoring?: boolean;
+    gpuMonitoring?: boolean;
     comfyMonitoring?: boolean;
     comfyPort?: number;
     tailscaleMonitoring?: boolean;
@@ -65,6 +66,7 @@ function placeholderSnapshot(
         : role === "head"
           ? true
           : roleFields?.llmMonitoring !== false,
+    gpuMonitoring: roleFields?.gpuMonitoring !== false,
     comfyMonitoring: Boolean(roleFields?.comfyMonitoring),
     comfyPort: roleFields?.comfyPort ?? 8188,
     tailscaleMonitoring: Boolean(roleFields?.tailscaleMonitoring),
@@ -185,6 +187,7 @@ function DashboardApp() {
               workerLabel: c.workerLabel ?? existing.workerLabel,
               workerHeadId: c.workerHeadId ?? existing.workerHeadId,
               llmMonitoring: c.llmMonitoring ?? existing.llmMonitoring,
+              gpuMonitoring: c.gpuMonitoring ?? existing.gpuMonitoring,
               comfyMonitoring: c.comfyMonitoring ?? existing.comfyMonitoring,
               comfyPort: c.comfyPort ?? existing.comfyPort,
               tailscaleMonitoring: c.tailscaleMonitoring ?? existing.tailscaleMonitoring,
@@ -207,6 +210,7 @@ function DashboardApp() {
               workerLabel: c.workerLabel,
               workerHeadId: c.workerHeadId,
               llmMonitoring: c.llmMonitoring,
+              gpuMonitoring: c.gpuMonitoring,
               comfyMonitoring: c.comfyMonitoring,
               comfyPort: c.comfyPort,
               tailscaleMonitoring: c.tailscaleMonitoring,

@@ -282,6 +282,16 @@ export class SparkMonitor {
     return Boolean(spark?.tailscaleMonitoring);
   }
 
+  /**
+   * Machines without an NVIDIA GPU (plain Linux servers) set gpuMonitoring
+   * to false in the config: no nvidia-smi polling, GPU metrics read null in
+   * the snapshot, and the UI hides the GPU / VRAM / Usage sections (default true).
+   * @param {object} [spark]
+   */
+  _gpuMonitoringEnabled(spark = this.spark) {
+    return spark?.gpuMonitoring !== false;
+  }
+
   /** Start or clear the tailnet poll timer based on monitoring flag. */
   _restartTailscalePollInterval() {
     if (this._tailscaleIntervalId != null) {
@@ -451,6 +461,7 @@ export class SparkMonitor {
       workerLabel: this.spark.workerLabel || null,
       workerHeadId: this.spark.workerHeadId || null,
       llmMonitoring: this._llmMonitoringEnabled(),
+      gpuMonitoring: this._gpuMonitoringEnabled(),
       llmPort: ports[0] ?? LLM_PORT,
       llmPorts: ports,
       llmApiKeyPorts: Array.isArray(this.spark.llmApiKeyPorts)
@@ -471,7 +482,7 @@ export class SparkMonitor {
         // measured values are unchanged. The frontend does not consume a
         // metrics timestamp; the WS receive time can serve if one is ever
         // needed.
-        gpu: this._metrics.gpu,
+        gpu: this._gpuMonitoringEnabled() ? this._metrics.gpu : null,
         cpu: this._metrics.cpu,
         ram: this._metrics.ram,
         storage: this._metrics.storage,
@@ -561,7 +572,7 @@ export class SparkMonitor {
     if (domain === "llm" && !this._llmMonitoringEnabled()) return;
     if (domain === "comfy" && !this._comfyMonitoringEnabled()) return;
     if (domain === "hermes" && !this._hermesMonitoringEnabled()) return;
-    if (domain === "tailscale" && !this._tailscaleMonitoringEnabled()) return;
+    if (domain === "gpu" && !this._gpuMonitoringEnabled()) return;
     this._inflight[domain] = true;
     try {
       let result;
@@ -807,7 +818,7 @@ export class SparkMonitor {
   _staticHardwareSummary(spark) {
     if (spark?.kind === "host") {
       return {
-        device: "Linux GPU host",
+        device: spark?.gpuMonitoring === false ? "Linux server" : "Linux GPU host",
         cpuModel: null,
         cpuCores: null,
         totalMemoryGB: null,
