@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type { SparkSnapshot, WsSnapshot } from "../api/types";
 import type { ModelsSnapshot } from "../api/modelTypes";
 import { ingestSnapshots } from "./metricsStore";
+import { getVisibleSparkIds, subscribeSparkVisibility } from "./sparkVisibility";
 import { OVERVIEW_ID } from "../constants";
 
 const WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
@@ -23,6 +24,28 @@ export function useSnapshot() {
   /** Serialized last models block — guards against re-render churn. */
   const modelsRef = useRef<string>("");
 
+  /** Serialized last reported visibility ids — skips redundant WS sends. */
+  const lastVisibleKey = useRef<string | null>(null);
+
+  /**
+   * Report which sparks' graphs are actually in view; the server pauses
+   * polling for everything else (see hooks/sparkVisibility). Sent on every
+   * change and again after each (re)connect.
+   */
+  const sendVisibility = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const ids = getVisibleSparkIds();
+    const key = [...ids].sort().join("\0");
+    if (key === lastVisibleKey.current) return;
+    lastVisibleKey.current = key;
+    try {
+      ws.send(JSON.stringify({ type: "visibility", sparks: ids }));
+    } catch {
+      /* socket died mid-send — reconnect re-sends via onopen */
+    }
+  }, []);
+
   // ─── Connect ─────────────────────────────────────────────
   const connect = useCallback(() => {
     if (!shouldReconnect.current) return;
@@ -37,6 +60,10 @@ export function useSnapshot() {
     ws.onopen = () => {
       setConnected(true);
       console.log("[ws] connected");
+      // New socket resets server-side state to "watching everything";
+      // force a fresh report of the real visible set.
+      lastVisibleKey.current = null;
+      sendVisibility();
     };
 
     ws.onmessage = (ev) => {
@@ -88,6 +115,10 @@ export function useSnapshot() {
       wsRef.current = null;
     };
   }, [connect]);
+
+  // Keep the server's poll set in sync with what is on screen. The reporter
+  // no-ops while the socket is down; onopen re-sends after (re)connect.
+  useEffect(() => subscribeSparkVisibility(sendVisibility), [sendVisibility]);
 
   // ─── Derived state ──────────────────────────────────────
   const activeSpark = sparks.find((s) => s.id === activeId) || null;

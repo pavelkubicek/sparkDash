@@ -13,6 +13,7 @@ import { TailscalePanel } from "./TailscalePanel";
 import { LlmPanel } from "./LlmPanel";
 import { ComfyPanel } from "./ComfyPanel";
 import { ChevronDownIcon } from "../ui/icons";
+import { useSparkPinned } from "../../hooks/sparkVisibility";
 
 interface SparkPageProps {
   spark: SparkSnapshot;
@@ -79,6 +80,8 @@ function SectionHeading({
 
 export function SparkPage({ spark, temperatureUnit, onEdit }: SparkPageProps) {
   const { metrics } = spark;
+  // Every panel on this page renders this spark's data — keep it polling.
+  useSparkPinned(spark.id);
   const [disabledDevices, setDisabledDevices] = useState<string[]>(spark.disabledDevices || []);
   const [disabledInterfaces, setDisabledInterfaces] = useState<string[]>(
     spark.disabledInterfaces || []

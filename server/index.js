@@ -116,10 +116,15 @@ function startMonitor(spark) {
   });
   monitors.set(spark.id, monitor);
   monitor.start();
+  // A spark registered into a partially-hidden UI must obey the current
+  // viewport set immediately, not after the next visibility change.
+  updateMonitorStates();
 }
 
 // ─── Stop and remove monitor for a Spark ─────────────────
 function stopMonitor(id) {
+  clearTimeout(actionGraceTimers.get(id));
+  actionGraceTimers.delete(id);
   const monitor = monitors.get(id);
   if (monitor) {
     monitor.stop();
@@ -527,6 +532,9 @@ app.put("/api/settings", (req, res) => {
 app.get("/api/sparks/:id/metrics", (req, res) => {
   const monitor = monitors.get(req.params.id);
   if (!monitor) return res.status(404).json({ error: "Spark not found" });
+  // REST snapshot consumers (e.g. the standalone showcase page with no WS
+  // tab open) get a short grace so they read a fresh poll, not a stale cache.
+  if (monitor.isPaused()) grantActionGrace(req.params.id, METRICS_GRACE_MS);
   res.json(monitor.snapshot());
 });
 
@@ -1446,6 +1454,7 @@ app.post("/api/sparks/shutdown-all", async (_req, res) => {
       // still up for a few seconds), so this loop and the JSON response finish.
       const message = await initiateSparkShutdown(spark);
       results.push({ id: spark.id, ok: true, message });
+      grantActionGrace(spark.id, SHUTDOWN_GRACE_MS);
     } catch (err) {
       const msg = err.message || String(err);
       console.warn(`[shutdown-all] ${spark.id} failed: ${msg}`);
@@ -1471,6 +1480,7 @@ app.post("/api/sparks/wake-all", async (_req, res) => {
       const broadcast = broadcastForLanIp(spark.lanIp);
       const sent = await sendWol(cleanMac, broadcast);
       results.push({ id: spark.id, ok: true, mac: sent.mac, broadcast: sent.broadcast });
+      grantActionGrace(spark.id, WAKE_GRACE_MS);
     } catch (err) {
       results.push({ id: spark.id, ok: false, error: err.message || String(err) });
     }
@@ -1486,6 +1496,7 @@ app.post("/api/sparks/:id/shutdown", async (req, res) => {
     try {
       const message = await initiateSparkShutdown(spark);
       res.json({ success: true, message, output: message });
+      grantActionGrace(req.params.id, SHUTDOWN_GRACE_MS);
     } catch (err) {
       const msg = err.message || String(err);
       console.warn(`[shutdown] ${spark.id} failed: ${msg}`);
@@ -1520,6 +1531,7 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
     const broadcast = broadcastForLanIp(spark.lanIp);
     try {
       const sent = await sendWol(cleanMac, broadcast);
+      grantActionGrace(req.params.id, WAKE_GRACE_MS);
       res.json({
         success: true,
         message: `Magic packet sent to ${sent.mac} via ${sent.broadcast}`,
@@ -1567,35 +1579,83 @@ app.get("*splat", (_req, res) => {
 // ─── WebSocket ──────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: "/ws" });
 
-/** Track active client count for poll pause/resume. */
+/** Active WS clients — zero means nothing renders, so nothing polls. */
 let activeClientCount = 0;
 
-/** Pause all monitors when last client disconnects, resume when first connects. */
-function updateClientState() {
-  if (activeClientCount === 0) {
-    for (const monitor of monitors.values()) {
-      monitor.pause();
-    }
-  } else {
-    for (const monitor of monitors.values()) {
-      monitor.resume();
-    }
+/**
+ * Per-client viewport set (client sends {type:"visibility",sparks:[ids]}).
+ * null = never reported → treat as watching everything, which keeps
+ * pre-visibility clients and the connect→first-report window behaving
+ * exactly like before.
+ */
+function clientWatches(client, id) {
+  return client._visibleIds == null || client._visibleIds.has(id);
+}
+
+/**
+ * Action grace: after WoL / shutdown the machine's transition must stay
+ * observable even while its overview card is scrolled out of view.
+ * id -> Timeout; presence keeps that monitor polling regardless of viewport.
+ */
+const actionGraceTimers = new Map();
+const WAKE_GRACE_MS = 4 * 60_000; // WoL → BIOS → boot → sshd
+const SHUTDOWN_GRACE_MS = 90_000; // watch the offline transition
+const METRICS_GRACE_MS = 60_000; // REST snapshot consumers (showcase page)
+
+function grantActionGrace(id, ms) {
+  clearTimeout(actionGraceTimers.get(id));
+  actionGraceTimers.set(
+    id,
+    setTimeout(() => {
+      actionGraceTimers.delete(id);
+      updateMonitorStates();
+    }, ms)
+  );
+  updateMonitorStates();
+}
+
+function updateMonitorStates() {
+  for (const [id, monitor] of monitors) {
+    // Grace outranks everything (wake/shutdown/metrics consumers may act with
+    // zero open tabs); otherwise a monitor polls only while some live client
+    // can actually see its graphs.
+    const watched =
+      actionGraceTimers.has(id) ||
+      (activeClientCount > 0 &&
+        [...wss.clients].some((c) => clientWatches(c, id)));
+    if (watched) monitor.resume();
+    else monitor.pause();
   }
 }
 
 wss.on("connection", (ws) => {
   activeClientCount++;
+  ws._visibleIds = null;
   console.log(`[ws] client connected (${activeClientCount} active)`);
-  // Resume polling now that a client is watching
-  updateClientState();
+  // Resume polling now that a client is watching (until its first report
+  // narrows the set below).
+  updateMonitorStates();
   // Send the initial snapshot through the same path the broadcast uses so the
   // new client benefits from the same payload format (and bufferedAmount
   // guard, although a freshly-open socket trivially passes it).
   broadcastPayload(buildSnapshotPayload());
+  ws.on("message", (data) => {
+    let msg;
+    try {
+      msg = JSON.parse(String(data));
+    } catch {
+      return;
+    }
+    if (!msg || msg.type !== "visibility") return;
+    ws._visibleIds = Array.isArray(msg.sparks)
+      ? new Set(msg.sparks.filter((s) => typeof s === "string"))
+      : null; // malformed → conservative "watching everything"
+    updateMonitorStates();
+  });
   ws.on("close", () => {
     activeClientCount = Math.max(0, activeClientCount - 1);
     console.log(`[ws] client disconnected (${activeClientCount} active)`);
-    updateClientState();
+    updateMonitorStates();
   });
 });
 
@@ -1693,7 +1753,7 @@ server.listen(PORT, BIND_HOST, () => {
   }
   startAllMonitors();
   // Model launcher probe + scheduler timers. Deliberately not tied to
-  // updateClientState(): the night shift must run with zero tabs open.
+  // updateMonitorStates(): the night shift must run with zero tabs open.
   modelLauncher.startTimers();
 });
 

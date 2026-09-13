@@ -8,6 +8,7 @@ import { ActivityIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons
 import { AiProxyPanel } from "./AiProxyPanel";
 import { DevEnginePanel } from "./DevEnginePanel";
 import { ModelLauncherPanel } from "./ModelLauncher/ModelLauncherPanel";
+import { useSparkGraphRef } from "../../hooks/sparkVisibility";
 
 interface OverviewPageProps {
   sparks: SparkSnapshot[];
@@ -107,6 +108,8 @@ function SparkCard({
   const um = spark.metrics.unifiedMemory;
   const gpuMonitored = spark.gpuMonitoring !== false;
   const online = spark.online;
+  // Polling pauses server-side while the card's graphs are off-screen.
+  const cardRef = useSparkGraphRef(spark.id);
 
   const cpuUsage = spark.metrics.cpu?.usage ?? 0;
   const usage = gpu?.usage ?? 0;
@@ -128,6 +131,7 @@ function SparkCard({
 
   return (
     <div
+      ref={cardRef}
       className="overview-card flex flex-col"
       style={{
         padding: "var(--density-card-pad)",

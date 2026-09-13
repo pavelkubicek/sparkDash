@@ -397,12 +397,17 @@ export class SparkMonitor {
     console.log(`[SparkMonitor] ${this.spark.id} stopped`);
   }
 
-  /** Pause polling (no WS clients). Keeps the monitor alive but stops all timers. */
+  /** True while timers are cleared (viewport-hidden or no clients). */
+  isPaused() {
+    return this._paused;
+  }
+
+  /** Pause polling (spark's graphs visible to no client). Timers cleared, cache kept. */
   pause() {
     if (this._paused || !this._running) return;
     this._paused = true;
     this._clearIntervals();
-    console.log(`[SparkMonitor] ${this.spark.id} paused (no active clients)`);
+    console.log(`[SparkMonitor] ${this.spark.id} paused (not visible to any client)`);
   }
 
   /** Resume polling (WS client connected). Restores all timers. */
