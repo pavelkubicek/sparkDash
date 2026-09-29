@@ -9,14 +9,15 @@
  *
  *   node scripts/make-pwa-icons.mjs
  *
- * Output (public/icons/):
- *   icon-192.png           manifest "any"       — transparent, outline bolt
- *   icon-512.png           manifest "any"       — same, large canvas
- *   icon-maskable-512.png  manifest "maskable"  — transparent background is
- *        impossible for maskable (the OS paints its own backdrop behind the
- *        mask), so this one carries the dark #0d1117 tile with the same bolt
- *        inside the 80% safe zone; the phone/desktop launchers that use the
- *        "any" icons are unaffected.
+ * Output (public/icons/) — every variant keeps the transparent canvas;
+ * Android composites transparency over the wallpaper, which is the look the
+ * operator has on their home screen:
+ *   icon-192.png           manifest "any"      — outline bolt, full canvas
+ *   icon-512.png           manifest "any"      — same, large canvas
+ *   icon-maskable-512.png  manifest "maskable" — same bolt shrunk into the
+ *        OS 80% safe zone with the stroke scaled to match the same visual
+ *        weight (launchers prefer maskable over any — this one must look
+ *        right, or the phone shows a tile instead of the bare bolt)
  *   apple-touch-icon.png   iOS — transparent canvas (iOS composites on black)
  *
  * Rendering: 4x supersampled signed-distance stroke fill (|distance to the
@@ -40,7 +41,7 @@ const BOLT = [
 const STROKE = 2; // viewBox units, same as the favicon's stroke-width
 
 const BOLT_RGB = [0xe8, 0xa8, 0x30]; // #e8a830 — the one brand amber
-const TILE_RGB = [0x0d, 0x11, 0x17]; // --color-base (dark theme), maskable only
+// (no tile/background color: the brand mark is a bare outline on transparency)
 
 /** Distance from point p to the bolt polygon boundary (viewBox units). */
 function boltDistance(px, py) {
@@ -61,16 +62,15 @@ function boltDistance(px, py) {
 
 // ─── Rasterize one icon ────────────────────────────────────
 /**
- * @param {number} size     output px
+ * @param {number} size      output px
  * @param {object} opts
- *   tiled:       paint the full-bleed dark tile (maskable only)
  *   glyphFrac:   fraction of the canvas the bolt's 24-unit box occupies
- *                (1 = favicon-like full bleed; maskable shrinks inside the
+ *                (1 = favicon-like full bleed; maskable shrinks into the
  *                OS safe zone)
- *   strokeFrac:  stroke width as a fraction of the canvas — kept constant
- *                across sizes so the line weight matches on the launcher
+ *   strokeFrac:  stroke width as a fraction of the canvas; scale it with
+ *                glyphFrac to keep the line's weight relative to the bolt
  */
-function renderIcon(size, { tiled, glyphFrac, strokeFrac = STROKE / 24 }) {
+function renderIcon(size, { glyphFrac, strokeFrac = (STROKE / 24) * glyphFrac }) {
   const SS = 4; // supersample factor
   const H = size * SS;
   const s = (glyphFrac * size) / 24; // viewBox units → canvas units
@@ -98,19 +98,13 @@ function renderIcon(size, { tiled, glyphFrac, strokeFrac = STROKE / 24 }) {
         for (let dx = 0; dx < SS; dx++) sum += cov[(oy * SS + dy) * H + ox * SS + dx];
       }
       const c = sum * inv; // cell mean coverage
+      const alpha = Math.round(c * 255);
+      if (alpha < 1) continue; // transparent background
       const p = (oy * size + ox) * 4;
-      if (tiled) {
-        // opaque dark tile; amber stroke blended over it, flat alpha 255
-        out[p] = Math.round(BOLT_RGB[0] * c + TILE_RGB[0] * (1 - c));
-        out[p + 1] = Math.round(BOLT_RGB[1] * c + TILE_RGB[1] * (1 - c));
-        out[p + 2] = Math.round(BOLT_RGB[2] * c + TILE_RGB[2] * (1 - c));
-        out[p + 3] = 255;
-      } else if (c > 0) {
-        out[p] = BOLT_RGB[0];
-        out[p + 1] = BOLT_RGB[1];
-        out[p + 2] = BOLT_RGB[2];
-        out[p + 3] = Math.round(c * 255);
-      }
+      out[p] = BOLT_RGB[0];
+      out[p + 1] = BOLT_RGB[1];
+      out[p + 2] = BOLT_RGB[2];
+      out[p + 3] = alpha;
     }
   }
   return encodePng(size, out);
@@ -163,12 +157,13 @@ function encodePng(size, rgba) {
 mkdirSync(OUT_DIR, { recursive: true });
 const jobs = [
   // Bolt fills the canvas like the favicon (its box is 20/24 of the height).
-  ["icon-192.png", 192, { tiled: false, glyphFrac: 1 }],
-  ["icon-512.png", 512, { tiled: false, glyphFrac: 1 }],
-  // Maskable: OS crops to a circle/squircle → dark tile + bolt inside ~62%.
-  ["icon-maskable-512.png", 512, { tiled: true, glyphFrac: 0.62 }],
+  ["icon-192.png", 192, { glyphFrac: 1 }],
+  ["icon-512.png", 512, { glyphFrac: 1 }],
+  // Maskable: Android prefers it over "any"; shrunk into the safe zone with
+  // glyph-relative stroke so it reads identical to the home-screen original.
+  ["icon-maskable-512.png", 512, { glyphFrac: 0.66 }],
   // iOS rounds a full-bleed square and composites transparency on black.
-  ["apple-touch-icon.png", 180, { tiled: false, glyphFrac: 1 }],
+  ["apple-touch-icon.png", 180, { glyphFrac: 1 }],
 ];
 for (const [name, size, opts] of jobs) {
   writeFileSync(join(OUT_DIR, name), renderIcon(size, opts));
