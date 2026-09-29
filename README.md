@@ -34,6 +34,7 @@ It also supports **non-Spark units**: any Linux machine with an NVIDIA GPU (e.g.
 - [ComfyUI monitoring](#comfyui-monitoring)
 - [Hermes Agent monitoring](#hermes-agent-monitoring)
 - [Tailnet monitoring](#tailnet-monitoring)
+- [PWA — install as an app](#pwa--install-as-an-app)
 - [Full changelog](./CHANGELOG.md)
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
@@ -285,6 +286,22 @@ docker compose -f docker-compose.dev.yml up --build
 ```
 
 If the key file has a non-default name (e.g. `id_ed25519_shared`), mount it **as** `id_ed25519`, or set `SSH_IDENTITY_FILE` to the path inside the container. Keep the file mode `600`. The unit that runs sparkDash itself should be added with **This host (local collectors — no SSH for metrics)**.
+
+---
+
+## PWA — install as an app
+
+sparkDash is an installable Progressive Web App. On `https://spark-dash.lan/` (or any HTTPS origin) Chrome/Edge show the **install** icon in the address bar — *Install sparkDash* — and the dashboard then runs in its own standalone window with the bolt icon on the taskbar/dock/Launchpad. On iOS, Safari's *Add to Home Screen* gives the same standalone chrome with the apple-touch icon.
+
+What it does offline: the service worker caches only the **app shell** (page, hashed build assets, icons). Live telemetry (`/api`, `/ws`) is never cached — offline the app opens and reports the connection as down instead of faking stale numbers as fresh. Any deployed update is picked up on the next online load.
+
+Installability requires a **secure context**: real HTTPS with a trusted certificate. `spark-dash.lan` is served through the LAN reverse proxy with the private `MyLAN-Root-CA`; import that CA into the device's trust store (or browse over `http://127.0.0.1` / `http://localhost` via SSH tunnel, which browsers also treat as secure) — an untrusted/self-signed chain silences the install prompt with no visible reason.
+
+The icon set under `public/icons/` is generated, not hand-edited:
+
+```bash
+npm run pwa:icons   # re-rasterize from assets/bolt.svg, then commit public/icons/
+```
 
 ---
 

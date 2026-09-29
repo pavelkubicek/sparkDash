@@ -19,7 +19,8 @@
     "docker:dev:build": "docker compose -f docker-compose.dev.yml up --build",
     "docker:prod": "docker compose up -d",
     "docker:rebuild": "docker compose up --build -d",
-    "frontend": "npm run build"
+    "frontend": "npm run build",
+    "pwa:icons": "node scripts/make-pwa-icons.mjs"
   },
   "keywords": [
     "nvidia",
