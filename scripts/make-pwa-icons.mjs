@@ -2,23 +2,28 @@
 /**
  * sparkDash PWA icon generator — dependency-free.
  *
- * Draws the CURRENT brand look: the amber outline bolt (stroke #e8a830,
- * width 2, round joins — exactly the inline SVG favicon) on a TRANSPARENT
- * canvas, matching the icon on the operator's home screen. No tile, no fill.
- * The generated PNGs are committed; rerun and commit when the logo changes:
+ * Draws the brand mark: the amber outline bolt (stroke #e8a830, width 2,
+ * round joins — exactly the inline SVG favicon) on a FULLY OPAQUE dark tile
+ * (#0d1117, the app's theme color). The generated PNGs are committed; rerun
+ * and commit when the logo changes:
  *
  *   node scripts/make-pwa-icons.mjs
  *
- * Output (public/icons/) — every variant keeps the transparent canvas;
- * Android composites transparency over the wallpaper, which is the look the
- * operator has on their home screen:
- *   icon-192.png           manifest "any"      — outline bolt, full canvas
- *   icon-512.png           manifest "any"      — same, large canvas
- *   icon-maskable-512.png  manifest "maskable" — same bolt shrunk into the
- *        OS 80% safe zone with the stroke scaled to match the same visual
- *        weight (launchers prefer maskable over any — this one must look
- *        right, or the phone shows a tile instead of the bare bolt)
- *   apple-touch-icon.png   iOS — transparent canvas (iOS composites on black)
+ * Why an opaque tile (this flip-flopped twice — the rationale, with the
+ * evidence, so it sticks):
+ *   - Transparent canvases do NOT render transparent on phones. Chrome's
+ *     adaptive-icon generation and iOS both composite the alpha over WHITE
+ *     — the 2026-09-29 home screen showed exactly that: white rounded
+ *     square with the amber bolt.
+ *   - The only deterministic look is a fully opaque icon: the dark tile
+ *     here, matching every other dark icon on the operator's home screen.
+ *
+ * Output (public/icons/) — one geometry for every variant, so the icon
+ * reads identical however the launcher masks it:
+ *   icon-192.png / icon-512.png   manifest "any"      — bolt centered
+ *   icon-maskable-512.png         manifest "maskable" — same, and spec-legal:
+ *        the opaque tile fills the canvas, the bolt sits inside the safe zone
+ *   apple-touch-icon.png          iOS — opaque (transparency ⇒ white tile)
  *
  * Rendering: 4x supersampled signed-distance stroke fill (|distance to the
  * bolt polygon boundary| ≤ half stroke width), box-downsampled — round caps
@@ -41,7 +46,8 @@ const BOLT = [
 const STROKE = 2; // viewBox units, same as the favicon's stroke-width
 
 const BOLT_RGB = [0xe8, 0xa8, 0x30]; // #e8a830 — the one brand amber
-// (no tile/background color: the brand mark is a bare outline on transparency)
+const BG_RGB = [0x0d, 0x11, 0x17];   // #0d1117 — theme color; launchers paint
+// transparency white, so the tile must be dark AND opaque, never alpha.
 
 /** Distance from point p to the bolt polygon boundary (viewBox units). */
 function boltDistance(px, py) {
@@ -65,8 +71,7 @@ function boltDistance(px, py) {
  * @param {number} size      output px
  * @param {object} opts
  *   glyphFrac:   fraction of the canvas the bolt's 24-unit box occupies
- *                (1 = favicon-like full bleed; maskable shrinks into the
- *                OS safe zone)
+ *                (0.66 = inside the OS maskable safe zone)
  *   strokeFrac:  stroke width as a fraction of the canvas; scale it with
  *                glyphFrac to keep the line's weight relative to the bolt
  */
@@ -98,13 +103,12 @@ function renderIcon(size, { glyphFrac, strokeFrac = (STROKE / 24) * glyphFrac })
         for (let dx = 0; dx < SS; dx++) sum += cov[(oy * SS + dy) * H + ox * SS + dx];
       }
       const c = sum * inv; // cell mean coverage
-      const alpha = Math.round(c * 255);
-      if (alpha < 1) continue; // transparent background
       const p = (oy * size + ox) * 4;
-      out[p] = BOLT_RGB[0];
-      out[p + 1] = BOLT_RGB[1];
-      out[p + 2] = BOLT_RGB[2];
-      out[p + 3] = alpha;
+      // Opaque dark tile; the amber stroke alpha-blends over it.
+      out[p] = Math.round(BG_RGB[0] + (BOLT_RGB[0] - BG_RGB[0]) * c);
+      out[p + 1] = Math.round(BG_RGB[1] + (BOLT_RGB[1] - BG_RGB[1]) * c);
+      out[p + 2] = Math.round(BG_RGB[2] + (BOLT_RGB[2] - BG_RGB[2]) * c);
+      out[p + 3] = 255;
     }
   }
   return encodePng(size, out);
@@ -155,15 +159,15 @@ function encodePng(size, rgba) {
 
 // ─── Emit the set ──────────────────────────────────────────
 mkdirSync(OUT_DIR, { recursive: true });
+const GLYPH = 0.66; // one geometry for every variant → identical look under
+// any launcher mask; the bolt's 24-unit box occupies 66% of the canvas.
 const jobs = [
-  // Bolt fills the canvas like the favicon (its box is 20/24 of the height).
-  ["icon-192.png", 192, { glyphFrac: 1 }],
-  ["icon-512.png", 512, { glyphFrac: 1 }],
-  // Maskable: Android prefers it over "any"; shrunk into the safe zone with
-  // glyph-relative stroke so it reads identical to the home-screen original.
-  ["icon-maskable-512.png", 512, { glyphFrac: 0.66 }],
-  // iOS rounds a full-bleed square and composites transparency on black.
-  ["apple-touch-icon.png", 180, { glyphFrac: 1 }],
+  ["icon-192.png", 192, { glyphFrac: GLYPH }],
+  ["icon-512.png", 512, { glyphFrac: GLYPH }],
+  // Maskable safe zone is the center ~66% — GLYPH is already inside it, and
+  // the opaque tile satisfies the fill-the-canvas requirement.
+  ["icon-maskable-512.png", 512, { glyphFrac: GLYPH }],
+  ["apple-touch-icon.png", 180, { glyphFrac: GLYPH }],
 ];
 for (const [name, size, opts] of jobs) {
   writeFileSync(join(OUT_DIR, name), renderIcon(size, opts));
