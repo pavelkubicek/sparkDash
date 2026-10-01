@@ -40,6 +40,24 @@ test("start refuses a model whose Spark was deleted, naming both", () => {
   assert.throws(() => m.start("qwen", "start"), /Spark "sparkA" assigned to model qwen is not registered/);
 });
 
+// ─── stop preempts a stuck slot-holder ─────────────────────
+test("a stop preempts a still-running mutating job instead of 409ing — a hung start must be stoppable from the UI", () => {
+  const { m, spawned } = makeManager([QWEN]);
+  const hung = m.start("qwen", "start");
+  assert.equal(m.getJob(hung.jobId).status, "running");
+  const stop = m.start("qwen", "stop");
+  // the hung start was cancelled, the stop spawned in its place
+  assert.equal(m.getJob(hung.jobId).killed, true);
+  assert.equal(spawned.length, 2);
+  assert.match(String(m.getJob(stop.jobId).append ?? ""), /\[preempt\]/);
+});
+
+test("a start still refuses while another mutating job holds the slot", () => {
+  const { m } = makeManager([QWEN, DS]);
+  m.start("qwen", "start");
+  assert.throws(() => m.start("ds", "start"), /already running for/);
+});
+
 // ─── single action routes to the model's own Spark ─────────
 test("a start spawns exactly one chunk on the assigned Spark's ssh target", () => {
   const { m, spawned } = makeManager([QWEN]);

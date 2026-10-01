@@ -226,15 +226,38 @@ function spawnStreaming(file, args, env, { onData, timeoutMs, signal, killGraceM
       }
     };
 
+    // After SIGKILL the process cannot produce output, but grandchildren that
+    // inherited our stdio pipes (a daemonized helper, a setsid'd ssh
+    // ControlPersist master) keep the write ends open — and node defers the
+    // ChildProcess 'close' event until ALL of them are gone, leaving the
+    // caller's await pending forever. Close our ends so the await always
+    // settles; anything still flowing is dead output we no longer need.
+    const forceClose = () => {
+      try {
+        child.stdout?.destroy();
+      } catch {
+        /* already gone */
+      }
+      try {
+        child.stderr?.destroy();
+      } catch {
+        /* already gone */
+      }
+    };
+
     const terminate = (reason) => {
       if (settled || killTimer) return;
       if (reason === "timeout") timedOut = true;
       if (reason === "cancel") cancelled = true;
       killGroup("SIGTERM");
       killTimer = setTimeout(() => {
-        graceTimer = setTimeout(() => killGroup("SIGKILL"), killGraceMs);
+        graceTimer = setTimeout(() => {
+          killGroup("SIGKILL");
+          forceClose();
+        }, killGraceMs);
         graceTimer.unref?.();
         killGroup("SIGKILL");
+        forceClose();
       }, killGraceMs);
       killTimer.unref?.();
     };
@@ -330,6 +353,19 @@ export function spawnOnHost(cmd, opts = {}) {
  * @param {string} cmd shell body (executed by the remote/default shell as-is)
  * @param {object} [opts] see spawnOnHost
  */
+/**
+ * The ssh invocation a streamed model job runs. Multiplex is deliberately
+ * OFF: with a ControlPersist master the forked master inherits this job's
+ * stdio pipe write-ends and outlives the kill (probes keep it warm), so the
+ * ChildProcess never emits 'close' and the job hangs "running" forever.
+ * Exported for tests — the regression lives exactly in these args.
+ * @param {object} spark
+ * @param {string} cmd shell body
+ */
+export function jobSshSpec(spark, cmd) {
+  return sshCommandSpec(spark, { remoteArgv: [cmd], multiplex: false });
+}
+
 export function spawnOnTarget(target, cmd, opts = {}) {
   if (!target || target.kind === null) {
     return Promise.resolve({
@@ -343,7 +379,7 @@ export function spawnOnTarget(target, cmd, opts = {}) {
   }
   if (target.kind === "local") return spawnOnHost(cmd, opts);
   try {
-    const inv = sshCommandSpec(target.spark, { remoteArgv: [cmd] });
+    const inv = jobSshSpec(target.spark, cmd);
     return spawnStreaming(inv.file, inv.args, { ...inv.env, TERM: "dumb" }, opts);
   } catch (err) {
     return Promise.resolve({

@@ -64,6 +64,18 @@ export function ModelCard({
 
   const running = model.status.running;
   const disabled = busy;
+  const jobRunning = model.job?.status === "running";
+
+  // The power toggle is a stop while the model is up — but a crash-looping
+  // boot can also be mid-start (its job still running) while the probe
+  // reads down, and stop is the remedy for exactly that state. So the
+  // direction is stop whenever the model is up OR its own job is in flight;
+  // everything else starts (and waits for the free slot like before).
+  const isStop = running || (busyHere && jobRunning);
+  // Stop is never blocked by the busy lock: the server preempts a stuck
+  // slot-holder and runs stop.sh, so an SSH kill by hand is never needed —
+  // a booting model must not be reachable only while the card is idle.
+  const powerDisabled = pending === (isStop ? "stop" : "start");
 
   async function run(kind: "start" | "stop" | "restart") {
     setPending(kind);
@@ -111,11 +123,6 @@ export function ModelCard({
     }
   }
 
-  const jobRunning = model.job?.status === "running";
-
-  // The job chip is an error affordance only: show it when the newest job
-  // actually failed — errored, timed out, or exited non-zero. A hand-cancel
-  // (which is normal: closing a start tail, a redeploy) is not an error.
   const jobFailed =
     model.job != null &&
     (model.job.status === "error" ||
@@ -349,28 +356,30 @@ export function ModelCard({
         className="mt-auto flex flex-wrap items-center gap-1.5 pt-1"
         onDragStart={(e) => e.preventDefault()}
       >
-        {/* Colour-swapped power toggle (SparkActions geometry) */}
+        {/* Colour-swapped power toggle (SparkActions geometry). A stop stays
+            clickable while a job holds the mutating slot — the server
+            preempts it; only the in-flight click disables it. */}
         <button
           type="button"
-          onClick={() => void run(running ? "stop" : "start")}
-          disabled={disabled}
+          onClick={() => void run(isStop ? "stop" : "start")}
+          disabled={powerDisabled}
           title={
-            running
+            isStop
               ? `Run ./${model.name} stop.sh on the host`
               : `Run ./${model.name} start.sh on the host (stops any other running model first)`
           }
           className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[11px] font-medium text-white transition-colors disabled:opacity-50 ${
-            running ? "border-danger bg-danger hover:bg-danger/80" : "border-accent bg-accent hover:bg-accent-hover"
+            isStop ? "border-danger bg-danger hover:bg-danger/80" : "border-accent bg-accent hover:bg-accent-hover"
           }`}
         >
-          {pending === (running ? "stop" : "start") || (busyHere && jobRunning) ? (
+          {pending === (isStop ? "stop" : "start") || (busyHere && jobRunning) ? (
             <RotateIcon className="h-3 w-3 animate-spin" />
-          ) : running ? (
+          ) : isStop ? (
             <PowerOffIcon className="h-3 w-3" />
           ) : (
             <PowerOnIcon className="h-3 w-3" />
           )}
-          {running ? "Stop" : "Start"}
+          {isStop ? "Stop" : "Start"}
         </button>
 
         <button

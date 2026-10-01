@@ -258,11 +258,21 @@ export class ModelJobManager {
     }
 
     const active = this.activeJob();
+    let preempted = null;
     if (MUTATING.has(action)) {
-      if (active) {
+      if (active && action !== "stop") {
         throw err409(
           `A ${active.action} job is already running for ${active.model} — wait for it to finish or cancel it first`
         );
+      }
+      if (active) {
+        // A stop preempts even a live slot holder: the running job may be a
+        // hung start whose script still holds the GPU/port, and stop.sh is
+        // exactly the remedy. Cancelling kills the script's process group;
+        // containers already handed to dockerd keep running (the stop.sh
+        // itself then removes the one that matters).
+        this.cancel(active.jobId);
+        preempted = active;
       }
     } else {
       // logs: one tail per model, no global lock.
@@ -283,6 +293,11 @@ export class ModelJobManager {
         ? `$ ${job.script}\n`
         : `$ ./${script}${args.length ? ` ${args.join(" ")}` : ""}   [${model.dir}]\n`
     );
+    if (preempted) {
+      job.transcript.append(
+        `[preempt] cancelled the still-running ${preempted.action} job for ${preempted.model} (job ${String(preempted.jobId).slice(0, 8)})\n`
+      );
+    }
 
     const timeoutMs =
       Number.isFinite(meta.timeoutMs) && meta.timeoutMs > 0

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveRunTarget, spawnOnTarget, buildScriptCommand, shQuote } from "../hostExec.js";
+import { resolveRunTarget, spawnOnTarget, jobSshSpec, buildScriptCommand, shQuote } from "../hostExec.js";
 import { sshCommandSpec } from "../../collectors/ssh.js";
 
 // ─── resolveRunTarget: the model's Spark is the machine ───
@@ -105,4 +105,13 @@ test("buildScriptCommand quotes dir/script so config values cannot be shell synt
 
 test("shQuote neutralises the full quote", () => {
   assert.equal(shQuote("a'b"), `'a'\\''b'`);
+});
+
+// ─── streamed jobs own their ssh connection ───────────────
+test("a job's ssh spec opts OUT of multiplexing — a ControlPersist master would inherit the job's stdio", () => {
+  const spark = { id: "sparkA", name: "sparkA.lan", lanIp: "10.0.0.10", isLocal: false, ssh: { host: "10.0.0.10", user: "u", auth: "key" } };
+  const spec = jobSshSpec(spark, "docker logs -f x");
+  assert.ok(spec.args.includes("ControlMaster=no"));
+  assert.ok(spec.args.includes("ControlPath=none"));
+  assert.ok(!spec.args.includes("ControlMaster=auto"));
 });
