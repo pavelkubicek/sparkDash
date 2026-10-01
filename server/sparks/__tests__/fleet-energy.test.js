@@ -180,7 +180,9 @@ const APPROVED_RESPONSE_FIELDS = [
   "whPerOutputToken24h",
   "outputTokens24h",
   "coverage24hMs",
+  "coverage24hWindowMs",
   "coverage31dMs",
+  "coverage31dWindowMs",
   "nodeCoverage24hMs",
   "nodeCoverage31dMs",
   "hourlyWatts24h",
@@ -203,7 +205,9 @@ function assertFleetEnergyResponseContract(response) {
     "freshNodeCount",
     "outputTokens24h",
     "coverage24hMs",
+    "coverage24hWindowMs",
     "coverage31dMs",
+    "coverage31dWindowMs",
   ]) {
     assert.equal(typeof response[field], "number", field);
     assert.equal(Number.isFinite(response[field]), true, field);

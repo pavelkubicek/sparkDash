@@ -174,7 +174,7 @@ export async function readServerGenerationTokens(baseUrl, opts = {}) {
     /* try next */
   }
 
-  // EXL3 serve_openai.py — cumulative completion tokens on /health
+  // EXL3 serve_openai.py / TensorFold — cumulative completion tokens on /health
   try {
     const res = await fetch(`${baseUrl}/health`, {
       signal: AbortSignal.timeout(5_000),
@@ -184,6 +184,7 @@ export async function readServerGenerationTokens(baseUrl, opts = {}) {
       const data = await res.json();
       const v = Number(data?.completion_tokens_total);
       if (Number.isFinite(v) && data?.backend === "exl3") return v;
+      if (Number.isFinite(v) && data?.backend === "tensorfold") return v;
       if (Number.isFinite(v) && typeof data?.busy === "boolean") return v;
     }
   } catch {
@@ -587,6 +588,8 @@ async function runStreamingRequestOnce(
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      // Normalize the accumulated buffer so CRLF split across chunks also works.
+      buffer = buffer.replace(/\r\n/g, "\n");
 
       // SSE events are separated by blank lines
       let sep;

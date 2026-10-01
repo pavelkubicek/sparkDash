@@ -52,8 +52,10 @@ It also supports **non-Spark units**: any Linux machine with an NVIDIA GPU (e.g.
 
 ## Latest version changelog
 
-### Version 1.8.8 — SGLang live tok/s
-- **Overview tok/s on SGLang** follows `gen_throughput` while a request is running. The completion counter on current builds only moves when the request finishes, so the card stayed at 0 for the whole decode.
+### Version 1.8.9 — TensorFold backend
+- **TensorFold** ([ashhart/TensorFold](https://github.com/ashhart/TensorFold)) is detected from `/v1/models` (`owned_by: tensorfold`) and labeled on the LLM card and Overview. Live tok/s reads cumulative token totals from `/health` when the server publishes them; stock TensorFold does not yet, so it shows 0 tok/s until it does. Benches and the showcase work as on any OpenAI-compatible server.
+- **q27 backend**, **custom prefill size**, **remote-Spark benches** over an SSH tunnel, an on-demand **Remote** bench host, **hide worker nodes**, and a **share-as-image** card for bench results.
+- Fixes for the decode-bench request quota and 24×/32× budget, long prefills dying at ~5 min, SGLang prefill latching, `SPARKDASH_TOKEN` in compose, Tailscale address classification, and remote SSH session churn.
 
 Full history: [CHANGELOG.md](./CHANGELOG.md)
 
@@ -67,7 +69,7 @@ Full history: [CHANGELOG.md](./CHANGELOG.md)
 | **Non-Spark GPU hosts** | Linux boxes with a dedicated NVIDIA GPU are first-class units: same `nvidia-smi` collectors over SSH, detected hardware summary, and separate **RAM** / **VRAM** panels. Detail page: GPU (left) + **RAM → Network → Storage** (right column); Overview cards show RAM and VRAM bars |
 | **Live streaming** | WebSocket metrics with configurable poll intervals; central history store for sparklines across tab switches |
 | **Local + remote** | Host metrics via sysfs/proc/`nvidia-smi`; remotes over SSH (key or password) |
-| **LLM probe** | Auto-detects llama.cpp, vLLM, sglang, ds4-server, EXL3, or q27; live decode/prefill tok/s; cached vs uncached prefill on ds4, llama.cpp, SGLang, and q27; **daily peak** history on the LLM card |
+| **LLM probe** | Auto-detects llama.cpp, vLLM, sglang, ds4-server, EXL3, TensorFold, or q27; live decode/prefill tok/s; cached vs uncached prefill on ds4, llama.cpp, SGLang, and q27; **daily peak** history on the LLM card |
 | **ComfyUI** | Opt-in probe: queue/jobs, progress, cancel, Open link, inventory, overview chip |
 | **Hermes Agent** | Opt-in per unit: background update check (10 min), status badges, one-click or batch `hermes update` |
 | **Tailnet** | Opt-in probe: flags a unit that is healthy on the LAN but off its tailnet |
@@ -78,6 +80,7 @@ Full history: [CHANGELOG.md](./CHANGELOG.md)
 | **Multiple LLM ports** | Monitor several LLM servers on different ports simultaneously — each gets its own panel with independent backend detection and metrics |
 | **Model Launcher** | One-click start/stop/restart/logs of model repos from Overview — each card runs on its **assigned Spark** over SSH (machine-agnostic dashboard), with a time-window scheduler guaranteeing one model at a time |
 | **GPU processes** | See the top GPU processes by VRAM usage directly in the GPU panel, including process name and memory allocation |
+| **Multi-GPU hosts** | A dedicated GPU host with several NVIDIA cards reports each one: the header names every card, the GPU panel adds a block per card (throttle chip, usage and temperature sparklines, power, VRAM bar) and the API exposes `gpu.gpus[]`. The headline `gpu` numbers stay an aggregate of all cards, so Overview cards and alerts need no change |
 | **Spark uptime** | System uptime displayed inline on each Spark header for at-a-glance availability |
 | **Power controls** | Graceful shutdown (SSH host script) and Wake-on-LAN; batch actions on Overview |
 | **Spark roles** | **Head** / **Worker** / **Standalone** — worker label + head link; standalone can disable LLM monitoring; optional hide workers from Overview and tabs |
@@ -475,8 +478,10 @@ Copy `.env.example` to `.env` if needed:
 | `AI_PROXY_URL` | _(host:port link)_ | Public HTTPS base for the observer "jump" links, e.g. `https://ai-proxy.lan`. Overrides the link only — the bridge still fetches `AI_PROXY_HOST` over plain http |
 | `DEV_ENGINE_WEBUI_URL` | _(host:port link)_ | Public HTTPS base for the Spark Dev Engine web UI "jump" links, e.g. `https://spark-dev.lan` |
 | `AUTOPOWER_FEATURE` | _(off)_ | Spark AutoPower master switch. `1` re-enables the whole feature: Overview panel, idle-shutdown ticks and scheduled wakes; off hides the panel, never arms the timer and rejects the config/tick routes |
-| `SSH_CONTROL_PERSIST_SECONDS` | `60` | Reuse authenticated SSH transports for remote collectors. Set to `0` to disable multiplexing. |
+| `SSH_CONTROL_PERSIST_SECONDS` | `60` | Idle SSH transport persistence in seconds, capped at `3600`. Reuses authenticated SSH transports for remote collectors. Set to `0` to disable multiplexing. |
 | `FLEET_ENERGY_JSON_PATH` | `config/fleet-energy.json` | Rolling fleet-energy persistence path |
+
+For compatibility, `SSH_CONTROL_PERSIST` is accepted as a seconds-based fallback when `SSH_CONTROL_PERSIST_SECONDS` is unset. The existing `SSH_MULTIPLEX=0` switch also disables reuse. SSH tunnels always use an independent connection.
 
 > The listener and both Compose files default to `127.0.0.1`. Existing Docker users who opened
 > `http://<host-ip>:5555` must migrate to an SSH tunnel, authenticated reverse proxy, Tailscale
@@ -488,28 +493,43 @@ Copy `.env.example` to `.env` if needed:
 1. Open the **+** tab.
 2. Choose **Unit type**:
    - **NVIDIA DGX Spark** — the default; hardware summary shows DGX Spark specs and the CX7 IP field is available.
-   - **Dedicated GPU host** — any Linux machine with an NVIDIA GPU. It is monitored exactly like a Spark (SSH + `nvidia-smi`) but is **not** reported as a DGX Spark: the header shows a detected hardware summary (GPU model, CPU, RAM) instead of fixed GB10 specs, and the page shows separate **RAM** and **VRAM** panels (VRAM from `nvidia-smi`, RAM from system memory). On the unit page, RAM → Network → Storage stack in the right column with GPU filling the left column.
+   - **Dedicated GPU host** — any Linux machine with an NVIDIA GPU. It is monitored exactly like a Spark (SSH + `nvidia-smi`) but is **not** reported as a DGX Spark: the header shows a detected hardware summary (GPU model, CPU, RAM) instead of fixed GB10 specs, and the page shows separate **RAM** and **VRAM** panels (VRAM from `nvidia-smi`, RAM from system memory). On the unit page, RAM → Network → Storage stack in the right column with GPU filling the left column. A host with **more than one GPU** needs nothing extra: every card `nvidia-smi` lists is collected, the header names them all, the GPU panel shows a block per card, and `metrics.gpu` stays the aggregate (hottest / busiest card, summed power and VRAM) with the per-card detail under `gpu.gpus[]`.
 3. Set **Name** and choose whether this is **This host**. Local units do not require a LAN IP or SSH; their optional LAN IP enables browser links and directed Wake-on-LAN. Remote units require a LAN IP/host, SSH user, and key or password. Key auth in Docker needs a key mounted into the container (see Quick start).
 4. **Test** shows pass/fail/skipped for host collectors/SSH and each enabled service (LLM, ComfyUI, Hermes Agent, Tailnet). Every enabled capability must pass; disable an unavailable optional service before saving if it should not be monitored.
 5. Save — a tab appears and metrics start streaming.
 
 ### Power controls (shutdown / Wake-on-LAN)
 
-- **Shutdown** (per Spark or **Shutdown All** on Overview):
-  - **Remote Sparks** run over SSH: a guard verifies the host script and passwordless
-    sudo, then backgrounds `sudo -n /usr/local/bin/spark-shutdown` so SSH returns before
-    the host dies. Provision each remote once with (set `USER` to that Spark's SSH user;
-    you will be prompted for its password once):
+- **Shutdown** (per Spark or **Shutdown All** on Overview) runs the host helper
+  `/usr/local/bin/spark-shutdown` with passwordless sudo. The helper contract is
+  two invocations:
+
+  | Invocation | Expected behaviour |
+  |------------|--------------------|
+  | `spark-shutdown` | Schedule the graceful shutdown |
+  | `spark-shutdown --check` | Print an acknowledgement, exit 0, change nothing |
+
+  `--check` is what proves authorization before anything is scheduled, so a
+  sudoers rule scoped to the helper is enough. A helper without `--check` still
+  works when sudo is granted more broadly (the authorization probe falls back
+  to `sudo -n true`).
+
+  - **Remote Sparks** run over SSH: a guard verifies the host script and
+    passwordless sudo, then backgrounds the helper so SSH returns before the
+    host dies. Provision each remote once with (set `USER` to that Spark's SSH
+    user; you will be prompted for its password once):
 
     ```bash
-    ssh -t USER@SPARK_IP 'sudo sh -c "printf \"#!/bin/sh\nexec systemctl poweroff\n\" > /usr/local/bin/spark-shutdown && chmod 0755 /usr/local/bin/spark-shutdown && echo \"USER ALL=(ALL) NOPASSWD: /usr/local/bin/spark-shutdown\" > /etc/sudoers.d/spark-shutdown && chmod 0440 /etc/sudoers.d/spark-shutdown && visudo -cf /etc/sudoers.d/spark-shutdown && echo PROVISIONED"'
+    ssh -t USER@SPARK_IP 'sudo sh -c "printf \"#!/bin/sh\ncase \$1 in --check) echo ok; exit 0;; esac\nexec systemctl poweroff\n\" > /usr/local/bin/spark-shutdown && chmod 0755 /usr/local/bin/spark-shutdown && echo \"USER ALL=(ALL) NOPASSWD: /usr/local/bin/spark-shutdown\" > /etc/sudoers.d/spark-shutdown && chmod 0440 /etc/sudoers.d/spark-shutdown && visudo -cf /etc/sudoers.d/spark-shutdown && echo PROVISIONED"'
     ```
 
   - **Local (dashboard) Spark**: inside the provided Docker container (privileged,
     `pid: host`) the server powers off the host through host systemd directly —
     `nsenter -t 1 -m -- systemctl poweroff` — no script and no sudo needed in the
-    container. Run on a bare host (`npm run dev`, no Docker) it falls back to the same
-    `sudo -n /usr/local/bin/spark-shutdown` contract, so install the script there too.
+    container. Run on a bare host (`npm run dev`, no Docker) it falls back to the
+    same `sudo -n /usr/local/bin/spark-shutdown` contract, so install the script
+    there too. The helper always resolves against the **host** filesystem, so it
+    does not need to exist inside the container.
 - **Honest acknowledgement** — both shutdown routes wait a short ack window (~1.5 s)
   after *requesting* the power-off, so a missing script, a sudo that wants a password,
   or a missing binary comes back as a real error instead of a fake “Shutdown initiated”.
@@ -573,6 +593,12 @@ Choice is stored in `localStorage`.
 
 One `SystemCollector` path for both modes. When `spark.isLocal` is true, metrics come from host sysfs/proc and `nvidia-smi` (often via nsenter into the host namespace). Remote Sparks wrap the same commands in a shared `sshExec()` helper (key agent or `sshpass`). The helper reuses an authenticated OpenSSH transport by default so frequent metric polls do not create a new SSH/PAM login lifecycle each time. Set `SSH_CONTROL_PERSIST_SECONDS=0` to disable reuse. For `kind: "host"` units, actual hardware (GPU model, driver version, CPU, RAM) is detected once and cached in place of the static DGX Spark specs, and GPU VRAM comes straight from `nvidia-smi` while system RAM is read from `/proc/meminfo`.
 
+### Remote SSH sessions and host memory
+
+Older sparkDash versions could create hundreds of SSH/PAM login sessions per minute on each remote host. [Issue #73](https://github.com/MiaAI-Lab/sparkDash/issues/73) documents the resulting session churn and observed `polkitd` memory growth. Connection reuse reduces this churn while retaining the collector refresh cadence. After updating, verify that metrics keep advancing and that new SSH authentications/PAM session opens fall after the initial connection; a new SSH client process for each collector command is still expected.
+
+If host memory remains low, compare Linux `MemAvailable` and per-process resident/swap usage. Memory retained by `polkitd` requires separate OS investigation: [polkit PR #653](https://github.com/polkit-org/polkit/pull/653) fixes a reference leak in `NoNewPrivileges` queries. Check whether your distribution's polkit package includes that fix. SSH reuse neither applies the OS patch nor releases memory already retained by another process.
+
 ### Graceful degradation
 
 Collectors catch errors and return zero/default metrics instead of crashing the loop. After sustained liveness failures, a Spark is marked offline; the UI shows stale or empty states rather than hard errors.
@@ -589,6 +615,7 @@ Each configured LLM port gets its own `LlmProbe` instance running in parallel. P
 - **ds4-server** (Entrpi/ds4-on-spark) — `/v1/models` (`owned_by: ds4.c`) + Prometheus `ds4_*` token counters for live tok/s
 - **EXL3** (ExLlamaV3 `tools/serve_openai.py`) — `/v1/models` (`owned_by: exl3`) or `/health` `{ok, busy}`; live tok/s from `/health` cumulative counters
 - **q27** (signalnine/q27 engine) — `/v1/models` (`owned_by: q27`) or Prometheus `q27_*` series; live tok/s from `q27_*_processed` counter diffs (completion-based totals as fallback), exact computed-only prefill with the cached/uncached split doubling as the prefix-cache hit rate, TTFT/E2E/ITL p95 histograms, and constant-0 preemptions (FIFO admission, no wait queue)
+- **TensorFold** (ashhart/TensorFold) — `/v1/models` (`owned_by: tensorfold`). It has no `/metrics`, and the CUDA server's `/health` is just `{ok: true}`, so live tok/s appears only when `/health` publishes cumulative `prompt_tokens_total` / `completion_tokens_total` (same contract as EXL3); otherwise the card shows the model and 0 tok/s. Decode/prefill benches and the showcase work regardless.
 - **vLLM / sglang** — `/v1/models`; sglang via `/server_info` (`last_gen_throughput` when metrics off; `/get_server_info` fallback), vLLM via Prometheus `/metrics` counters (scientific notation supported)
 
 Rates are derived from per-probe cumulative counter diffs (or SGLang sticky throughput while it moves). Multiple ports can be added or removed at runtime without restarting the monitor.

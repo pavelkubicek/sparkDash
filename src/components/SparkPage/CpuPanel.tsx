@@ -1,4 +1,4 @@
-import type { CpuMetrics, RamMetrics, UnifiedMemoryMetrics } from "../../api/types";
+import type { CpuMetrics, HardwareInfo, RamMetrics, UnifiedMemoryMetrics } from "../../api/types";
 import { Sparkline } from "../ui/Sparkline";
 import { CpuIcon, MemoryIcon } from "../ui/icons";
 import { MetricBar } from "../ui/MetricBar";
@@ -8,6 +8,8 @@ interface CpuPanelProps {
   cpu: CpuMetrics | null;
   ram: RamMetrics | null;
   unifiedMemory: UnifiedMemoryMetrics | null;
+  /** Detected SoC/CPU model + cores (from the SSH collector); shown when present. */
+  hardware?: HardwareInfo | null;
   sparkId: string;
   /** Temperature unit conversion; default celsius (Spark pages, historical behavior). */
   temperatureUnit?: "celsius" | "fahrenheit";
@@ -31,6 +33,7 @@ export function CpuPanel({
   cpu,
   ram,
   unifiedMemory,
+  hardware,
   sparkId,
   temperatureUnit = "celsius",
   tempLabel,
@@ -94,6 +97,15 @@ export function CpuPanel({
                 {temperatureUnit === "fahrenheit"
                   ? `${Math.round((temperature * 9) / 5 + 32)}°F`
                   : `${temperature}°C`}
+              </span>
+            </div>
+          )}
+          {hardware?.cpuModel && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted">Model</span>
+              <span className="font-tabular text-text" title={hardware.cpuModel}>
+                {hardware.cpuModel}
+                {hardware.cpuCores != null ? ` · ${hardware.cpuCores} cores` : ""}
               </span>
             </div>
           )}

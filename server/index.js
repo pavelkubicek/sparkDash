@@ -1,7 +1,6 @@
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
-import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -41,6 +40,11 @@ import { llmProbeHost } from "./collectors/llmHost.js";
 import { onceClose, resolveLlmHttpTarget } from "./collectors/llmTunnel.js";
 import { formatLlmBaseUrl, parseLlmTargetInput } from "../src/shared/llmTarget.js";
 import { llmDaily } from "./collectors/LlmDaily.js";
+import {
+  createLlmTokenRuntime,
+  registerLlmTokenTotalsRoute,
+  llmTokenLedger,
+} from "./llmtokens/LlmTokenRuntime.js";
 import { closeLlmStreamAgent } from "./collectors/LlmStreaming.js";
 import { compareSemver, getLatestRelease } from "./collectors/HermesReleases.js";
 // ─── Model launcher (isolated module — see server/models/ModelLauncher.js) ───
@@ -328,6 +332,9 @@ const fleetEnergyRuntime = createFleetEnergyRuntime({
   isKeepAwake: isFleetEnergyKeepAwake,
 });
 
+// Cumulative prompt/generated token totals per model (per-UTC-day buckets for range queries).
+const llmTokenRuntime = createLlmTokenRuntime({ ledger: llmTokenLedger, orderedSnapshots });
+
 // ─── Express app ─────────────────────────────────────────
 const app = express();
 const server = createServer(app);
@@ -568,6 +575,7 @@ app.get("/api/dev-engine/webui-url", (req, res) => {
 
 // ─── REST API ────────────────────────────────────────────
 registerFleetEnergyRoute(app, fleetEnergyTracker, isFleetEnergyKeepAwake);
+registerLlmTokenTotalsRoute(app, llmTokenLedger);
 
 // Never return SSH passwords in any response
 app.get("/api/sparks", (_req, res) => {
@@ -1667,7 +1675,7 @@ app.delete("/api/sparks/:id/llm/showcase/:sessionId", (req, res) => {
 // Wake-on-LAN helper is server/wol.js.
 // These routes are unauthenticated like the rest of the LAN dashboard — do not
 // expose port 5555 beyond a trusted network.
-
+// initiateSparkShutdown / shutdownErrorStatus come from ./shutdown.js.
 /** Batch routes first so they never collide with /:id/* if routing changes. */
 app.post("/api/sparks/shutdown-all", async (_req, res) => {
   const results = [];
@@ -2022,6 +2030,7 @@ if (!startupPreflight.fatal) {
     }
     startAllMonitors();
     fleetEnergyRuntime.start();
+    llmTokenRuntime.start();
     // Model launcher probe + scheduler timers. Deliberately not tied to
     // updateMonitorStates(): the night shift must run with zero tabs open.
     modelLauncher.startTimers();
@@ -2068,6 +2077,7 @@ async function shutdown(signal) {
   } catch (err) {
     console.error("[sparkDash] failed to finalize model jobs:", err.message);
   }
+  llmTokenRuntime.stop();
   const energyPersistenceSucceeded = fleetEnergyRuntime.stop();
   const streamAgentClosedGracefully = await closeLlmStreamAgent();
   if (!streamAgentClosedGracefully) {

@@ -1,17 +1,17 @@
 /**
- * shutdown — graceful power-off for Sparks (shared helper; pairs with wol.js).
+ * Shutdown helpers: the power-off invocation for a local unit and the command
+ * string for a remote one.
  *
- * Remote Sparks (over SSH): verify the host script + passwordless sudo, then
- * background it so SSH returns before the host dies:
- *   sudo -n /usr/local/bin/spark-shutdown
- * Install that script on each remote Spark with a NOPASSWD sudoers entry for
- * the SSH user (see README → Power controls for the provisioning one-liner).
+ * The helper lives on the *host* (`/usr/local/bin/spark-shutdown`). A container
+ * install has no sudo of its own, so the local route has to enter the host
+ * mount namespace first — the same nsenter pattern the collectors use to read
+ * /host/proc (the image ships util-linux for exactly this).
  *
- * Local Spark: inside the sparkDash container (privileged, pid: host) there is
- * no sudo and the container namespace is not the host's — nsenter into host
- * PID 1's mount namespace and ask host systemd directly. On a bare host
- * (npm run dev / deploy without Docker) the classic sudo -n script path is
- * used instead.
+ * Local Sparks in the sparkDash container go one step further and skip the
+ * helper entirely: privileged + pid:host means `nsenter -t 1 -m` reaches host
+ * systemd directly (`systemctl poweroff`), so no provisioning is needed on the
+ * dashboard host. Remote Sparks and bare-host installs keep the sudo +
+ * host-script contract.
  *
  * Both paths acknowledge before the host actually goes down — systemctl /
  * nohup'd script *queue* the power-off, so the HTTP response flushes with
@@ -19,28 +19,30 @@
  * binary, sudo wants a password, missing remote script) rejects with the real
  * reason instead of a fake "Shutdown initiated".
  */
-import { spawn } from "child_process";
-import fs from "fs";
-import path from "path";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { HOST_PATHS } from "./config.js";
 import { sshExec } from "./collectors/ssh.js";
 
-const SHUTDOWN_BIN = "/usr/local/bin/spark-shutdown";
+export const SHUTDOWN_BIN = "/usr/local/bin/spark-shutdown";
+
+const SHUTDOWN_ACK_WINDOW_MS = 1500;
 
 /**
- * Remote: verify script + passwordless sudo, then background shutdown so SSH
- * returns before the host dies. Failures before backgrounding surface to the UI.
+ * Host mount namespace of PID 1, or null when the dashboard runs directly on
+ * the host (bare-metal / dev) and there is no container boundary to cross.
+ * @param {string} [procPath]
+ * @returns {string | null}
  */
-const SHUTDOWN_REMOTE_CMD = [
-  `test -x ${SHUTDOWN_BIN} || { echo "missing ${SHUTDOWN_BIN}" >&2; exit 127; }`,
-  // Command-scoped passwordless check: a narrow sudoers rule covering only
-  // SHUTDOWN_BIN passes; the old global `sudo -n true` gate locked out exactly
-  // that (safer) configuration.
-  `sudo -n -l ${SHUTDOWN_BIN} >/dev/null 2>&1 || { echo "passwordless sudo permission missing for ${SHUTDOWN_BIN}" >&2; exit 126; }`,
-  `nohup sudo -n ${SHUTDOWN_BIN} >/dev/null 2>&1 &`,
-  `sleep 0.3`,
-  `exit 0`,
-].join("\n");
-const SHUTDOWN_ACK_WINDOW_MS = 1500;
+export function hostMountNs(procPath = HOST_PATHS.PROC) {
+  const ns = path.join(procPath, "1", "ns", "mnt");
+  try {
+    return fs.existsSync(ns) ? ns : null;
+  } catch {
+    return null;
+  }
+}
 
 /** PATH scan for an executable; mirrors ssh.js sshpassAvailable(). */
 let _commandCache = new Map();
@@ -59,26 +61,95 @@ function commandAvailable(name) {
 }
 
 /**
- * Local power-off command. The dashboard container is the common case:
+ * Local power-off plan. The dashboard container is the common case:
  * /.dockerenv + privileged + pid:host → reach host systemd through PID 1's
- * mount namespace. Anything else (host process, non-shared PID namespace)
- * keeps the sudo + host-script contract.
+ * mount namespace (no host script needed). Anything else (host process,
+ * non-shared PID namespace) falls back to the sudo + host-script contract.
+ * @returns {{ file: string, args: string[] }}
  */
 export function localShutdownPlan() {
   if (fs.existsSync("/.dockerenv") && commandAvailable("nsenter")) {
     return { file: "nsenter", args: ["-t", "1", "-m", "--", "systemctl", "poweroff"] };
   }
-  return { file: "sudo", args: ["-n", SHUTDOWN_BIN] };
+  return localShutdownCommand({ mntNs: hostMountNs() });
 }
 
 /**
- * Only treat "host dropped the SSH session mid-shutdown" as success.
- * Connect timeouts / auth / missing script must remain real errors.
+ * Local invocation. Inside the host mount namespace both `sudo` and the helper
+ * resolve against the host's filesystem; without one this is the plain
+ * bare-host call.
+ * @param {{ bin?: string, mntNs?: string | null, args?: string[] }} [opts]
+ * @returns {{ file: string, args: string[] }}
  */
-function isBenignShutdownSshError(msg) {
-  return /ECONNRESET|Connection reset|broken pipe|Connection closed by remote|closed by remote host|Connection to .* closed/i.test(
-    String(msg || "")
-  );
+export function localShutdownCommand({
+  bin = SHUTDOWN_BIN,
+  mntNs = hostMountNs(),
+  args = [],
+} = {}) {
+  const sudoArgs = ["-n", bin, ...args];
+  return mntNs
+    ? { file: "nsenter", args: [`--mount=${mntNs}`, "--", "sudo", ...sudoArgs] }
+    : { file: "sudo", args: sudoArgs };
+}
+
+/**
+ * Remote command string. Lines are joined with newlines rather than "; " — the
+ * line that backgrounds the helper ends in `&`, and `&;` is a syntax error a
+ * POSIX shell rejects before the helper or the authorization check can run.
+ *
+ * `--check` proves passwordless sudo against the helper itself:
+ * `sudo -n true` is not authorized by a sudoers rule scoped to the helper, so
+ * the old probe failed for exactly the setup the README recommends. The second
+ * probe keeps helpers that predate the `--check` contract working when sudo is
+ * granted more broadly.
+ * @param {string} [bin]
+ */
+export function remoteShutdownCommand(bin = SHUTDOWN_BIN) {
+  return [
+    `test -x ${bin} || { echo "missing ${bin}" >&2; exit 127; }`,
+    `sudo -n ${bin} --check >/dev/null 2>&1 || sudo -n true >/dev/null 2>&1 || { echo "passwordless sudo required for ${bin}" >&2; exit 126; }`,
+    `nohup sudo -n ${bin} >/dev/null 2>&1 &`,
+    `sleep 0.3`,
+    `exit 0`,
+  ].join("\n");
+}
+
+/**
+ * Start the helper on the dashboard's own host. Resolves once it is detached —
+ * the route has already answered the browser by then, because the host (and
+ * this process) is about to go down.
+ * @param {{ bin?: string, mntNs?: string | null, spawnFn?: typeof spawn }} [opts]
+ */
+export function spawnLocalShutdown({
+  bin = SHUTDOWN_BIN,
+  mntNs = hostMountNs(),
+  spawnFn = spawn,
+} = {}) {
+  return new Promise((resolve, reject) => {
+    try {
+      const { file, args } = localShutdownCommand({ bin, mntNs });
+      const child = spawnFn(file, args, { detached: true, stdio: "ignore" });
+      // Settle on 'spawn', not on the return of spawn() — a missing binary
+      // reports through the async 'error' event, which resolving here would
+      // swallow (the caller would log success and the host would stay up).
+      child.on("error", (err) => {
+        const msg = err?.message || String(err);
+        reject(
+          new Error(
+            /ENOENT|not found/i.test(msg)
+              ? `${file} not found — ${bin} is installed on the Spark itself, not in the container`
+              : msg
+          )
+        );
+      });
+      child.on("spawn", () => {
+        child.unref();
+        resolve("Shutdown initiated");
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 function initiateLocalShutdown() {
@@ -126,6 +197,16 @@ function initiateLocalShutdown() {
 }
 
 /**
+ * Only treat "host dropped the SSH session mid-shutdown" as success.
+ * Connect timeouts / auth / missing script must remain real errors.
+ */
+function isBenignShutdownSshError(msg) {
+  return /ECONNRESET|Connection reset|broken pipe|Connection closed by remote|closed by remote host|Connection to .* closed/i.test(
+    String(msg || "")
+  );
+}
+
+/**
  * Kick off graceful shutdown. Always aims to return quickly so the browser
  * gets a real JSON response instead of "Failed to fetch" when the SSH session
  * drops as the host powers off.
@@ -133,7 +214,7 @@ function initiateLocalShutdown() {
 export function initiateSparkShutdown(spark) {
   if (spark.isLocal) return initiateLocalShutdown();
 
-  return sshExec(spark, SHUTDOWN_REMOTE_CMD, { timeoutMs: 8000 })
+  return sshExec(spark, remoteShutdownCommand(), { timeoutMs: 8000 })
     .then(() => "Shutdown initiated")
     .catch((err) => {
       const msg = err.message || String(err);

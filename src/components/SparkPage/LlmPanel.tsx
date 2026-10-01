@@ -12,6 +12,7 @@ import {
 import { BenchmarkDialog } from "./BenchmarkDialog";
 import { PrefillBenchDialog } from "./PrefillBenchDialog";
 import { LlmDailyChart } from "./LlmDailyChart";
+import { LlmTokenTotals } from "./LlmTokenTotals";
 import { parseLlmTargetInput } from "../../shared/llmTarget.js";
 import { LlmTrendChart } from "./LlmTrendChart";
 
@@ -280,6 +281,7 @@ function BackendBadge({ backend }: { backend: string | null }) {
     ds4: "ds4",
     exl3: "EXL3",
     q27: "q27",
+    tensorfold: "TensorFold",
   };
 
   return (
@@ -678,6 +680,7 @@ export function LlmPanel({
             onRemotePrefill={openRemotePrefill}
           />
           <LlmDailyChart sparkId={sparkId} llmPort={llmPort} />
+          <LlmTokenTotals sparkId={sparkId} llmPort={llmPort} />
         </div>
       ) : (
         <div className="space-y-3">
@@ -721,7 +724,7 @@ export function LlmPanel({
           </div>
           <div
             className="flex items-center justify-between"
-            title="Tokens/sec while the engine is reading the prompt and building KV cache — before the first output token. Opening a saved chat in the UI does not hit the GPU; send (or regenerate) so the history is sent as the prompt. Prefix-cache hits do little compute, so this can stay ~0. Long cold prefills show here until decode starts."
+            title="Prompt tokens/sec taken in during the last poll window — cache-served + computed; the rows below split that total into the two parts. Opening a saved chat in the UI does not hit the GPU; send (or regenerate) so the history is sent as the prompt. Cached prefill does little GPU work; uncached prefill is what builds KV cache."
           >
             <span className="text-xs text-muted">Prefill tok/s</span>
             <div className="flex items-center gap-3">
@@ -1004,6 +1007,7 @@ export function LlmPanel({
             onRemoteDecode={openRemoteDecode}
             onRemotePrefill={openRemotePrefill}
           />
+          <LlmTokenTotals sparkId={sparkId} llmPort={llmPort} />
         </div>
       )}
 

@@ -249,6 +249,7 @@ export function SparkPage({
                   cpu={metrics.cpu}
                   ram={metrics.ram}
                   unifiedMemory={metrics.unifiedMemory}
+                  hardware={spark.hardware}
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                   tempLabel="CPU temp"
@@ -309,12 +310,12 @@ export function SparkPage({
                   cpu={metrics.cpu}
                   ram={metrics.ram}
                   unifiedMemory={metrics.unifiedMemory}
+                  hardware={spark.hardware}
                   sparkId={spark.id}
                   className="md:col-span-2"
                 />
                 <GpuPanel
                   gpu={metrics.gpu}
-                  cpu={metrics.cpu}
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                   className={tailscaleOn ? "md:row-span-3" : "md:row-span-2"}

@@ -23,6 +23,11 @@ export function FleetEnergyCard({ nodeCount }: { nodeCount: number }) {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
+  // Fleet coverage is wall-clock time during which every node was fresh, so
+  // it is capped by its measurement window — not window × nodeCount. Use the
+  // server-provided window; DAY_MS is only a fallback for older servers.
+  const coverageWindowMs = data?.coverage24hWindowMs ?? DAY_MS;
+
   // The server owns this flag (settings.energyAlwaysSampling) and reports it
   // on every /api/fleet-energy poll, so the switch can never drift from the
   // sampler's real state for more than one refresh cycle.
@@ -44,7 +49,7 @@ export function FleetEnergyCard({ nodeCount }: { nodeCount: number }) {
   };
 
   const coverage = data && nodeCount > 0
-    ? Math.min(100, (data.coverage24hMs / (DAY_MS * nodeCount)) * 100)
+    ? Math.min(100, (data.coverage24hMs / coverageWindowMs) * 100)
     : 0;
   const state = error
     ? `Energy telemetry unavailable: ${error}`

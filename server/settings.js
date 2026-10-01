@@ -35,6 +35,8 @@ const DEFAULTS = Object.freeze({
   showFleetExceptions: false,
   /** Overview search + status filter row. Off by default. */
   showOverviewSearch: false,
+  /** Overview LLM token totals card (cumulative tokens per model). Off by default. */
+  showLlmTokenTotals: false,
   /**
    * Benchmark dialogs offer the share-card format. On by default: the extra
    * control is one caret next to a button that already copies, and anyone who
@@ -65,6 +67,7 @@ function _clampSettings(settings) {
   s.energyAlwaysSampling = Boolean(s.energyAlwaysSampling);
   s.showFleetExceptions = Boolean(s.showFleetExceptions);
   s.showOverviewSearch = Boolean(s.showOverviewSearch);
+  s.showLlmTokenTotals = Boolean(s.showLlmTokenTotals);
   // Ensure temperatureUnit is valid
   if (s.temperatureUnit !== "celsius" && s.temperatureUnit !== "fahrenheit") {
     s.temperatureUnit = DEFAULTS.temperatureUnit;
