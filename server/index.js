@@ -352,6 +352,11 @@ function clientKey(req) {
 // the dashboard, which keeps the loopback defaults for single-host installs.
 const AI_PROXY_HOST = process.env.AI_PROXY_HOST || "";
 const AI_PROXY_BASE = `http://${AI_PROXY_HOST || "127.0.0.1"}:${AI_PROXY_PORT}`;
+// Public browser-facing base (LAN HTTPS reverse proxy, e.g. https://ai-proxy.lan).
+// When set it REPLACES the host:port-derived "jump to proxy" link; the server-side
+// bridge above keeps fetching the plain-http origin, so the container never needs
+// the LAN root CA. Unset = previous behaviour (AI_PROXY_HOST or request origin).
+const AI_PROXY_URL = (process.env.AI_PROXY_URL || "").replace(/\/+$/, "");
 const AI_PROXY_TIMEOUT_MS = 5000;
 
 async function aiProxyFetch(path, init) {
@@ -449,12 +454,15 @@ function integrationBaseUrl(req, host, port) {
 }
 
 /**
- * Base observer URL for "jump to proxy" links. With AI_PROXY_HOST set the
- * proxy lives on another machine and the link must carry that hostname;
- * otherwise the proxy is co-located and the request's own hostname applies.
+ * Base observer URL for "jump to proxy" links. AI_PROXY_URL (public HTTPS
+ * reverse-proxy base) wins when set; else with AI_PROXY_HOST set the proxy
+ * lives on another machine and the link must carry that hostname; otherwise
+ * the proxy is co-located and the request's own hostname applies.
  */
 app.get("/api/ai-proxy/observer-url", (req, res) => {
-  res.json({ url: `${integrationBaseUrl(req, AI_PROXY_HOST, AI_PROXY_PORT)}/observer` });
+  res.json({
+    url: `${AI_PROXY_URL || integrationBaseUrl(req, AI_PROXY_HOST, AI_PROXY_PORT)}/observer`,
+  });
 });
 
 // ─── Spark Dev Engine bridge ─────────────────────────────
@@ -464,6 +472,10 @@ app.get("/api/ai-proxy/observer-url", (req, res) => {
 // respond 502 so the UI can show a graceful offline state.
 const DEV_ENGINE_API_HOST = process.env.DEV_ENGINE_API_HOST || "";
 const DEV_ENGINE_WEBUI_HOST = process.env.DEV_ENGINE_WEBUI_HOST || "";
+// Public browser-facing base for the engine web UI ("jump to engine") links,
+// e.g. https://spark-dev.lan behind the LAN HTTPS reverse proxy. Same contract
+// as AI_PROXY_URL: overrides the link only; the API bridge above stays http.
+const DEV_ENGINE_WEBUI_URL = (process.env.DEV_ENGINE_WEBUI_URL || "").replace(/\/+$/, "");
 const DEV_ENGINE_API_BASE = `http://${DEV_ENGINE_API_HOST || "127.0.0.1"}:${DEV_ENGINE_API_PORT}`;
 const DEV_ENGINE_TIMEOUT_MS = 5000;
 
@@ -549,9 +561,9 @@ app.post("/api/dev-engine/slots-config", (req, res) => {
   void devEnginePost(req, res, "/api/slots-config");
 });
 
-/** Web UI base URL for "jump to engine" links — configured host, else request origin. */
+/** Web UI base URL for "jump to engine" links — public URL, configured host, else request origin. */
 app.get("/api/dev-engine/webui-url", (req, res) => {
-  res.json({ url: integrationBaseUrl(req, DEV_ENGINE_WEBUI_HOST, DEV_ENGINE_WEBUI_PORT) });
+  res.json({ url: DEV_ENGINE_WEBUI_URL || integrationBaseUrl(req, DEV_ENGINE_WEBUI_HOST, DEV_ENGINE_WEBUI_PORT) });
 });
 
 // ─── REST API ────────────────────────────────────────────

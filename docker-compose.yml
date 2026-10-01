@@ -58,10 +58,15 @@ services:
       - DEV_ENGINE_API_PORT=10000
       - DEV_ENGINE_WEBUI_PORT=10001
       # The AI proxy still runs on spark1, NOT on the dashboard host (currently
-      # dell.lan) — loopback here would be the wrong machine. The Spark Dev
-      # Engine moved to dell.lan (the dashboard host), so its *_HOST vars stay
-      # unset: loopback fetch + request-derived webui link, as co-located.
+      # dell.lan) — the server-side bridge fetches it there over plain http
+      # (loopback would be the wrong machine). The Spark Dev Engine is
+      # co-located on the dashboard host, so its API bridge stays loopback.
+      # Browser-facing "jump" links go through the LAN HTTPS reverse proxy
+      # (MyLAN-Root-CA cert — trusted by the browser, not by this container):
+      # https://ai-proxy.lan / https://spark-dev.lan.
       - AI_PROXY_HOST=spark1.lan
+      - AI_PROXY_URL=https://ai-proxy.lan
+      - DEV_ENGINE_WEBUI_URL=https://spark-dev.lan
       - NODE_ENV=production
       - HOST_PROC_PATH=/host/proc
       - HOST_SYS_PATH=/host/sys
