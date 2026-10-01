@@ -282,9 +282,7 @@ export function SparkPage({
                 />
                 <RamPanel
                   ram={metrics.ram}
-                  cpu={metrics.cpu}
                   sparkId={spark.id}
-                  temperatureUnit={temperatureUnit}
                 />
                 <NetworkPanel
                   network={metrics.network}
