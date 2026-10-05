@@ -290,6 +290,15 @@ export function AiProxyPanel({
         bodyClassName="flex flex-1 flex-col space-y-3"
         actions={
           <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setDetailOpen(true)}
+              title="Show AI Proxy statistics"
+              className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
+            >
+              <ChartIcon className="h-3 w-3" />
+              Statistics
+            </button>
             <a
               href={observerUrl ?? undefined}
               target="_blank"
@@ -300,15 +309,6 @@ export function AiProxyPanel({
               <ExternalLinkIcon className="h-3 w-3" />
               Observer
             </a>
-            <button
-              type="button"
-              onClick={() => setDetailOpen(true)}
-              title="Show AI Proxy statistics"
-              className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
-            >
-              <ChartIcon className="h-3 w-3" />
-              Statistics
-            </button>
           </div>
         }
       >

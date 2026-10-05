@@ -10,7 +10,9 @@ Format: version sections are listed newest first.
 ## [Unreleased]
 
 ### Changed
+- **Integration card header links tightened.** The AI Proxy header now shows **Statistics** first (statistics dialog) with the **Observer** jump link second; the Orchestrator and Auditor header buttons are labeled just **Orchestrator** / **Auditor** instead of "Open orchestrator" / "Open auditor" (tooltips unchanged).
 - **Auditor panel links to the full report list.** The Finished — Ready header now carries a right-aligned "Show all N ready reports" pill styled exactly like the header's Open auditor button, opening the auditor's own report list (`AUDITOR_WEBUI_URL/reports`) in a new tab. The list itself still renders only its first page (8 rows) while the count comes from the auditor's windowed query, so a "(15)" header above 8 rows no longer reads as a bug.
+- **Model Launcher card matches its grid-row partner; compact cards.** The card stretches to the row height (the Auditor beside it is usually taller), so the two integration cards align at the bottom with no dead space — the model list absorbs the difference and scrolls when its own content is taller. Its height is floored at exactly 3 compact cards via a per-density `--density-models-cap` token (533px comfortable, 489px compact). Model cards themselves run tighter than spark overview cards (14px/8px comfortable, 12px/6px compact — overridden on the list wrapper only), measured live on the deployed build. Arrows-based reordering is unchanged.
 - **Model cards reorder with ↑/↓ buttons — drag-and-drop removed.** The Model Launcher list no longer uses HTML5 drag-to-reorder (drag handles, hover-preview swapping, edge auto-scroll): each card now has ↑ / ↓ buttons that move it one slot per click and persist via `PUT /api/models/order`, with the WS snapshot confirming. Disabled at the first/last position. The list container is a plain `min-h-[600px]` scroll area. (Spark-tab reordering is unchanged.)
 
 ### Added

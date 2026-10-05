@@ -271,7 +271,7 @@ export function AuditorPanel() {
             className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
           >
             <ExternalLinkIcon className="h-3 w-3" />
-            Open auditor
+            Auditor
           </a>
         </div>
       }
