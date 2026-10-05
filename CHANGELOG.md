@@ -10,6 +10,7 @@ Format: version sections are listed newest first.
 ## [Unreleased]
 
 ### Changed
+- **Auditor panel links to the full report list.** The Finished — Ready header now carries a right-aligned "Show all N ready reports" pill styled exactly like the header's Open auditor button, opening the auditor's own report list (`AUDITOR_WEBUI_URL/reports`) in a new tab. The list itself still renders only its first page (8 rows) while the count comes from the auditor's windowed query, so a "(15)" header above 8 rows no longer reads as a bug.
 - **Model cards reorder with ↑/↓ buttons — drag-and-drop removed.** The Model Launcher list no longer uses HTML5 drag-to-reorder (drag handles, hover-preview swapping, edge auto-scroll): each card now has ↑ / ↓ buttons that move it one slot per click and persist via `PUT /api/models/order`, with the WS snapshot confirming. Disabled at the first/last position. The list container is a plain `min-h-[600px]` scroll area. (Spark-tab reordering is unchanged.)
 
 ### Added

@@ -303,9 +303,21 @@ export function AuditorPanel() {
               is capped at 600px), the list absorbs the spare height and scrolls
               instead of leaving a dead gap above the footer. */}
           <div className="flex min-h-[7rem] flex-1 flex-col space-y-1">
-            <p className="text-xs uppercase tracking-wide text-muted">
-              Finished — Ready ({readyCount})
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs uppercase tracking-wide text-muted">Finished — Ready</p>
+              {webuiUrl && (
+                <a
+                  href={`${webuiUrl}/reports`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Show all ready reports in the auditor"
+                  className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
+                >
+                  <ExternalLinkIcon className="h-3 w-3" />
+                  Show all {readyCount} ready reports
+                </a>
+              )}
+            </div>
             {finished.length > 0 ? (
               <div className="nice-scroll -mx-1 flex-1 space-y-1 overflow-y-auto px-1">
                 {finished.map((review) => (
