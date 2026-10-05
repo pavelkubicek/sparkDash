@@ -612,8 +612,8 @@ export function OverviewPage({
         <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
           <AiProxyPanel onIdleCounts={setProxyIdle} />
           <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
-          <AuditorPanel />
           {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
+          <AuditorPanel />
         </div>
         <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
         <div className="panel mx-auto mt-4 max-w-md p-8 text-center">
@@ -635,8 +635,8 @@ export function OverviewPage({
       <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
         <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
-        <AuditorPanel />
         {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
+        <AuditorPanel />
       </div>
       <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
       {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} /> : null}
