@@ -390,11 +390,11 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         </div>
       }
     >
-      {/* Single-column list that stretches: the panel is a grid sibling of
-          Auditor (equal row height), so the list grows to match — 2 cards is
-          the minimum visible; taller content scrolls (slim nice-scrollbar).
-          Drag-to-reorder works across the scroll (HTML5 DnD). */}
-      <div ref={scrollRef} className="nice-scroll min-h-[21.5rem] flex-1 overflow-y-auto pr-1">
+      {/* Single-column list: at least ~2 cards (21.5rem), grows with the grid
+          row, hard-capped at 600px — taller content scrolls (slim
+          nice-scrollbar). Drag-to-reorder + auto-scroll work across the
+          scroll (HTML5 DnD). */}
+      <div className="nice-scroll h-[min(max(21.5rem,100%),600px)] overflow-y-auto pr-1">
         <div className="grid" style={{ gap: "var(--density-card-gap)" }}>
           {list.map((m) => (
             <ModelCard
