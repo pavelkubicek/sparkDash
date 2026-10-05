@@ -20,6 +20,7 @@ import { ErrorBanner } from "./components/ui/ErrorBanner";
 import { OVERVIEW_ID } from "./constants";
 import type { Settings, SparkSnapshot } from "./api/types";
 import { isWorkerSpark } from "./api/sparkRole";
+import { useAppBadge } from "./hooks/useAppBadge";
 
 /** Keep hidden worker ids in their original slots when the visible tabs are reordered. */
 function mergeTabOrderKeepingHidden(
@@ -140,6 +141,9 @@ function DashboardApp() {
     snapshotError,
     refreshInterval,
   } = useSnapshot();
+
+  // Fleet tok/s on the PWA icon (Badging API; no-op on unsupported browsers).
+  useAppBadge(sparks, connected);
   const [telemetryNow, setTelemetryNow] = useState(Date.now());
   const navigate = useRoute(setActiveId);
   const [showAdd, setShowAdd] = useState(false);

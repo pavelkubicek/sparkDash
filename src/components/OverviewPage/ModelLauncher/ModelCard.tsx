@@ -6,9 +6,10 @@ import { openModelScheduleDialog } from "../../../hooks/useModelScheduleDialog";
 import { openModelEditDialog } from "../../../hooks/useModelEditDialog";
 import {
   CalendarIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   GearIcon,
   GithubIcon,
-  GripIcon,
   LogsIcon,
   PowerOffIcon,
   PowerOnIcon,
@@ -23,15 +24,11 @@ interface ModelCardProps {
   busyHere: boolean;
   /** Scheduler says this model is the one that *should* be running now. */
   scheduledNow: boolean;
-  /** This card is the one currently being dragged (render dimmed). */
-  dragging: boolean;
-  /** Another card is being hovered over this slot (render the accent ring). */
-  dragOver: boolean;
-  onCardDragStart: (id: string) => void;
-  onCardDragEnter: (id: string) => void;
-  /** The card was dropped on — panel commits the currently previewed order. */
-  onCardDrop: () => void;
-  onCardDragEnd: () => void;
+  /** Reorder: the card is not the first (↑) / last (↓) in the list. */
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  /** Move the card one slot up (-1) or down (1); the panel persists the order. */
+  onMove: (id: string, dir: -1 | 1) => void;
   onActionStarted?: () => void;
 }
 
@@ -51,12 +48,9 @@ export function ModelCard({
   busy,
   busyHere,
   scheduledNow,
-  dragging,
-  dragOver,
-  onCardDragStart,
-  onCardDragEnter,
-  onCardDrop,
-  onCardDragEnd,
+  canMoveUp,
+  canMoveDown,
+  onMove,
   onActionStarted,
 }: ModelCardProps) {
   const [error, setError] = useState<string | null>(null);
@@ -149,35 +143,11 @@ export function ModelCard({
 
   return (
     <article
-      draggable
-      title="Drag this card onto another to reorder the list"
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", model.id);
-        onCardDragStart(model.id);
-      }}
-      onDragOver={(e) => {
-        // preventDefault marks this card a valid drop target — for EVERY card
-        // including the dragged one: once the preview swap slides the dragged
-        // card under the cursor, self-hover must still accept (and keep) the
-        // pending order instead of cancelling the drop.
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        onCardDragEnter(model.id);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        onCardDrop();
-      }}
-      onDragEnd={onCardDragEnd}
-      className={`overview-card flex flex-col transition-opacity ${
-        dragging ? "opacity-40" : ""
-      } ${dragOver ? "ring-1 ring-accent" : ""}`}
+      className="overview-card flex flex-col transition-opacity"
       style={{ padding: "var(--density-card-pad)", gap: "var(--density-card-gap)" }}
     >
-      {/* Header: grip + state dot + name + badges */}
+      {/* Header: state dot + name + badges */}
       <div className="flex items-center gap-2.5">
-        <GripIcon className="h-3 w-3 shrink-0 text-muted opacity-30 transition-opacity hover:opacity-70" />
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
             running ? "bg-success dot-glow-success" : downCertain ? "bg-danger" : "bg-muted"
@@ -233,7 +203,6 @@ export function ModelCard({
                 href={model.repoUrl}
                 target="_blank"
                 rel="noreferrer"
-                onDragStart={(e) => e.preventDefault()}
                 className="shrink-0 text-muted transition-colors hover:text-text"
                 title={model.repoUrl}
               >
@@ -298,7 +267,6 @@ export function ModelCard({
             <button
               type="button"
               onClick={() => void runLogs()}
-              onDragStart={(e) => e.preventDefault()}
               className="flex items-center gap-1 rounded px-1.5 py-0.5 font-tabular text-muted transition-colors hover:bg-surface-hover hover:text-accent"
               title="Tail this container's logs"
             >
@@ -351,11 +319,8 @@ export function ModelCard({
         </button>
       )}
 
-      {/* Actions — starting a drag from a button must not drag the card. */}
-      <div
-        className="mt-auto flex flex-wrap items-center gap-1.5 pt-1"
-        onDragStart={(e) => e.preventDefault()}
-      >
+      {/* Actions */}
+      <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
         {/* Colour-swapped power toggle (SparkActions geometry). A stop stays
             clickable while a job holds the mutating slot — the server
             preempts it; only the in-flight click disables it. */}
@@ -398,6 +363,26 @@ export function ModelCard({
         </button>
 
         <div className="ml-auto flex items-center gap-1">
+          {/* Reorder: one slot per click; the panel persists via
+              PUT /api/models/order and the WS snapshot confirms. */}
+          <button
+            type="button"
+            onClick={() => onMove(model.id, -1)}
+            disabled={!canMoveUp}
+            className="flex items-center rounded-md border border-border bg-surface-elevated px-1.5 py-1.5 text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-40 disabled:hover:bg-surface-elevated"
+            title={canMoveUp ? "Move this model up in the list" : "Already first"}
+          >
+            <ChevronUpIcon className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onMove(model.id, 1)}
+            disabled={!canMoveDown}
+            className="flex items-center rounded-md border border-border bg-surface-elevated px-1.5 py-1.5 text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-40 disabled:hover:bg-surface-elevated"
+            title={canMoveDown ? "Move this model down in the list" : "Already last"}
+          >
+            <ChevronDownIcon className="h-3 w-3" />
+          </button>
           <button
             type="button"
             onClick={() => openModelScheduleDialog(model.id)}

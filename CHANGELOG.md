@@ -9,7 +9,11 @@ Format: version sections are listed newest first.
 
 ## [Unreleased]
 
+### Changed
+- **Model cards reorder with ↑/↓ buttons — drag-and-drop removed.** The Model Launcher list no longer uses HTML5 drag-to-reorder (drag handles, hover-preview swapping, edge auto-scroll): each card now has ↑ / ↓ buttons that move it one slot per click and persist via `PUT /api/models/order`, with the WS snapshot confirming. Disabled at the first/last position. The list container is a plain `min-h-[600px]` scroll area. (Spark-tab reordering is unchanged.)
+
 ### Added
+- **PWA app badge with live fleet tok/s** — the dashboard's installed-app icon now carries a numeric badge via the Badging API (`navigator.setAppBadge`), showing the current fleet-wide decode throughput: the sum of every LLM port's `generationTps` across all sparks, matching the tok/s the Overview/AI Proxy cards display. The value updates on every WebSocket frame (~2 s) and stays live in a backgrounded tab (the LLM probe keeps polling regardless of viewport visibility); it clears when the fleet goes idle (0 tok/s) or the WS disconnects, and on unmount so a closed session never leaves a stale number. Writes are deduplicated per rounded value, and browsers without the Badging API (Firefox, Safari < 17, iOS home-screen bookmarks) are an unaffected no-op. New `src/hooks/useAppBadge.ts`; wired in `DashboardApp`.
 - **Auditor card + Spark Dev Engine renamed to Orchestrator.** The dev-engine integration is now the **Orchestrator** panel (`orchestrator.lan`): same slots/active-tickets/plans/jump-link feature set, new `/api/orchestrator/*` bridge routes and `ORCHESTRATOR_API_PORT` / `ORCHESTRATOR_WEBUI_URL` env names. A new **Auditor** panel joins it on the Overview grid with the same chrome (slots day/night dialog with PATCH saving, "open auditor" jump via `AUDITOR_WEBUI_URL`, 5 s bridge polling, graceful-offline state): the reviews analyzing right now, the most recent finished (Ready) reports, a pipeline status strip colored exactly like auditor.lan (queued gray, analyzing amber pulse, ready cyan, failed red), and the live slot-usage footer (`GET /api/auditor/*` bridges to the reviewer daemon on :10010).
 
 ### Fixed

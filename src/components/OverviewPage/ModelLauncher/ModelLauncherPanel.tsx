@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { WsSnapshot } from "../../../api/types";
 import type { ModelInfo, SchedulerStatus } from "../../../api/modelTypes";
 import {
@@ -41,150 +41,36 @@ function countdown(epochMs: number, nowMs: number): string {
 export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  // Drag-to-reorder: which card is in flight, which slot it hovers, and the
-  // previewed order (null = none). The drop commits via PUT /api/models/order
-  // and the WS snapshot brings the truth back — nothing local is trusted.
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string[] | null>(null);
-  const dragRef = useRef<{ from: string; to: string[] } | null>(null);
-  // Auto-scroll while dragging: cards outside the visible list must stay
-  // reachable, so moving near the list edge scrolls it at an edge-distance
-  // ramp. The rAF loop lives only while a drag is active.
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const dragScroll = useRef<{ y: number; raf: number } | null>(null);
-
   const rawList: ModelInfo[] = models?.models ?? [];
   // The registry already stores the array in `position` order; sort again so a
   // stale/hand-edited payload still renders qwen → deepseek → glm rather than
   // trusting the wire order. Stable: models without a position keep server order.
-  const serverList: ModelInfo[] = rawList.every((m) => m.position == null)
+  const list: ModelInfo[] = rawList.every((m) => m.position == null)
     ? rawList
     : [...rawList].sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9));
-  // While dragging, show the previewed order so the drop lands where it looks.
-  const list: ModelInfo[] =
-    preview != null
-      ? [...serverList].sort((a, b) => preview.indexOf(a.id) - preview.indexOf(b.id))
-      : serverList;
   const scheduler: SchedulerStatus | null = models?.scheduler ?? null;
   const activeJob = models?.activeJob ?? null;
 
-  const handleDragStart = useCallback((id: string) => {
-    setDragId(id);
-    setOverId(id);
-    dragRef.current = null;
-    setPreview(null);
-  }, []);
-
-  const EDGE_ZONE_PX = 56; // distance from the list edge where scrolling ramps in
-  const EDGE_MAX_SPEED = 14; // px/frame at (or beyond) the edge, ≈ 840 px/s
-
-  /** One rAF step: scroll the list toward dragScroll.y, re-arm while dragging. */
-  const dragScrollStep = useCallback(() => {
-    const state = dragScroll.current;
-    const el = scrollRef.current;
-    if (!state || !el) {
-      dragScroll.current = null;
-      return;
-    }
-    const max = el.scrollHeight - el.clientHeight;
-    if (max > 0) {
-      const next = Math.max(0, Math.min(max, el.scrollTop + state.y));
-      if (next !== el.scrollTop) el.scrollTop = next;
-    }
-    state.raf = requestAnimationFrame(dragScrollStep);
-  }, []);
-
-  // Track the pointer over the list while a drag is active and translate it
-  // into an edge-ramp scroll velocity; a plain dragover throttles on some
-  // browsers, so the raw pointer position drives a constant loop instead.
-  useEffect(() => {
-    if (!dragId) {
-      if (dragScroll.current) {
-        cancelAnimationFrame(dragScroll.current.raf);
-        dragScroll.current = null;
-      }
-      return;
-    }
-    const el = scrollRef.current;
-    if (!el) return;
-
-    const onMove = (e: PointerEvent) => {
-      const rect = el.getBoundingClientRect();
-      const fromTop = e.clientY - rect.top;
-      const fromBottom = rect.bottom - e.clientY;
-      const inside = fromTop > -EDGE_ZONE_PX && fromBottom > -EDGE_ZONE_PX;
-      let vy = 0;
-      if (inside) {
-        if (fromTop < EDGE_ZONE_PX) {
-          vy = -((EDGE_ZONE_PX - Math.max(0, fromTop)) / EDGE_ZONE_PX) * EDGE_MAX_SPEED;
-        } else if (fromBottom < EDGE_ZONE_PX) {
-          vy = ((EDGE_ZONE_PX - Math.max(0, fromBottom)) / EDGE_ZONE_PX) * EDGE_MAX_SPEED;
-        }
-      }
-      if (!dragScroll.current) dragScroll.current = { y: vy, raf: 0 };
-      else dragScroll.current.y = vy;
-      if (!dragScroll.current.raf) dragScroll.current.raf = requestAnimationFrame(dragScrollStep);
-    };
-    // pointermove keeps firing outside the window edge zone — clamp there.
-    window.addEventListener("pointermove", onMove, { passive: true });
-    // dragover on the list keeps the browser from refusing the drop on gaps.
-    const onDragOver = (e: DragEvent) => {
-      if (el.contains(e.target as Node)) e.preventDefault();
-    };
-    el.addEventListener("dragover", onDragOver);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      el.removeEventListener("dragover", onDragOver);
-      if (dragScroll.current) {
-        cancelAnimationFrame(dragScroll.current.raf);
-        dragScroll.current = null;
-      }
-    };
-  }, [dragId, dragScrollStep]);
-
-
   /**
-   * Hovering a card: preview moving the dragged card into that slot. Hovering
-   * the dragged card itself keeps the last preview — the preview swap often
-   * slides the dragged card under the cursor, and wiping the order there made
-   * the whole list flicker and the drop never committed.
+   * Move one card a single slot up (-1) or down (1) and persist the new order
+   * via PUT /api/models/order. Fire-and-forget: the next WS snapshot confirms
+   * (or silently reverts) — nothing local is trusted.
    */
-  const handleDragEnter = useCallback(
-    (id: string) => {
-      setOverId(id);
-      if (!dragId || id === dragId) return;
-      const ids = serverList.map((m) => m.id);
-      const from = ids.indexOf(dragId);
-      const to = ids.indexOf(id);
-      if (from === -1 || to === -1) return;
+  const handleMove = useCallback(
+    (id: string, dir: -1 | 1) => {
+      const ids = list.map((m) => m.id);
+      const from = ids.indexOf(id);
+      const to = from + dir;
+      if (from === -1 || to < 0 || to >= ids.length) return;
       const next = [...ids];
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
-      dragRef.current = { from: dragId, to: next };
-      // dragover fires continuously — only re-render when the preview changes.
-      setPreview((prev) => (prev && prev.join("\u0000") === next.join("\u0000") ? prev : next));
+      void setModelOrder(next).catch(() => {
+        /* a rejected order simply never arrives through the snapshot */
+      });
     },
-    [dragId, serverList]
+    [list]
   );
-
-  const clearDrag = useCallback(() => {
-    setDragId(null);
-    setOverId(null);
-    setPreview(null);
-    dragRef.current = null;
-  }, []);
-
-  /** Drop landed on a card — persist the previewed order, if any. */
-  const handleDrop = useCallback(() => {
-    const pending = dragRef.current;
-    clearDrag();
-    if (!pending) return;
-    // Fire-and-forget: the next WS snapshot confirms (or silently reverts).
-    void setModelOrder(pending.to).catch(() => {
-      /* a rejected order simply never arrives through the snapshot */
-    });
-  }, [clearDrag]);
 
   // The countdown is rendered from a local clock so the payload itself can
   // carry a fixed epochMs — that is what keeps the WS payload byte-stable.
@@ -390,25 +276,21 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         </div>
       }
     >
-      {/* Single-column list: at least ~2 cards (21.5rem), grows with the grid
-          row, hard-capped at 600px — taller content scrolls (slim
-          nice-scrollbar). Drag-to-reorder + auto-scroll work across the
-          scroll (HTML5 DnD). */}
-      <div className="nice-scroll h-[min(max(21.5rem,100%),600px)] overflow-y-auto pr-1">
+      {/* Single-column list: at least 600px tall, grows with the grid row —
+          taller content scrolls (slim nice-scrollbar). Cards reorder with
+          their ↑/↓ buttons. */}
+      <div className="nice-scroll min-h-[600px] overflow-y-auto pr-1">
         <div className="grid" style={{ gap: "var(--density-card-gap)" }}>
-          {list.map((m) => (
+          {list.map((m, i) => (
             <ModelCard
               key={m.id}
               model={m}
               busy={activeJob != null}
               busyHere={activeJob?.modelId === m.id}
               scheduledNow={scheduledNowId === m.id}
-              dragging={dragId === m.id}
-              dragOver={overId === m.id && dragId != null && dragId !== m.id}
-              onCardDragStart={handleDragStart}
-              onCardDragEnter={handleDragEnter}
-              onCardDrop={handleDrop}
-              onCardDragEnd={clearDrag}
+              canMoveUp={i > 0}
+              canMoveDown={i < list.length - 1}
+              onMove={handleMove}
             />
           ))}
         </div>
@@ -422,7 +304,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         <span>one model at a time — starting one stops the other first</span>
         <span>actions run the repo&apos;s own script on the host</span>
         <span>closing a transcript never stops a model</span>
-        <span>drag a card onto another to reorder</span>
+        <span>reorder with a card&apos;s ↑ / ↓ buttons</span>
       </footer>
     </Panel>
   );

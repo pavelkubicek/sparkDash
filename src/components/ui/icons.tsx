@@ -72,16 +72,11 @@ export function ChevronDownIcon({ className }: IconProps) {
   );
 }
 
-/** Six-dot drag grip (reorder handles). */
-export function GripIcon({ className }: IconProps) {
+/** Chevron pointing up (reorder a card one slot earlier). */
+export function ChevronUpIcon({ className }: IconProps) {
   return (
-    <svg {...baseProps(className)} fill="currentColor" stroke="none">
-      <circle cx="9" cy="6" r="1.4" />
-      <circle cx="15" cy="6" r="1.4" />
-      <circle cx="9" cy="12" r="1.4" />
-      <circle cx="15" cy="12" r="1.4" />
-      <circle cx="9" cy="18" r="1.4" />
-      <circle cx="15" cy="18" r="1.4" />
+    <svg {...baseProps(className)}>
+      <path d="M18 15l-6-6-6 6" />
     </svg>
   );
 }
