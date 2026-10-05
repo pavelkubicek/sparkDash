@@ -7,12 +7,19 @@ import type {
   AutoPowerStatus,
   DecodeBenchJob,
   DecodeBenchListResponse,
-  DevEnginePlan,
-  DevEngineRunningTask,
-  DevEngineSlotsConfig,
-  DevEngineStatus,
-  DevEngineTicket,
-  DevEngineWebuiUrl,
+  OrchestratorPlan,
+  OrchestratorRunningTask,
+  OrchestratorSlotsConfig,
+  OrchestratorStatus,
+  OrchestratorTicket,
+  OrchestratorWebuiUrl,
+  AuditorReviewStatus,
+  AuditorReviewsResponse,
+  AuditorSlotsConfig,
+  AuditorSlotsPatch,
+  AuditorStats,
+  AuditorStatus,
+  AuditorWebuiUrl,
   FleetEnergy,
   HermesBatchUpdateResponse,
   HermesUpdatesResponse,
@@ -51,7 +58,10 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    const err = new Error(body.error || `HTTP ${res.status}`);
+    // Callers branch on this (e.g. the LogConsole stops on 404, retries anything else).
+    (err as Error & { status?: number }).status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -487,19 +497,19 @@ export function fetchAiProxyObserverUrl(): Promise<AiProxyObserverUrl> {
   return apiFetch("/api/ai-proxy/observer-url");
 }
 
-// ─── Spark Dev Engine ─────────────────────────────────────
-// All calls go through the sparkDash server bridge (/api/dev-engine/*) so the
+// ─── Orchestrator ────────────────────────────────────────
+// All calls go through the sparkDash server bridge (/api/orchestrator/*) so the
 // browser never needs CORS against the engine. Each endpoint returns 502 when
 // the engine is unreachable, letting the UI show a graceful offline state.
 
 /** Scheduler status (slots used/total, ticket counters, model health). */
-export function fetchDevEngineStatus(): Promise<DevEngineStatus> {
-  return apiFetch("/api/dev-engine/status");
+export function fetchOrchestratorStatus(): Promise<OrchestratorStatus> {
+  return apiFetch("/api/orchestrator/status");
 }
 
 /** All tickets, latest iteration each. */
-export function fetchDevEngineTickets(): Promise<DevEngineTicket[]> {
-  return apiFetch("/api/dev-engine/tickets?exclude_plan=true");
+export function fetchOrchestratorTickets(): Promise<OrchestratorTicket[]> {
+  return apiFetch("/api/orchestrator/tickets?exclude_plan=true");
 }
 
 /**
@@ -507,23 +517,23 @@ export function fetchDevEngineTickets(): Promise<DevEngineTicket[]> {
  * The engine excludes completed plans by default; the bridge also strips the
  * bulky `content` markdown and reports `content_length` instead.
  */
-export function fetchDevEnginePlans(): Promise<DevEnginePlan[]> {
-  return apiFetch("/api/dev-engine/plans");
+export function fetchOrchestratorPlans(): Promise<OrchestratorPlan[]> {
+  return apiFetch("/api/orchestrator/plans");
 }
 
 /** Tasks currently in an active state, enriched with ticket info. */
-export function fetchDevEngineRunningTasks(): Promise<DevEngineRunningTask[]> {
-  return apiFetch("/api/dev-engine/running-tasks");
+export function fetchOrchestratorRunningTasks(): Promise<OrchestratorRunningTask[]> {
+  return apiFetch("/api/orchestrator/running-tasks");
 }
 
 /** Slots configuration (day/night concurrency). */
-export function fetchDevEngineSlotsConfig(): Promise<DevEngineSlotsConfig> {
-  return apiFetch("/api/dev-engine/slots-config");
+export function fetchOrchestratorSlotsConfig(): Promise<OrchestratorSlotsConfig> {
+  return apiFetch("/api/orchestrator/slots-config");
 }
 
 /** Request body for updating slots — matches the engine's SlotsConfigRequest
  *  (daytime required; optional fields accept null to keep them unchanged). */
-export interface DevEngineSlotsConfigRequest {
+export interface OrchestratorSlotsConfigRequest {
   daytime_concurrency: number;
   nighttime_enabled?: boolean | null;
   nighttime_concurrency?: number | null;
@@ -532,23 +542,69 @@ export interface DevEngineSlotsConfigRequest {
 }
 
 /** Update slots configuration (day/night concurrency) on the engine. */
-export function updateDevEngineSlotsConfig(
-  patch: DevEngineSlotsConfigRequest
-): Promise<DevEngineSlotsConfig> {
-  return apiFetch("/api/dev-engine/slots-config", {
+export function updateOrchestratorSlotsConfig(
+  patch: OrchestratorSlotsConfigRequest
+): Promise<OrchestratorSlotsConfig> {
+  return apiFetch("/api/orchestrator/slots-config", {
     method: "POST",
     body: JSON.stringify(patch),
   });
 }
 
-/** Web UI base URL for "jump to engine" links. */
-export function fetchDevEngineWebuiUrl(): Promise<DevEngineWebuiUrl> {
-  return apiFetch("/api/dev-engine/webui-url");
+/** Web UI base URL for "open orchestrator" links. */
+export function fetchOrchestratorWebuiUrl(): Promise<OrchestratorWebuiUrl> {
+  return apiFetch("/api/orchestrator/webui-url");
+}
+
+// ─── Auditor ─────────────────────────────────────────────
+// Same bridge pattern as the orchestrator: every call goes through the
+// sparkDash server, each endpoint returns 502 when the daemon is unreachable.
+
+/** Daemon status (slots, analyzing/queued counters, model health). */
+export function fetchAuditorStatus(): Promise<AuditorStatus> {
+  return apiFetch("/api/auditor/status");
+}
+
+/** Review rows, filtered + paged server-side (e.g. status/limit/offset). */
+export function fetchAuditorReviews(query: {
+  status?: AuditorReviewStatus;
+  limit?: number;
+  offset?: number;
+}): Promise<AuditorReviewsResponse> {
+  const search = new URLSearchParams();
+  if (query.status) search.set("status", query.status);
+  if (query.limit != null) search.set("limit", String(query.limit));
+  if (query.offset != null) search.set("offset", String(query.offset));
+  const qs = search.toString();
+  return apiFetch(`/api/auditor/reviews${qs ? `?${qs}` : ""}`);
+}
+
+/** Dashboard counters (by_status buckets, severities, verdicts). */
+export function fetchAuditorStats(): Promise<AuditorStats> {
+  return apiFetch("/api/auditor/stats");
+}
+
+/** Slots configuration (day/night concurrency + night window). */
+export function fetchAuditorSlotsConfig(): Promise<AuditorSlotsConfig> {
+  return apiFetch("/api/auditor/slots-config");
+}
+
+/** PATCH the slots configuration; omitted keys stay untouched. */
+export function updateAuditorSlotsConfig(patch: AuditorSlotsPatch): Promise<AuditorSlotsConfig> {
+  return apiFetch("/api/auditor/slots-config", {
+    method: "POST",
+    body: JSON.stringify(patch),
+  });
+}
+
+/** Web UI base URL for "open auditor" links. */
+export function fetchAuditorWebuiUrl(): Promise<AuditorWebuiUrl> {
+  return apiFetch("/api/auditor/webui-url");
 }
 
 // ─── Spark AutoPower ─────────────────────────────────────
 // Full-width Overview card: idle-watch + auto-wake of the spark fleet.
-// Polled (same pattern as DevEnginePanel), not part of the WS snapshot.
+// Polled (same pattern as OrchestratorPanel), not part of the WS snapshot.
 
 /** Live status + config. */
 export function fetchAutoPower(): Promise<AutoPowerStatus> {

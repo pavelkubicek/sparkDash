@@ -6,7 +6,7 @@ import type { AutoPowerStatus } from "../../api/types";
 import { Panel } from "../ui/Panel";
 import { GearIcon, MoonStarIcon, RotateIcon } from "../ui/icons";
 import type { DayType } from "../../shared/modelSchedules";
-import type { EngineLive, IdleFeed, ProxyLive } from "../../shared/idleCounts";
+import type { OrchestratorLive, IdleFeed, ProxyLive } from "../../shared/idleCounts";
 import { liveBusyReasons } from "../../shared/idleCounts";
 
 const DAY_LABEL: Record<DayType, string> = { weekday: "Workdays", weekend: "Weekend" };
@@ -117,14 +117,14 @@ function SourceBadge({
 /**
  * Spark AutoPower Overview card.
  *
- * Watches the AI proxy (in-flight requests) and the dev engine (slots,
+ * Watches the AI proxy (in-flight requests) and the orchestrator (slots,
  * tickets, plan runs). After the configured idle span of verified quiet
  * inside the watch window, the remote Sparks are shut down; at the wake
  * time a WoL magic packet brings them back. The shutdown DECISION is made
  * server-side on its own 30 s tick (it must fire with no browser open).
  *
  * The displayed live counts, though, are NOT queried here — they are
- * published by the AI Proxy / Dev Engine panels on their own 5 s poll
+ * published by the AI Proxy / Orchestrator panels on their own 5 s poll
  * (lifted to OverviewPage), so this card shows exactly what those widgets
  * show, with zero timing skew between them.
  *
@@ -133,12 +133,12 @@ function SourceBadge({
  */
 export function AutoPowerPanel({
   proxyIdle,
-  engineIdle,
+  orchestratorIdle,
 }: {
   /** AI Proxy panel's latest published counts (null until its first poll). */
   proxyIdle?: ProxyLive | null;
-  /** Dev Engine panel's latest published counts (null until its first poll). */
-  engineIdle?: EngineLive | null;
+  /** Orchestrator panel's latest published counts (null until its first poll). */
+  orchestratorIdle?: OrchestratorLive | null;
 } = {}) {
   const [status, setStatus] = useState<AutoPowerStatus | null | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
@@ -208,8 +208,8 @@ export function AutoPowerPanel({
   const decision = status.lastDecision?.action ?? null;
 
   // Live counters mirrored from the two widgets (see header comment).
-  const feed: IdleFeed = { proxy: proxyIdle ?? null, engine: engineIdle ?? null };
-  const liveAt = Math.max(proxyIdle?.at ?? 0, engineIdle?.at ?? 0);
+  const feed: IdleFeed = { proxy: proxyIdle ?? null, orchestrator: orchestratorIdle ?? null };
+  const liveAt = Math.max(proxyIdle?.at ?? 0, orchestratorIdle?.at ?? 0);
 
   // Headline — a quiet one-liner (Model Launcher whisper style), never a banner.
   let headline: { text: string; tone: string };
@@ -308,25 +308,25 @@ export function AutoPowerPanel({
             }
           />
           <SourceBadge
-            name="Spark Dev Engine"
-            ok={engineIdle ? engineIdle.ok : (status.sources?.engine.ok ?? null)}
+            name="Orchestrator"
+            ok={orchestratorIdle ? orchestratorIdle.ok : (status.sources?.orchestrator.ok ?? null)}
             detail={
-              (engineIdle ? engineIdle.ok : status.sources?.engine.ok)
-                ? `${(engineIdle?.slotsUsed ?? status.sources?.engine.slotsUsed) ?? 0} slots · ${(engineIdle?.ticketsActive ?? status.sources?.engine.ticketsActive) ?? 0} tickets · ${(engineIdle?.plansActive ?? status.sources?.engine.plansActive) ?? 0} plans`
+              (orchestratorIdle ? orchestratorIdle.ok : status.sources?.orchestrator.ok)
+                ? `${(orchestratorIdle?.slotsUsed ?? status.sources?.orchestrator.slotsUsed) ?? 0} slots · ${(orchestratorIdle?.ticketsActive ?? status.sources?.orchestrator.ticketsActive) ?? 0} tickets · ${(orchestratorIdle?.plansActive ?? status.sources?.orchestrator.plansActive) ?? 0} plans`
                 : undefined
             }
             error={
-              engineIdle && !engineIdle.ok
-                ? "unreachable (from Dev Engine panel)"
-                : !engineIdle && status.sources?.engine.ok === false
-                  ? status.sources?.engine.error
+              orchestratorIdle && !orchestratorIdle.ok
+                ? "unreachable (from Orchestrator panel)"
+                : !orchestratorIdle && status.sources?.orchestrator.ok === false
+                  ? status.sources?.orchestrator.error
                   : undefined
             }
           />
           {liveAt > 0 && (
             <span
               className="text-[11px] text-muted"
-              title={`Live counts mirrored from the AI Proxy / Dev Engine panels (own 5 s poll), updated ${whenLabel(liveAt, now)}`}
+              title={`Live counts mirrored from the AI Proxy / Orchestrator panels (own 5 s poll), updated ${whenLabel(liveAt, now)}`}
             >
               updated{" "}
               <span className="font-tabular">{Math.max(0, Math.round((now - liveAt) / 1000))}s ago</span>
@@ -484,7 +484,7 @@ function AutoPowerSettingsDialog({
           </div>
           <p className="mt-1 text-xs font-normal text-muted">
             timezone <span className="text-text">{config.tz}</span> · idle 0 on the proxy and
-            the engine for the set span, inside the window, shuts the Sparks down
+            the orchestrator for the set span, inside the window, shuts the Sparks down
           </p>
         </header>
 
@@ -552,7 +552,7 @@ function AutoPowerSettingsDialog({
           )}
 
           <p className="text-[11px] leading-relaxed text-muted">
-            Sparks shut down only when the AI proxy, the dev engine, and the plan queue have
+            Sparks shut down only when the AI proxy, the orchestrator, and the plan queue have
             all been quiet for the full idle span. An unreachable source counts as busy —
             the dashboard host itself is never powered off.
           </p>

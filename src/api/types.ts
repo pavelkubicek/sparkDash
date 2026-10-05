@@ -1044,15 +1044,15 @@ export interface AiProxyObserverUrl {
   url: string;
 }
 
-// ─── Spark Dev Engine (via sparkDash bridge) ───────────────
+// ─── Orchestrator (via sparkDash bridge) ───────────────
 /**
- * The Spark Dev Engine runs on the loopback host: API on port 10000, Web UI
+ * The Orchestrator runs on the loopback host: API on port 10000, Web UI
  * on port 10001. sparkDash talks to it via a bridge so the browser never needs
  * CORS. All fields mirror the engine payloads.
  */
 
 /** Scheduler status as reported by the engine. */
-export interface DevEngineStatus {
+export interface OrchestratorStatus {
   running: boolean;
   paused: boolean;
   slots_used: number;
@@ -1067,7 +1067,7 @@ export interface DevEngineStatus {
 }
 
 /** One ticket summary as reported by the engine. */
-export interface DevEngineTicket {
+export interface OrchestratorTicket {
   ticket_id: string;
   name: string;
   status: "queued" | "in_progress" | "review" | "completed" | "failed";
@@ -1096,7 +1096,7 @@ export interface DevEngineTicket {
  * `plan_id` may already carry the `PLAN-` prefix; the engine's ticket mirror is
  * `PLAN-${plan_id}` when the prefix is missing.
  */
-export interface DevEnginePlan {
+export interface OrchestratorPlan {
   plan_id: string;
   name: string;
   status: "queued" | "processing" | "creating_ticket" | "completed" | "failed";
@@ -1115,7 +1115,7 @@ export interface DevEnginePlan {
 }
 
 /** One currently-running task enriched with ticket info. */
-export interface DevEngineRunningTask {
+export interface OrchestratorRunningTask {
   task_id: string;
   name: string;
   status: string;
@@ -1129,7 +1129,7 @@ export interface DevEngineRunningTask {
 }
 
 /** Slots configuration. */
-export interface DevEngineSlotsConfig {
+export interface OrchestratorSlotsConfig {
   daytime_concurrency: number;
   nighttime_enabled: boolean;
   nighttime_concurrency: number;
@@ -1139,9 +1139,122 @@ export interface DevEngineSlotsConfig {
 }
 
 /** Response for the webui-url helper. */
-export interface DevEngineWebuiUrl {
+export interface OrchestratorWebuiUrl {
   url: string;
 }
+
+// ─── Auditor (via sparkDash bridge) ────────────────────────
+/**
+ * The Auditor reviewer daemon runs co-located: API on port 10010 (/api/*),
+ * web UI behind the LAN reverse proxy (auditor.lan). Same bridge contract as
+ * the Orchestrator. All fields mirror the auditor payloads (its wire format
+ * is `auditor-ui/src/types.ts`, mirroring `src/auditor/models.py`).
+ */
+
+/** Daemon status as reported by GET /api/status. */
+export interface AuditorStatus {
+  running: boolean;
+  paused: boolean;
+  enabled: boolean;
+  /** Reviews currently being analyzed (slot consumers). */
+  analyzing: number;
+  slots_used: number;
+  slots_total: number;
+  in_nighttime: boolean;
+  pause_mode: "graceful" | "kill" | null;
+  reviews_queued: number;
+  repos_enabled: number;
+  model_online: boolean | null;
+  review_model: string | null;
+  model_last_check: string | null;
+  model_offline_since: string | null;
+  model_probe_unreachable: boolean | null;
+  served_models: string[] | null;
+  idle_gate: Record<string, unknown> | null;
+  version: string;
+}
+
+/** The full review lifecycle (`models.ReviewStatus`). */
+export type AuditorReviewStatus =
+  | "queued"
+  | "analyzing"
+  | "findings_ready"
+  | "duplicate"
+  | "failed"
+  | "cancelled";
+
+/** One review row as reported by GET /api/reviews (`stats.review_dict` + counters). */
+export interface AuditorReview {
+  id: string;
+  repo_id: string;
+  branch: string;
+  scope_kind: "commit" | "feature" | "delta";
+  scope_key: string;
+  status: AuditorReviewStatus;
+  title: string | null;
+  duplicate_of: string | null;
+  iteration: number;
+  head_sha: string | null;
+  base_sha: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  partial: boolean;
+  tier: "a" | "b" | null;
+  tier_reason: string | null;
+  seen_at: string | null;
+  has_findings: boolean;
+  finding_count: number;
+  findings_by_severity: Partial<Record<"critical" | "major" | "minor" | "info", number>>;
+}
+
+/** Response envelope of GET /api/reviews. */
+export interface AuditorReviewsResponse {
+  reviews: AuditorReview[];
+  count: number;
+  limit: number;
+  offset: number;
+}
+
+/** `GET /stats` — dashboard counters; only the keys the panel reads are spelled out. */
+export interface AuditorStats {
+  by_status: Record<AuditorReviewStatus, number>;
+  findings_by_severity: Partial<
+    Record<"critical" | "major" | "minor" | "info", number>
+  >;
+  verdicts: Partial<Record<"pending" | "flagged" | "ok" | "dismissed", number>>;
+  signal_rate: number | null;
+  repos_total: number;
+  repos_enabled: number;
+}
+
+/** Slots configuration (GET /api/slots-config, `api.SlotsConfigResponse`). */
+export interface AuditorSlotsConfig {
+  daytime_concurrency: number;
+  nighttime_enabled: boolean;
+  nighttime_concurrency: number;
+  nighttime_start_hour: number;
+  nighttime_end_hour: number;
+  nighttime_timezone: string;
+  /** What the dispatcher honours right now, night or day. */
+  effective_concurrency: number;
+  in_nighttime: boolean;
+  paused: boolean;
+  pause_mode: "graceful" | "kill" | null;
+}
+
+/** PATCH body for POST /api/slots-config — a subset; omitted keys stay untouched. */
+export type AuditorSlotsPatch = Partial<
+  Omit<
+    AuditorSlotsConfig,
+    "effective_concurrency" | "in_nighttime" | "paused" | "pause_mode"
+  >
+>;
+
+/** Response for the auditor webui-url helper. */
+export interface AuditorWebuiUrl {
+  url: string;
+}
+
 // ─── Spark AutoPower ───────────────────────────────────────
 /** One watch span (single per day type, "HH:MM", end ≤ start wraps past midnight). */
 export interface AutoPowerWindow {
@@ -1163,7 +1276,7 @@ export interface AutoPowerConfig {
 export interface AutoPowerSources {
   at: number;
   proxy: { ok: boolean; streams?: number; requests?: number; error?: string };
-  engine: {
+  orchestrator: {
     ok: boolean;
     slotsUsed?: number;
     ticketsActive?: number;

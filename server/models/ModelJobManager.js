@@ -139,6 +139,20 @@ function publicJob(job, opts = {}) {
     totalChars: job.transcript.totalChars,
     truncated: job.transcript.baseOffset > 0,
     killed: job.killed,
+    /**
+     * Is the spawned process still attached? false = the ssh/tail died but the
+     * job record is still up; null = unknown (recovered record, never spawned
+     * here). A healthy-but-silent log tail must be distinguishable from a dead
+     * one — tensorfold-style runtimes log nothing per request.
+     */
+    alive:
+      job._child && !job._child.killed
+        ? job._child.exitCode === null && job._child.signalCode === null
+        : job._child
+          ? false
+          : null,
+    /** When the transcript last grew (startedAt if nothing ever arrived). */
+    lastOutputAt: job.lastOutputAt ?? job.startedAt,
     ...(opts.includeTail ? { tail: job.transcript.read(opts.since ?? null).text } : {}),
   };
 }
@@ -337,6 +351,7 @@ export class ModelJobManager {
       error: null,
       timedOut: false,
       killed: false,
+      lastOutputAt: Date.now(),
       transcript: new Transcript(),
       _abort: new AbortController(),
     };
@@ -370,6 +385,7 @@ export class ModelJobManager {
       const lines = partial.split("\n");
       partial = lines.pop() ?? "";
       if (lines.length) {
+        job.lastOutputAt = Date.now();
         job.transcript.append(
           lines.map((l) => (l.length > LINE_MAX ? `${l.slice(0, LINE_MAX)}…` : l)).join("\n") + "\n"
         );
@@ -408,6 +424,9 @@ export class ModelJobManager {
         onData: push,
         timeoutMs: chunkTimeout,
         signal: job._abort.signal,
+        onSpawn: (child) => {
+          job._child = child;
+        },
       });
       if (res.cancelled || res.timedOut) break;
     }

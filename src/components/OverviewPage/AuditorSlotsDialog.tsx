@@ -1,21 +1,21 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchOrchestratorSlotsConfig,
-  updateOrchestratorSlotsConfig,
+  fetchAuditorSlotsConfig,
+  updateAuditorSlotsConfig,
 } from "../../api/client";
-import type { OrchestratorSlotsConfig } from "../../api/types";
+import type { AuditorSlotsConfig } from "../../api/types";
 import { useModalPresence } from "../../hooks/useModalPresence";
 import { BoltIcon } from "../ui/icons";
 
 function useEscape(onClose: () => void, enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
-    const handler = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [onClose, enabled]);
 }
 
@@ -31,10 +31,10 @@ function useBodyScrollLock(locked: boolean) {
   }, [locked]);
 }
 
-interface SlotSettingsDialogProps {
+interface AuditorSlotsDialogProps {
   open: boolean;
   onClose: () => void;
-  onSaved?: (config: OrchestratorSlotsConfig) => void;
+  onSaved?: (config: AuditorSlotsConfig) => void;
 }
 
 function clampInt(v: string): string {
@@ -50,21 +50,22 @@ function clampHour(v: string): string {
 }
 
 /**
- * Edit the Orchestrator scheduler slot settings (day/night concurrency).
- * Reads the current config via the sparkDash bridge and persists changes with
- * a POST to the orchestrator's /api/slots-config through the same bridge.
+ * Edit the Auditor analysis slot settings (day/night concurrency + night
+ * window). Reads the current plan via the sparkDash bridge and persists a
+ * PATCH (only touched keys) to the auditor's /api/slots-config through the
+ * same bridge. Half-open [start, end) window — end ≤ start wraps midnight.
  */
-export function SlotSettingsDialog({ open, onClose, onSaved }: SlotSettingsDialogProps) {
+export function AuditorSlotsDialog({ open, onClose, onSaved }: AuditorSlotsDialogProps) {
   const { mounted, visible } = useModalPresence(open);
   useEscape(onClose, open && mounted);
   useBodyScrollLock(open && mounted);
 
-  const [config, setConfig] = useState<OrchestratorSlotsConfig | null>(null);
+  const [config, setConfig] = useState<AuditorSlotsConfig | null>(null);
   const [day, setDay] = useState("4");
   const [nightEnabled, setNightEnabled] = useState(true);
-  const [night, setNight] = useState("8");
-  const [startHour, setStartHour] = useState("18");
-  const [endHour, setEndHour] = useState("9");
+  const [night, setNight] = useState("2");
+  const [startHour, setStartHour] = useState("21");
+  const [endHour, setEndHour] = useState("6");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -74,8 +75,7 @@ export function SlotSettingsDialog({ open, onClose, onSaved }: SlotSettingsDialo
     let cancelled = false;
     setError(null);
     setSaved(false);
-    setSaving(false);
-    fetchOrchestratorSlotsConfig()
+    fetchAuditorSlotsConfig()
       .then((cfg) => {
         if (cancelled) return;
         setConfig(cfg);
@@ -97,12 +97,14 @@ export function SlotSettingsDialog({ open, onClose, onSaved }: SlotSettingsDialo
     setError(null);
     setSaving(true);
     try {
-      const next = await updateOrchestratorSlotsConfig({
+      // PATCH discipline: only the keys the operator sees in this dialog; the
+      // auditor treats omitted keys as "untouched" and 422s unknown ones.
+      const next = await updateAuditorSlotsConfig({
         daytime_concurrency: parseInt(day, 10),
         nighttime_enabled: nightEnabled,
-        nighttime_concurrency: nightEnabled ? parseInt(night, 10) : null,
-        nighttime_start_hour: nightEnabled ? parseInt(startHour, 10) : null,
-        nighttime_end_hour: nightEnabled ? parseInt(endHour, 10) : null,
+        nighttime_concurrency: nightEnabled ? parseInt(night, 10) : undefined,
+        nighttime_start_hour: nightEnabled ? parseInt(startHour, 10) : undefined,
+        nighttime_end_hour: nightEnabled ? parseInt(endHour, 10) : undefined,
       });
       setConfig(next);
       setDay(String(next.daytime_concurrency));
@@ -141,12 +143,12 @@ export function SlotSettingsDialog({ open, onClose, onSaved }: SlotSettingsDialo
         className="modal-sheet max-w-md"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="slot-settings-title"
+        aria-labelledby="auditor-slots-title"
       >
         <header className="modal-sheet__header">
           <div className="flex items-center gap-2">
             <BoltIcon className="h-4 w-4 shrink-0 text-accent" />
-            <span>Slot settings</span>
+            <span>Auditor slot settings</span>
           </div>
           {config && (
             <p className="mt-1 text-xs font-normal text-muted">
@@ -227,8 +229,9 @@ export function SlotSettingsDialog({ open, onClose, onSaved }: SlotSettingsDialo
                     </label>
                   </div>
                   <p className="text-[11px] leading-relaxed text-muted">
-                    Nighttime window {startHour}:00 – {endHour}:00. If end ≤ start,
-                    the window wraps across midnight.
+                    Reviews may start between {startHour}:00 and {endHour}:00
+                    {config.nighttime_timezone ? ` (${config.nighttime_timezone})` : ""}. If
+                    end ≤ start, the window wraps across midnight.
                   </p>
                 </div>
               )}

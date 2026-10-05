@@ -33,14 +33,17 @@ services:
       - SPARKDASH_ALLOW_OPEN_REMOTE=${SPARKDASH_ALLOW_OPEN_REMOTE:-1}
       - PORT=5555
       - LLM_PORT=8888
-      # Spark Dev Engine integration ports (API + Web UI)
-      - DEV_ENGINE_API_PORT=10000
-      - DEV_ENGINE_WEBUI_PORT=10001
-      # AI proxy bridge fetches spark1.lan over plain http; dev engine is co-located
-      # (see docker-compose.yml). Jump links go through the LAN HTTPS reverse proxy.
+      # Orchestrator + Auditor integration ports (APIs + Web UIs)
+      - ORCHESTRATOR_API_PORT=10000
+      - ORCHESTRATOR_WEBUI_PORT=10001
+      - AUDITOR_API_PORT=10010
+      # AI proxy bridge fetches spark1.lan over plain http; orchestrator and
+      # auditor are co-located (see docker-compose.yml). Jump links go through
+      # the LAN HTTPS reverse proxy.
       - AI_PROXY_HOST=spark1.lan
       - AI_PROXY_URL=https://ai-proxy.lan
-      - DEV_ENGINE_WEBUI_URL=https://spark-dev.lan
+      - ORCHESTRATOR_WEBUI_URL=https://orchestrator.lan
+      - AUDITOR_WEBUI_URL=https://auditor.lan
       - NODE_ENV=development
       - HOST_PROC_PATH=/host/proc
       - HOST_SYS_PATH=/host/sys

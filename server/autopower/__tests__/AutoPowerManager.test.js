@@ -22,11 +22,11 @@ function atSummer(y, mo, d, h, mi) {
 
 const IDLE_SOURCES = {
   proxy: { ok: true, streams: 0, requests: 0 },
-  engine: { ok: true, slotsUsed: 0, ticketsActive: 0, plansActive: 0 },
+  orchestrator: { ok: true, slotsUsed: 0, ticketsActive: 0, plansActive: 0 },
 };
 const BUSY_SOURCES = {
   proxy: { ok: true, streams: 2, requests: 0 },
-  engine: { ok: true, slotsUsed: 0, ticketsActive: 0, plansActive: 0 },
+  orchestrator: { ok: true, slotsUsed: 0, ticketsActive: 0, plansActive: 0 },
 };
 
 const SPARKS = [
@@ -102,11 +102,11 @@ test("busy sources reset the idle timer", async () => {
 
 test("unreachable source counts as busy, never idle", async () => {
   const { manager } = makeManager({
-    sources: { proxy: { ok: true, streams: 0, requests: 0 }, engine: { ok: false, error: "ECONNREFUSED" } },
+    sources: { proxy: { ok: true, streams: 0, requests: 0 }, orchestrator: { ok: false, error: "ECONNREFUSED" } },
   });
   const d = await manager.runTick(MON_0200);
   assert.equal(d.action, "busy");
-  assert.match(d.reason, /dev engine unreachable/);
+  assert.match(d.reason, /Orchestrator unreachable/);
 });
 
 test("idle outside the watch window only counts — no shutdown", async () => {
@@ -149,7 +149,7 @@ test("no double shutdown: offline sparks end the sweep, no re-fire", async () =>
       proxy: online.has("spark1-lan")
         ? { ok: true, streams: 0, requests: 0 }
         : { ok: false, error: "fetch failed" },
-      engine: IDLE_SOURCES.engine,
+      orchestrator: IDLE_SOURCES.orchestrator,
     }),
   });
   await manager.runTick(MON_0200); // idle starts
@@ -194,7 +194,7 @@ test("wake fires at the scheduled minute, only for offline sparks, once", async 
     online: [], // both sparks are off (they were shut down overnight)
     sources: () => ({
       proxy: { ok: false, error: "down" },
-      engine: IDLE_SOURCES.engine,
+      orchestrator: IDLE_SOURCES.orchestrator,
     }),
   });
   const d = await manager.runTick(at(2026, 1, 5, 8, 0)); // Mon 08:00 sharp
@@ -210,7 +210,7 @@ test("wake fires at the scheduled minute, only for offline sparks, once", async 
 test("wake outside the grace window (hours later) does not fire", async () => {
   const { manager, calls } = makeManager({
     online: [],
-    sources: { proxy: { ok: false, error: "down" }, engine: IDLE_SOURCES.engine },
+    sources: { proxy: { ok: false, error: "down" }, orchestrator: IDLE_SOURCES.orchestrator },
   });
   const d = await manager.runTick(at(2026, 1, 5, 11, 0)); // 08:00 wake + 3 h
   assert.equal(d.action, "busy");
@@ -227,7 +227,7 @@ test("wake skipped when all sparks are already online", async () => {
 test("weekend wake time governs Saturday", async () => {
   const { manager, calls } = makeManager({
     online: [],
-    sources: { proxy: { ok: false, error: "down" }, engine: IDLE_SOURCES.engine },
+    sources: { proxy: { ok: false, error: "down" }, orchestrator: IDLE_SOURCES.orchestrator },
   });
   const d = await manager.runTick(at(2026, 1, 3, 9, 0)); // Sat 09:00 — weekend wake is 10:00
   assert.equal(d.action, "busy");
@@ -277,22 +277,22 @@ test("statusBlock exposes live watch/wake/idle view", async () => {
 test("busyReasons: pure matrix of source shapes", () => {
   assert.deepEqual(busyReasons(IDLE_SOURCES), []);
   assert.equal(busyReasons(BUSY_SOURCES).length, 1);
-  assert.equal(busyReasons({ proxy: { ok: false }, engine: { ok: false } }).length, 2);
+  assert.equal(busyReasons({ proxy: { ok: false }, orchestrator: { ok: false } }).length, 2);
   assert.equal(
-    busyReasons({ proxy: { ok: false }, engine: IDLE_SOURCES.engine }).length,
+    busyReasons({ proxy: { ok: false }, orchestrator: IDLE_SOURCES.orchestrator }).length,
     1
   );
   assert.equal(
     busyReasons({
       proxy: IDLE_SOURCES.proxy,
-      engine: { ok: true, slotsUsed: 0, ticketsActive: 3, plansActive: 0 },
+      orchestrator: { ok: true, slotsUsed: 0, ticketsActive: 3, plansActive: 0 },
     }).length,
     1
   );
   assert.equal(
     busyReasons({
       proxy: IDLE_SOURCES.proxy,
-      engine: { ok: true, slotsUsed: 0, ticketsActive: 0, plansActive: 1 },
+      orchestrator: { ok: true, slotsUsed: 0, ticketsActive: 0, plansActive: 1 },
     }).length,
     1
   );

@@ -54,11 +54,13 @@ type RunningItem =
 
 /**
  * A stream's visual state:
- * - "streaming": any data has arrived — answer text, reasoning/thinking text,
- *   or SSE chunks. The proxy streams reasoning tokens before the answer, so a
- *   stream with textLength 0 can still be actively outputting (thinking).
- *   (orange, like the proxy)
- * - "prefill": truly idle — no chunks and no chars yet (white)
+ * - "streaming": real output has arrived — answer text, reasoning/thinking text,
+ *   or more than one SSE chunk. The proxy streams reasoning tokens before the
+ *   answer, so a stream with textLength 0 can still be actively outputting
+ *   (thinking). (orange, like the proxy)
+ * - "prefill": truly idle — no chars and at most one chunk (white). Some
+ *   backends emit exactly one chunk immediately (role/first-byte event) and
+ *   then stall during prefill, so a single chunk is not evidence of streaming.
  * - "request": a non-streaming request (blue)
  */
 type StreamState = "streaming" | "prefill" | "request";
@@ -68,7 +70,7 @@ function streamState(item: RunningItem): StreamState {
   const text = item.textLength ?? 0;
   const thinking = item.thinkingLength ?? 0;
   const chunks = item.chunksReceived ?? 0;
-  return text > 0 || thinking > 0 || chunks > 0 ? "streaming" : "prefill";
+  return text > 0 || thinking > 0 || chunks > 1 ? "streaming" : "prefill";
 }
 
 /** Sum of all output characters (answer text + tool calls + thinking). */

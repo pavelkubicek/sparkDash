@@ -1,5 +1,5 @@
 {
-  "pollIntervalMs": 1000,
+  "pollIntervalMs": 2000,
   "defaultLlmPort": 8000,
   "autoHideOffline": false,
   "hideWorkers": false,
@@ -11,5 +11,6 @@
   "energyAlwaysSampling": false,
   "showFleetExceptions": false,
   "showOverviewSearch": false,
+  "showLlmTokenTotals": false,
   "benchShareImage": true
 }

@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { formatDuration } from "../../../shared/formatDuration";
 import { deleteModelJob, fetchModelJob } from "../../../api/modelClient";
 import type { ModelAction, ModelJob } from "../../../api/modelTypes";
 import { formatLogLine } from "./logFormat";
 
 const POLL_MS = 500;
+/** Retry delay after a failed poll — a redeploy or network blip must not freeze the console. */
+const POLL_RETRY_MS = 2000;
+/** Running tail with no new output for this long gets a "quiet" hint. */
+const QUIET_AFTER_MS = 60_000;
 /** Stick-to-bottom slack, matching TerminalCard's behaviour. */
 const BOTTOM_SLACK_PX = 64;
 
@@ -75,8 +80,17 @@ export function LogConsole({ jobId, onSettled }: LogConsoleProps) {
           onSettled?.(next);
         }
       } catch (err: unknown) {
-        // 404 = job record was pruned; treat as ended rather than retrying.
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        // 404 = the job record is gone (pruned, released, server restarted
+        // without recovery): the transcript is unrecoverable, stop here.
+        // Anything else — a sparkDash redeploy, a restart, a network blip —
+        // is transient and MUST NOT freeze the console on stale text: keep
+        // polling at a slower rate until it comes back.
+        const status = (err as { status?: number } | null)?.status;
+        setError(message);
+        if (status === 404) return;
+        timer = setTimeout(poll, POLL_RETRY_MS);
         return;
       }
       if (!cancelled) timer = setTimeout(poll, POLL_MS);
@@ -154,6 +168,30 @@ export function LogConsole({ jobId, onSettled }: LogConsoleProps) {
           >
             {job.status}
           </span>
+          {job.status === "running" && job.alive !== null && (
+            <span
+              className={`rounded px-1.5 py-0.5 ${
+                job.alive ? "bg-success/15 text-success" : "bg-danger/15 text-danger"
+              }`}
+              title={
+                job.alive
+                  ? "The log tail is attached and healthy"
+                  : "The log tail process died — the transcript will not grow. Reopen the logs to start a fresh tail."
+              }
+            >
+              {job.alive ? "attached" : "detached"}
+            </span>
+          )}
+          {job.status === "running" &&
+            typeof job.lastOutputAt === "number" &&
+            Date.now() - job.lastOutputAt > QUIET_AFTER_MS && (
+              <span
+                className="rounded bg-border/60 px-1.5 py-0.5"
+                title="No new output for a while. The tail is still attached — some runtimes (e.g. tensorfold) log nothing per request, so a quiet stream is normal."
+              >
+                quiet {formatDuration(Date.now() - job.lastOutputAt)}
+              </span>
+            )}
           {job.script && (
             <span className="font-tabular">
               {job.script.includes(" ") ? job.script : `./${job.script}`}

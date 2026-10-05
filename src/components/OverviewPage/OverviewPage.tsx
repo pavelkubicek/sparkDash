@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { EngineLive, ProxyLive } from "../../shared/idleCounts";
+import type { OrchestratorLive, ProxyLive } from "../../shared/idleCounts";
 import type { LlmMetrics, SparkSnapshot, WsSnapshot } from "../../api/types";
 import { isWorkerSpark, resolveSparkRole } from "../../api/sparkRole";
 import { shutdownAllSparks, updateAllHermes, wakeAllSparks } from "../../api/client";
@@ -10,7 +10,8 @@ import { FleetAlertStrip } from "./FleetAlertStrip";
 import { FleetTokenTotals } from "./FleetTokenTotals";
 import { ActivityIcon, PowerOffIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { AiProxyPanel } from "./AiProxyPanel";
-import { DevEnginePanel } from "./DevEnginePanel";
+import { OrchestratorPanel } from "./OrchestratorPanel";
+import { AuditorPanel } from "./AuditorPanel";
 import { ModelLauncherPanel } from "./ModelLauncher/ModelLauncherPanel";
 import { AutoPowerPanel } from "./AutoPowerPanel";
 import { useSparkGraphRef } from "../../hooks/sparkVisibility";
@@ -467,11 +468,11 @@ export function OverviewPage({
   const [shutdownOpen, setShutdownOpen] = useState(false);
   /** Spark ids we started a batch Hermes update on; drives the live progress bar. */
   const [batchRun, setBatchRun] = useState<string[] | null>(null);
-  // Live idle counts published by the AI Proxy / Dev Engine panels on their own
-  // 5 s poll (AiProxyPanel / DevEnginePanel call these every cycle). AutoPower
+  // Live idle counts published by the AI Proxy / Orchestrator panels on their own
+  // 5 s poll (AiProxyPanel / OrchestratorPanel call these every cycle). AutoPower
   // displays THESE — the same numbers, the same cadence, never a third query.
   const [proxyIdle, setProxyIdle] = useState<ProxyLive | null>(null);
-  const [engineIdle, setEngineIdle] = useState<EngineLive | null>(null);
+  const [orchestratorIdle, setOrchestratorIdle] = useState<OrchestratorLive | null>(null);
 
   const onlineShutdownCount = sparks.filter((s) => s.online).length;
   const hermesMonitoredCount = sparks.filter((s) => s.hermes?.monitoring).length;
@@ -609,11 +610,12 @@ export function OverviewPage({
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-overview-rhythm)" }}>
         <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
           <AiProxyPanel onIdleCounts={setProxyIdle} />
-          <DevEnginePanel onIdleCounts={setEngineIdle} />
+          <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
+          <AuditorPanel />
         </div>
         {/* Full-width: direct child of the page column, not the 2-col grid. */}
         {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
-        <AutoPowerPanel proxyIdle={proxyIdle} engineIdle={engineIdle} />
+        <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
         <div className="panel mx-auto mt-4 max-w-md p-8 text-center">
           <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
             <ActivityIcon className="h-5 w-5" />
@@ -629,14 +631,15 @@ export function OverviewPage({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-overview-rhythm)" }}>
-      {/* Panels first — AI Proxy + Spark Dev Engine */}
+      {/* Panels first — AI Proxy + Orchestrator + Auditor */}
       <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
-        <DevEnginePanel onIdleCounts={setEngineIdle} />
+        <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
+        <AuditorPanel />
       </div>
       {/* Full-width: direct child of the page column, not the 2-col grid. */}
       {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
-      <AutoPowerPanel proxyIdle={proxyIdle} engineIdle={engineIdle} />
+      <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
       {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} /> : null}
       {showFleetExceptions ? <FleetAlertStrip sparks={sparks} onSelect={onSelectSpark} /> : null}
       <div className="flex flex-wrap items-end justify-between gap-6">

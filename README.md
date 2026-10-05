@@ -474,9 +474,11 @@ Copy `.env.example` to `.env` if needed:
 | `MODEL_PROBE_INTERVAL_MS` | `5000` | Model liveness probe cadence (ms) |
 | `MODEL_SCHEDULER_TZ` | `Europe/Prague` | Time zone for scheduler windows (DST-safe) |
 | `AI_PROXY_HOST` | _(loopback)_ | Host running the AI proxy (:3001) when it is **not** the dashboard machine |
-| `DEV_ENGINE_API_HOST` / `DEV_ENGINE_WEBUI_HOST` | _(loopback)_ | Host running the Spark Dev Engine API (:10000) / Web UI (:10001) |
+| `ORCHESTRATOR_API_HOST` / `ORCHESTRATOR_WEBUI_HOST` | _(loopback)_ | Host running the Orchestrator API (:10000) / Web UI (:10001) when **not** the dashboard machine |
+| `AUDITOR_API_HOST` / `AUDITOR_WEBUI_HOST` | _(loopback)_ | Host running the Auditor API (:10010) / Web UI when **not** the dashboard machine |
 | `AI_PROXY_URL` | _(host:port link)_ | Public HTTPS base for the observer "jump" links, e.g. `https://ai-proxy.lan`. Overrides the link only — the bridge still fetches `AI_PROXY_HOST` over plain http |
-| `DEV_ENGINE_WEBUI_URL` | _(host:port link)_ | Public HTTPS base for the Spark Dev Engine web UI "jump" links, e.g. `https://spark-dev.lan` |
+| `ORCHESTRATOR_WEBUI_URL` | _(host:port link)_ | Public HTTPS base for the orchestrator web UI "jump" links, e.g. `https://orchestrator.lan` |
+| `AUDITOR_WEBUI_URL` | _(host:port link)_ | Public HTTPS base for the auditor web UI "jump" links, e.g. `https://auditor.lan` |
 | `AUTOPOWER_FEATURE` | _(off)_ | Spark AutoPower master switch. `1` re-enables the whole feature: Overview panel, idle-shutdown ticks and scheduled wakes; off hides the panel, never arms the timer and rejects the config/tick routes |
 | `SSH_CONTROL_PERSIST_SECONDS` | `60` | Idle SSH transport persistence in seconds, capped at `3600`. Reuses authenticated SSH transports for remote collectors. Set to `0` to disable multiplexing. |
 | `FLEET_ENERGY_JSON_PATH` | `config/fleet-energy.json` | Rolling fleet-energy persistence path |

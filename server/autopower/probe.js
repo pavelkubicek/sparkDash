@@ -3,7 +3,7 @@
  *
  *   AI proxy  — observer API (GET /observer/api/streaming,
  *               /observer/api/active-requests). In-flight = array lengths.
- *   Dev engine — GET /api/status (slots_used, tickets_active) plus
+ *   Orchestrator — GET /api/status (slots_used, tickets_active) plus
  *               GET /api/plans (plan-generation runs not yet ticketed).
  *
  * Both fetchers are injected (index.js passes the same bridge helpers the
@@ -22,12 +22,12 @@ const asNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 /**
  * @param {object} deps
  * @param {(path: string, init?: object) => Promise<{status:number, json:any}>} deps.aiProxyFetch
- * @param {(path: string, init?: object) => Promise<{status:number, json:any}>} deps.devEngineFetch
+ * @param {(path: string, init?: object) => Promise<{status:number, json:any}>} deps.orchestratorFetch
  * @returns {() => Promise<object>} probe snapshot for one AutoPower tick
  */
-export function createAutoPowerProbe({ aiProxyFetch, devEngineFetch }) {
+export function createAutoPowerProbe({ aiProxyFetch, orchestratorFetch }) {
   return async function autoPowerProbe() {
-    const out = { at: Date.now(), proxy: { ok: false }, engine: { ok: false } };
+    const out = { at: Date.now(), proxy: { ok: false }, orchestrator: { ok: false } };
 
     try {
       const [streams, requests] = await Promise.all([
@@ -48,13 +48,13 @@ export function createAutoPowerProbe({ aiProxyFetch, devEngineFetch }) {
 
     try {
       const [status, plans] = await Promise.all([
-        devEngineFetch("/api/status", { method: "GET" }),
-        devEngineFetch("/api/plans", { method: "GET" }),
+        orchestratorFetch("/api/status", { method: "GET" }),
+        orchestratorFetch("/api/plans", { method: "GET" }),
       ]);
       if (status.status !== 200) throw new Error(`status responded ${status.status}`);
       if (plans.status !== 200) throw new Error(`plans responded ${plans.status}`);
       const st = status.json && typeof status.json === "object" ? status.json : {};
-      out.engine = {
+      out.orchestrator = {
         ok: true,
         slotsUsed: asNum(st.slots_used),
         ticketsActive: asNum(st.tickets_active),
@@ -63,7 +63,7 @@ export function createAutoPowerProbe({ aiProxyFetch, devEngineFetch }) {
           : 0,
       };
     } catch (err) {
-      out.engine = { ok: false, error: err?.message || String(err) };
+      out.orchestrator = { ok: false, error: err?.message || String(err) };
     }
 
     return out;
@@ -74,17 +74,17 @@ export function createAutoPowerProbe({ aiProxyFetch, devEngineFetch }) {
 export function busyReasons(sources) {
   const reasons = [];
   const p = sources?.proxy;
-  const e = sources?.engine;
+  const o = sources?.orchestrator;
   if (!p?.ok) reasons.push(`AI proxy unreachable (${p?.error || "no probe"})`);
   else {
     if (p.streams > 0) reasons.push(`${p.streams} streaming request(s) in proxy`);
     if (p.requests > 0) reasons.push(`${p.requests} active request(s) in proxy`);
   }
-  if (!e?.ok) reasons.push(`dev engine unreachable (${e?.error || "no probe"})`);
+  if (!o?.ok) reasons.push(`Orchestrator unreachable (${o?.error || "no probe"})`);
   else {
-    if (e.slotsUsed > 0) reasons.push(`${e.slotsUsed} engine slot(s) in use`);
-    if (e.ticketsActive > 0) reasons.push(`${e.ticketsActive} ticket(s) in dev engine`);
-    if (e.plansActive > 0) reasons.push(`${e.plansActive} plan run(s) in dev engine`);
+    if (o.slotsUsed > 0) reasons.push(`${o.slotsUsed} orchestrator slot(s) in use`);
+    if (o.ticketsActive > 0) reasons.push(`${o.ticketsActive} ticket(s) in the orchestrator`);
+    if (o.plansActive > 0) reasons.push(`${o.plansActive} plan run(s) in the orchestrator`);
   }
   return reasons;
 }

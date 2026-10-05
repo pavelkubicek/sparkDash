@@ -54,19 +54,21 @@ services:
       - SPARKDASH_ALLOW_OPEN_REMOTE=${SPARKDASH_ALLOW_OPEN_REMOTE:-1}
       - PORT=5555
       - LLM_PORT=8888
-      # Spark Dev Engine integration ports (API + Web UI)
-      - DEV_ENGINE_API_PORT=10000
-      - DEV_ENGINE_WEBUI_PORT=10001
+      # Orchestrator + Auditor integration ports (APIs + Web UIs)
+      - ORCHESTRATOR_API_PORT=10000
+      - ORCHESTRATOR_WEBUI_PORT=10001
+      - AUDITOR_API_PORT=10010
       # The AI proxy still runs on spark1, NOT on the dashboard host (currently
       # dell.lan) — the server-side bridge fetches it there over plain http
-      # (loopback would be the wrong machine). The Spark Dev Engine is
-      # co-located on the dashboard host, so its API bridge stays loopback.
+      # (loopback would be the wrong machine). The Orchestrator and Auditor are
+      # co-located on the dashboard host, so their API bridges stay loopback.
       # Browser-facing "jump" links go through the LAN HTTPS reverse proxy
       # (MyLAN-Root-CA cert — trusted by the browser, not by this container):
-      # https://ai-proxy.lan / https://spark-dev.lan.
+      # https://ai-proxy.lan / https://orchestrator.lan / https://auditor.lan.
       - AI_PROXY_HOST=spark1.lan
       - AI_PROXY_URL=https://ai-proxy.lan
-      - DEV_ENGINE_WEBUI_URL=https://spark-dev.lan
+      - ORCHESTRATOR_WEBUI_URL=https://orchestrator.lan
+      - AUDITOR_WEBUI_URL=https://auditor.lan
       - NODE_ENV=production
       - HOST_PROC_PATH=/host/proc
       - HOST_SYS_PATH=/host/sys

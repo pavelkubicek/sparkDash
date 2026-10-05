@@ -185,7 +185,12 @@ export function resolveRunTarget(model, getSpark) {
  * @returns {Promise<{ code: number|null, signal: string|null, timedOut: boolean,
  *   cancelled: boolean, spawned: boolean, error: string|null }>}
  */
-function spawnStreaming(file, args, env, { onData, timeoutMs, signal, killGraceMs = 3000 }) {
+function spawnStreaming(
+  file,
+  args,
+  env,
+  { onData, timeoutMs, signal, killGraceMs = 3000, onSpawn }
+) {
   return new Promise((resolve) => {
     /** @type {import("child_process").ChildProcess} */
     let child;
@@ -195,6 +200,14 @@ function spawnStreaming(file, args, env, { onData, timeoutMs, signal, killGraceM
         stdio: ["ignore", "pipe", "pipe"],
         env,
       });
+      // Report the live process so callers can expose liveness (a healthy but
+      // silent tail must be distinguishable from a dead one). The hook runs
+      // after a successful spawn and never on the failure path below.
+      try {
+        onSpawn?.(child);
+      } catch {
+        /* liveness reporting must not kill the spawn */
+      }
     } catch (err) {
       resolve({
         code: null,

@@ -33,11 +33,11 @@ function countdown(epochMs: number, nowMs: number): string {
  * Data path: the `models` block rides the existing WS snapshot — no second
  * socket and no polling loop here. Actions just POST and then let the next
  * snapshot plus the job transcript describe the result. Panel chrome and the
- * graceful-degrade behaviour follow DevEnginePanel.
+ * graceful-degrade behaviour follow OrchestratorPanel.
  *
  * Full width comes from being a direct child of the page's flex column; it
  * deliberately does not join the `grid sm:grid-cols-2` row that AiProxy and
- * DevEngine share. Its cards use their own inner grid.
+ * Orchestrator share. Its cards use their own inner grid.
  */
 export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProps) {
   const [refreshing, setRefreshing] = useState(false);

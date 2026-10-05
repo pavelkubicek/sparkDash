@@ -378,7 +378,7 @@ input:disabled {
        viewport. Pin the track to the grid width so they shrink to fit. */
     grid-template-columns: minmax(0, 1fr);
   }
-  /* Panels (AI Proxy, Dev Engine) need the same spacing between rows as
+  /* Panels (AI Proxy, Orchestrator) need the same spacing between rows as
      the spark cards on single-column mobile layouts. */
   .overview-page > .panel + .panel {
     margin-top: 20px;

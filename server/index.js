@@ -74,8 +74,9 @@ const PORT = parseInt(process.env.PORT || "5555", 10);
 const LLM_PORT = parseInt(process.env.LLM_PORT || "8888", 10);
 const COMFY_PORT = parseInt(process.env.COMFY_PORT || "8188", 10);
 const AI_PROXY_PORT = parseInt(process.env.AI_PROXY_PORT || "3001", 10);
-const DEV_ENGINE_API_PORT = parseInt(process.env.DEV_ENGINE_API_PORT || "10000", 10);
-const DEV_ENGINE_WEBUI_PORT = parseInt(process.env.DEV_ENGINE_WEBUI_PORT || "10001", 10);
+const ORCHESTRATOR_API_PORT = parseInt(process.env.ORCHESTRATOR_API_PORT || "10000", 10);
+const ORCHESTRATOR_WEBUI_PORT = parseInt(process.env.ORCHESTRATOR_WEBUI_PORT || "10001", 10);
+const AUDITOR_API_PORT = parseInt(process.env.AUDITOR_API_PORT || "10010", 10);
 
 /** Per-spark LLM HTTP port (1–65535), else env default. */
 function resolveLlmPort(sparkOrPort) {
@@ -472,65 +473,90 @@ app.get("/api/ai-proxy/observer-url", (req, res) => {
   });
 });
 
-// ─── Spark Dev Engine bridge ─────────────────────────────
-// Proxies the Spark Dev Engine REST API (port 10000) through the sparkDash
-// server so the browser never needs CORS. Like the AI proxy bridge, routes are
-// unauthenticated like the rest of the LAN dashboard. On any upstream failure
-// respond 502 so the UI can show a graceful offline state.
-const DEV_ENGINE_API_HOST = process.env.DEV_ENGINE_API_HOST || "";
-const DEV_ENGINE_WEBUI_HOST = process.env.DEV_ENGINE_WEBUI_HOST || "";
-// Public browser-facing base for the engine web UI ("jump to engine") links,
-// e.g. https://spark-dev.lan behind the LAN HTTPS reverse proxy. Same contract
-// as AI_PROXY_URL: overrides the link only; the API bridge above stays http.
-const DEV_ENGINE_WEBUI_URL = (process.env.DEV_ENGINE_WEBUI_URL || "").replace(/\/+$/, "");
-const DEV_ENGINE_API_BASE = `http://${DEV_ENGINE_API_HOST || "127.0.0.1"}:${DEV_ENGINE_API_PORT}`;
-const DEV_ENGINE_TIMEOUT_MS = 5000;
+// ─── Orchestrator + Auditor bridges ──────────────────────
+// Proxy the Orchestrator REST API (port 10000) and the Auditor daemon REST
+// API (port 10010) through the sparkDash server so the browser never needs
+// CORS. Like the AI proxy bridge, routes are unauthenticated like the rest of
+// the LAN dashboard. On any upstream failure respond 502 so the UI can show a
+// graceful offline state.
+const ORCHESTRATOR_API_HOST = process.env.ORCHESTRATOR_API_HOST || "";
+const ORCHESTRATOR_WEBUI_HOST = process.env.ORCHESTRATOR_WEBUI_HOST || "";
+const AUDITOR_API_HOST = process.env.AUDITOR_API_HOST || "";
+const AUDITOR_WEBUI_HOST = process.env.AUDITOR_WEBUI_HOST || "";
+// The auditor web UI has no dedicated LAN port — it lives behind the reverse
+// proxy on 443, same as ORCHESTRATOR_WEBUI_URL=https://auditor.lan.
+const AUDITOR_WEBUI_PORT = parseInt(process.env.AUDITOR_WEBUI_PORT || "443", 10);
+// Public browser-facing bases for the web UIs ("jump" links), e.g.
+// https://orchestrator.lan and https://auditor.lan behind the LAN HTTPS
+// reverse proxy. Same contract as AI_PROXY_URL: overrides the link only; the
+// API bridges above stay http.
+const ORCHESTRATOR_WEBUI_URL = (process.env.ORCHESTRATOR_WEBUI_URL || "").replace(/\/+$/, "");
+const AUDITOR_WEBUI_URL = (process.env.AUDITOR_WEBUI_URL || "").replace(/\/+$/, "");
+const BRIDGE_TIMEOUT_MS = 5000;
 
-async function devEngineFetch(path, init) {
-  const res = await fetch(`${DEV_ENGINE_API_BASE}${path}`, {
-    ...init,
-    signal: AbortSignal.timeout(DEV_ENGINE_TIMEOUT_MS),
-  });
-  const text = await res.text();
-  let json;
-  try {
-    json = text ? JSON.parse(text) : {};
-  } catch {
-    json = {};
-  }
-  return { status: res.status, json };
-}
-
-async function devEngineGet(req, res, path) {
-  try {
-    const query = new URLSearchParams(req.query);
-    const qs = query.toString() ? `?${query.toString()}` : "";
-    const { status, json } = await devEngineFetch(`${path}${qs}`, { method: "GET" });
-    res.status(status).json(json);
-  } catch (err) {
-    res.status(502).json({ error: `Dev engine unreachable (${err.message || String(err)})` });
-  }
-}
-
-async function devEnginePost(req, res, path) {
-  try {
-    const { status, json } = await devEngineFetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body ?? {}),
+/**
+ * Build a bridge to one upstream service: the returned get/post mirror the
+ * old per-service helpers — on upstream failure they answer 502 with the
+ * service name so the UI can show a graceful offline state.
+ */
+function createBridge({ base, label }) {
+  async function fetchUpstream(path, init) {
+    const res = await fetch(`${base}${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS),
     });
-    res.status(status).json(json);
-  } catch (err) {
-    res.status(502).json({ error: `Dev engine unreachable (${err.message || String(err)})` });
+    const text = await res.text();
+    let json;
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      json = {};
+    }
+    return { status: res.status, json };
   }
+  return {
+    fetch: fetchUpstream,
+    async get(req, res, path) {
+      try {
+        const query = new URLSearchParams(req.query);
+        const qs = query.toString() ? `?${query.toString()}` : "";
+        const { status, json } = await fetchUpstream(`${path}${qs}`, { method: "GET" });
+        res.status(status).json(json);
+      } catch (err) {
+        res.status(502).json({ error: `${label} unreachable (${err.message || String(err)})` });
+      }
+    },
+    async post(req, res, path) {
+      try {
+        const { status, json } = await fetchUpstream(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(req.body ?? {}),
+        });
+        res.status(status).json(json);
+      } catch (err) {
+        res.status(502).json({ error: `${label} unreachable (${err.message || String(err)})` });
+      }
+    },
+  };
 }
 
-app.get("/api/dev-engine/status", (req, res) => {
-  void devEngineGet(req, res, "/api/status");
+const orchestrator = createBridge({
+  base: `http://${ORCHESTRATOR_API_HOST || "127.0.0.1"}:${ORCHESTRATOR_API_PORT}`,
+  label: "Orchestrator",
+});
+const auditor = createBridge({
+  base: `http://${AUDITOR_API_HOST || "127.0.0.1"}:${AUDITOR_API_PORT}`,
+  label: "Auditor",
 });
 
-app.get("/api/dev-engine/tickets", (req, res) => {
-  void devEngineGet(req, res, "/api/tickets");
+// ─── Orchestrator ─────────────────────────────────────────
+app.get("/api/orchestrator/status", (req, res) => {
+  void orchestrator.get(req, res, "/api/status");
+});
+
+app.get("/api/orchestrator/tickets", (req, res) => {
+  void orchestrator.get(req, res, "/api/tickets");
 });
 
 /**
@@ -539,11 +565,11 @@ app.get("/api/dev-engine/tickets", (req, res) => {
  * needs the summary fields, so it is dropped here and replaced with
  * `content_length` to keep the 5s poll small.
  */
-app.get("/api/dev-engine/plans", async (req, res) => {
+app.get("/api/orchestrator/plans", async (req, res) => {
   try {
     const query = new URLSearchParams(req.query);
     const qs = query.toString() ? `?${query.toString()}` : "";
-    const { status, json } = await devEngineFetch(`/api/plans${qs}`, { method: "GET" });
+    const { status, json } = await orchestrator.fetch(`/api/plans${qs}`, { method: "GET" });
     const slim = Array.isArray(json)
       ? json.map(({ content, ...rest }) => ({
           ...rest,
@@ -552,25 +578,53 @@ app.get("/api/dev-engine/plans", async (req, res) => {
       : json;
     res.status(status).json(slim);
   } catch (err) {
-    res.status(502).json({ error: `Dev engine unreachable (${err.message || String(err)})` });
+    res.status(502).json({ error: `Orchestrator unreachable (${err.message || String(err)})` });
   }
 });
 
-app.get("/api/dev-engine/running-tasks", (req, res) => {
-  void devEngineGet(req, res, "/api/running-tasks");
+app.get("/api/orchestrator/running-tasks", (req, res) => {
+  void orchestrator.get(req, res, "/api/running-tasks");
 });
 
-app.get("/api/dev-engine/slots-config", (req, res) => {
-  void devEngineGet(req, res, "/api/slots-config");
+app.get("/api/orchestrator/slots-config", (req, res) => {
+  void orchestrator.get(req, res, "/api/slots-config");
 });
 
-app.post("/api/dev-engine/slots-config", (req, res) => {
-  void devEnginePost(req, res, "/api/slots-config");
+app.post("/api/orchestrator/slots-config", (req, res) => {
+  void orchestrator.post(req, res, "/api/slots-config");
 });
 
-/** Web UI base URL for "jump to engine" links — public URL, configured host, else request origin. */
-app.get("/api/dev-engine/webui-url", (req, res) => {
-  res.json({ url: DEV_ENGINE_WEBUI_URL || integrationBaseUrl(req, DEV_ENGINE_WEBUI_HOST, DEV_ENGINE_WEBUI_PORT) });
+/** Web UI base URL for "open orchestrator" links — public URL, configured host, else request origin. */
+app.get("/api/orchestrator/webui-url", (req, res) => {
+  res.json({ url: ORCHESTRATOR_WEBUI_URL || integrationBaseUrl(req, ORCHESTRATOR_WEBUI_HOST, ORCHESTRATOR_WEBUI_PORT) });
+});
+
+// ─── Auditor ──────────────────────────────────────────────
+app.get("/api/auditor/status", (req, res) => {
+  void auditor.get(req, res, "/api/status");
+});
+
+/** Review rows — list query (status/limit/offset/…) passes through unchanged. */
+app.get("/api/auditor/reviews", (req, res) => {
+  void auditor.get(req, res, "/api/reviews");
+});
+
+/** Dashboard counters (by_status buckets, severities, verdicts). */
+app.get("/api/auditor/stats", (req, res) => {
+  void auditor.get(req, res, "/api/stats");
+});
+
+app.get("/api/auditor/slots-config", (req, res) => {
+  void auditor.get(req, res, "/api/slots-config");
+});
+
+app.post("/api/auditor/slots-config", (req, res) => {
+  void auditor.post(req, res, "/api/slots-config");
+});
+
+/** Web UI base URL for "open auditor" links — public URL, configured host, else request origin. */
+app.get("/api/auditor/webui-url", (req, res) => {
+  res.json({ url: AUDITOR_WEBUI_URL || integrationBaseUrl(req, AUDITOR_WEBUI_HOST, AUDITOR_WEBUI_PORT) });
 });
 
 // ─── REST API ────────────────────────────────────────────
@@ -1802,12 +1856,12 @@ const modelLauncher = initModelLauncher({
 });
 registerModelRoutes(app, modelLauncher, { forceBroadcast });
 // ─── Spark AutoPower (idle shutdown + scheduled wake) ───
-// Watches the AI proxy (in-flight requests) and the dev engine (slots,
+// Watches the AI proxy (in-flight requests) and the orchestrator (slots,
 // tickets, plan runs). After AUTOPOWER idle minutes of verified quiet inside
 // the configured watch span it shuts the remote Sparks down; at the wake time
 // it wakes them again. Head goes down last / up first: the proxy lives on it.
 const autoPower = new AutoPowerManager({
-  probe: createAutoPowerProbe({ aiProxyFetch, devEngineFetch }),
+  probe: createAutoPowerProbe({ aiProxyFetch, orchestratorFetch: orchestrator.fetch }),
   // Only the remote Sparks — the dashboard host itself is never touched.
   getSparks: () => registry.sparks.filter((s) => s.kind === "spark" && !s.isLocal),
   isOnline: (id) => Boolean(monitors.get(id)?.online),

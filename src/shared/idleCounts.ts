@@ -1,5 +1,5 @@
 /**
- * Idle-count shapes shared by the AI Proxy panel, the Dev Engine panel and
+ * Idle-count shapes shared by the AI Proxy panel, the Orchestrator panel and
  * the Spark AutoPower card.
  *
  * The two widgets already poll the bridge every 5 s. AutoPower displays
@@ -21,9 +21,9 @@ export interface ProxyLive {
   at: number;
 }
 
-/** Live dev-engine idleness as shown by the Spark Dev Engine panel. */
-export interface EngineLive {
-  /** False when the panel could not reach the engine this poll. */
+/** Live orchestrator idleness as shown by the Orchestrator panel. */
+export interface OrchestratorLive {
+  /** False when the panel could not reach the orchestrator this poll. */
   ok: boolean;
   slotsUsed: number;
   ticketsActive: number;
@@ -35,7 +35,7 @@ export interface EngineLive {
 /** Lifted feed: the two widgets' latest published counts. */
 export interface IdleFeed {
   proxy: ProxyLive | null;
-  engine: EngineLive | null;
+  orchestrator: OrchestratorLive | null;
 }
 
 /**
@@ -45,7 +45,7 @@ export interface IdleFeed {
  */
 export function liveBusyReasons(feed: IdleFeed): string[] {
   const reasons: string[] = [];
-  const { proxy, engine } = feed;
+  const { proxy, orchestrator } = feed;
   if (proxy) {
     if (!proxy.ok) reasons.push("AI proxy unreachable");
     else {
@@ -53,12 +53,12 @@ export function liveBusyReasons(feed: IdleFeed): string[] {
       if (proxy.requests > 0) reasons.push(`${proxy.requests} active request(s) in proxy`);
     }
   }
-  if (engine) {
-    if (!engine.ok) reasons.push("dev engine unreachable");
+  if (orchestrator) {
+    if (!orchestrator.ok) reasons.push("Orchestrator unreachable");
     else {
-      if (engine.slotsUsed > 0) reasons.push(`${engine.slotsUsed} engine slot(s) in use`);
-      if (engine.ticketsActive > 0) reasons.push(`${engine.ticketsActive} ticket(s) in dev engine`);
-      if (engine.plansActive > 0) reasons.push(`${engine.plansActive} plan run(s) in dev engine`);
+      if (orchestrator.slotsUsed > 0) reasons.push(`${orchestrator.slotsUsed} orchestrator slot(s) in use`);
+      if (orchestrator.ticketsActive > 0) reasons.push(`${orchestrator.ticketsActive} ticket(s) in the orchestrator`);
+      if (orchestrator.plansActive > 0) reasons.push(`${orchestrator.plansActive} plan run(s) in the orchestrator`);
     }
   }
   return reasons;
@@ -68,9 +68,9 @@ export function liveBusyReasons(feed: IdleFeed): string[] {
 export function liveIdleConfirmed(feed: IdleFeed): boolean {
   return (
     feed.proxy != null &&
-    feed.engine != null &&
+    feed.orchestrator != null &&
     liveBusyReasons(feed).length === 0 &&
     feed.proxy.ok &&
-    feed.engine.ok
+    feed.orchestrator.ok
   );
 }

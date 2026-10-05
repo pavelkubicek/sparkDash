@@ -97,6 +97,10 @@ export interface ModelJob {
   totalChars: number;
   truncated: boolean;
   killed: boolean;
+  /** Spawned process still attached? null when unknown (recovered record). */
+  alive?: boolean | null;
+  /** Timestamp of the last transcript growth (used for the quiet indicator). */
+  lastOutputAt?: number;
   append?: string;
   reset?: boolean;
   since?: number;
