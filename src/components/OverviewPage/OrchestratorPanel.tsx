@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  fetchDevEnginePlans,
-  fetchDevEngineRunningTasks,
-  fetchDevEngineSlotsConfig,
-  fetchDevEngineStatus,
-  fetchDevEngineTickets,
-  fetchDevEngineWebuiUrl,
+  fetchOrchestratorPlans,
+  fetchOrchestratorRunningTasks,
+  fetchOrchestratorSlotsConfig,
+  fetchOrchestratorStatus,
+  fetchOrchestratorTickets,
+  fetchOrchestratorWebuiUrl,
 } from "../../api/client";
-import type { EngineLive } from "../../shared/idleCounts";
+import type { OrchestratorLive } from "../../shared/idleCounts";
 import type {
-  DevEnginePlan,
-  DevEngineRunningTask,
-  DevEngineSlotsConfig,
-  DevEngineStatus,
-  DevEngineTicket,
+  OrchestratorPlan,
+  OrchestratorRunningTask,
+  OrchestratorSlotsConfig,
+  OrchestratorStatus,
+  OrchestratorTicket,
 } from "../../api/types";
 import { Panel } from "../ui/Panel";
 import { BoltIcon, ExternalLinkIcon, GearIcon } from "../ui/icons";
@@ -29,7 +29,7 @@ const ACTIVE_STATUSES: ReadonlySet<string> = new Set([
   "failed",
 ]);
 
-/** Plan statuses that count as "active". The engine already excludes completed
+/** Plan statuses that count as "active". The orchestrator already excludes completed
  *  plans from /api/plans; this keeps the section honest if a terminal status
  *  ever shows up. */
 const ACTIVE_PLAN_STATUSES: ReadonlySet<string> = new Set([
@@ -39,7 +39,7 @@ const ACTIVE_PLAN_STATUSES: ReadonlySet<string> = new Set([
   "failed",
 ]);
 
-/** Task status colors matching the engine web UI (web-ui ActiveTaskItem/StatusBadge). */
+/** Task status colors matching the orchestrator web UI (web-ui ActiveTaskItem/StatusBadge). */
 const TASK_STATUS_COLOR: Record<string, string> = {
   pending: "#6b7280", // gray-500
   queued: "#6b7280",
@@ -59,7 +59,7 @@ const TASK_STATUS_COLOR: Record<string, string> = {
   cancelled: "#6b7280",
 };
 
-/** Human labels matching the engine web UI (StatusBadge LABEL map). */
+/** Human labels matching the orchestrator web UI (StatusBadge LABEL map). */
 const TASK_STATUS_LABEL: Record<string, string> = {
   pending: "Pending",
   queued: "Queued",
@@ -79,7 +79,7 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-/** Ticket status colors matching the engine web UI (StatusBadge / Sidebar chips). */
+/** Ticket status colors matching the orchestrator web UI (StatusBadge / Sidebar chips). */
 const TICKET_STATUS_COLOR: Record<string, string> = {
   queued: "#6b7280", // gray-500
   in_progress: "#f59e0b", // amber-500
@@ -88,7 +88,7 @@ const TICKET_STATUS_COLOR: Record<string, string> = {
   failed: "#dc2626", // red-600
 };
 
-/** Ticket status labels matching the engine web UI. */
+/** Ticket status labels matching the orchestrator web UI. */
 const TICKET_STATUS_LABEL: Record<string, string> = {
   queued: "Queued",
   in_progress: "In Progress",
@@ -97,7 +97,7 @@ const TICKET_STATUS_LABEL: Record<string, string> = {
   failed: "Failed",
 };
 
-/** Plan status colors matching the engine web UI (plan status badges). */
+/** Plan status colors matching the orchestrator web UI (plan status badges). */
 const PLAN_STATUS_COLOR: Record<string, string> = {
   queued: "#6b7280", // gray-500
   processing: "#0891b2", // cyan-600
@@ -106,7 +106,7 @@ const PLAN_STATUS_COLOR: Record<string, string> = {
   failed: "#dc2626", // red-600
 };
 
-/** Plan status labels matching the engine web UI. */
+/** Plan status labels matching the orchestrator web UI. */
 const PLAN_STATUS_LABEL: Record<string, string> = {
   queued: "Queued",
   processing: "Processing",
@@ -115,7 +115,7 @@ const PLAN_STATUS_LABEL: Record<string, string> = {
   failed: "Failed",
 };
 
-/** Ticket id the engine mirrors a plan under — used for "open in engine" links. */
+/** Ticket id the engine mirrors a plan under — used for "open in orchestrator" links. */
 function planTicketId(planId: string): string {
   return planId.startsWith("PLAN-") ? planId : `PLAN-${planId}`;
 }
@@ -149,7 +149,7 @@ function ageLabel(iso: string | null): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => void }) {
+function TicketRow({ ticket, onOpen }: { ticket: OrchestratorTicket; onOpen: () => void }) {
   const badge = prBadge(ticket.pr_url, ticket.pr_state);
   const total = ticket.tasks_total;
   const done = ticket.tasks_done;
@@ -179,7 +179,7 @@ function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => 
         type="button"
         onClick={onOpen}
         className="min-w-0 flex-1 text-left transition-colors hover:text-accent"
-        title={`Open ${ticket.name} in the engine`}
+        title={`Open ${ticket.name} in the orchestrator`}
       >
         <span className="flex min-w-0 items-baseline gap-1">
           <span className="block truncate text-xs text-text">{ticket.name}</span>
@@ -187,7 +187,7 @@ function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => 
             #{ticket.ticket_id}
           </span>
         </span>
-        {/* Multi-label status row — mirrors the engine's ticket card header */}
+        {/* Multi-label status row — mirrors the orchestrator's ticket card header */}
         <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
           <span className="font-tabular">{done}/{total} tasks</span>
           {running > 0 && <span className="text-[#fbbf24]">{running} running</span>}
@@ -199,7 +199,7 @@ function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => 
           {skipped > 0 && <span className="text-[#14b8a6]">{skipped} skipped</span>}
           <span className="font-tabular">{ageLabel(ticket.created_at)}</span>
         </span>
-        {/* Multi-color segmented progress bar — mirrors the engine web UI:
+        {/* Multi-color segmented progress bar — mirrors the orchestrator web UI:
             green = done, amber (pulse) = running, amber = validating,
             violet = fixing, orange = val-fixing, purple (pulse) = reviewing,
             red = failed, teal = skipped, track = remaining. */}
@@ -249,7 +249,7 @@ function TicketRow({ ticket, onOpen }: { ticket: DevEngineTicket; onOpen: () => 
  * One active plan row. Plans have no task counters, so the row shows the plan
  * status, the ticket it refines/creates (when known), plan length and age.
  */
-function PlanRow({ plan, onOpen }: { plan: DevEnginePlan; onOpen: () => void }) {
+function PlanRow({ plan, onOpen }: { plan: OrchestratorPlan; onOpen: () => void }) {
   const color = PLAN_STATUS_COLOR[plan.status] ?? "var(--color-text)";
   const label = PLAN_STATUS_LABEL[plan.status] ?? plan.status;
   const target = plan.target_ticket_id ?? plan.base_id;
@@ -259,7 +259,7 @@ function PlanRow({ plan, onOpen }: { plan: DevEnginePlan; onOpen: () => void }) 
       type="button"
       onClick={onOpen}
       className="flex w-full items-center gap-2 text-left transition-colors hover:text-accent"
-      title={`Open plan ${plan.name} in the engine${plan.error_message ? ` — ${plan.error_message}` : ""}`}
+      title={`Open plan ${plan.name} in the orchestrator${plan.error_message ? ` — ${plan.error_message}` : ""}`}
     >
       <span
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${busy ? "animate-pulse" : ""}`}
@@ -286,7 +286,7 @@ function PlanRow({ plan, onOpen }: { plan: DevEnginePlan; onOpen: () => void }) 
   );
 }
 
-function RunningTaskRow({ task, onOpen }: { task: DevEngineRunningTask; onOpen: () => void }) {
+function RunningTaskRow({ task, onOpen }: { task: OrchestratorRunningTask; onOpen: () => void }) {
   const color = TASK_STATUS_COLOR[task.status] ?? "var(--color-text)";
   const label = TASK_STATUS_LABEL[task.status] ?? task.status;
   return (
@@ -315,22 +315,22 @@ function RunningTaskRow({ task, onOpen }: { task: DevEngineRunningTask; onOpen: 
 }
 
 /**
- * Compact "Spark Dev Engine" panel next to the AI Proxy panel. Shows scheduler
+ * Compact "Orchestrator" panel next to the AI Proxy panel. Shows scheduler
  * slot usage, currently-running tickets with progress, and pending PRs. The
- * whole row (or the header action) jumps to the engine's web UI.
- * Polls the bridge every POLL_MS. Offline/graceful when the engine is down.
+ * whole row (or the header action) jumps to the orchestrator's web UI.
+ * Polls the bridge every POLL_MS. Offline/graceful when the orchestrator is down..
  */
-export function DevEnginePanel({
+export function OrchestratorPanel({
   onIdleCounts,
 }: {
   /** Publish this poll's live idle counts so AutoPower can display them without re-querying. */
-  onIdleCounts?: (counts: EngineLive) => void;
+  onIdleCounts?: (counts: OrchestratorLive) => void;
 } = {}) {
-  const [status, setStatus] = useState<DevEngineStatus | null>(null);
-  const [tickets, setTickets] = useState<DevEngineTicket[]>([]);
-  const [plans, setPlans] = useState<DevEnginePlan[]>([]);
-  const [runningTasks, setRunningTasks] = useState<DevEngineRunningTask[]>([]);
-  const [slots, setSlots] = useState<DevEngineSlotsConfig | null>(null);
+  const [status, setStatus] = useState<OrchestratorStatus | null>(null);
+  const [tickets, setTickets] = useState<OrchestratorTicket[]>([]);
+  const [plans, setPlans] = useState<OrchestratorPlan[]>([]);
+  const [runningTasks, setRunningTasks] = useState<OrchestratorRunningTask[]>([]);
+  const [slots, setSlots] = useState<OrchestratorSlotsConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [webuiUrl, setWebuiUrl] = useState<string | null>(null);
   const [slotsOpen, setSlotsOpen] = useState(false);
@@ -344,13 +344,13 @@ export function DevEnginePanel({
 
     async function poll() {
       // Each endpoint degrades independently: a single upstream failure must
-      // not clear the other panels' data, but total failure = engine down.
+      // not clear the other panels' data, but total failure = orchestrator down.
       const [s, t, p, r, sc] = await Promise.all([
-        fetchDevEngineStatus().catch(() => null),
-        fetchDevEngineTickets().catch(() => null),
-        fetchDevEnginePlans().catch(() => null),
-        fetchDevEngineRunningTasks().catch(() => null),
-        fetchDevEngineSlotsConfig().catch(() => null),
+        fetchOrchestratorStatus().catch(() => null),
+        fetchOrchestratorTickets().catch(() => null),
+        fetchOrchestratorPlans().catch(() => null),
+        fetchOrchestratorRunningTasks().catch(() => null),
+        fetchOrchestratorSlotsConfig().catch(() => null),
       ]);
       if (cancelled) return;
       let saw = false;
@@ -374,7 +374,7 @@ export function DevEnginePanel({
         saw = true;
         setSlots(sc);
       }
-      setError(saw ? null : "Dev engine unreachable — no data");
+      setError(saw ? null : "Orchestrator unreachable — no data");
       // Publish for AutoPower. plansActive uses the DECISION definition
       // (queued/processing/creating_ticket) — a failed plan is terminal, so it
       // is listed in this panel but must not read as busy to AutoPower.
@@ -388,7 +388,7 @@ export function DevEnginePanel({
       if (!cancelled) timer = setTimeout(poll, POLL_MS);
     }
 
-    void fetchDevEngineWebuiUrl()
+    void fetchOrchestratorWebuiUrl()
       .then((r) => {
         if (!cancelled) setWebuiUrl(r.url);
       })
@@ -413,13 +413,13 @@ export function DevEnginePanel({
 
   return (
     <Panel
-      title="Spark Dev Engine"
+      title="Orchestrator"
       icon={
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
             online ? "bg-success dot-glow-success" : "bg-danger dot-glow-danger"
           }`}
-          title={online ? "Engine online" : "Engine unreachable"}
+          title={online ? "Orchestrator online" : "Orchestrator unreachable"}
         />
       }
       accent
@@ -440,18 +440,18 @@ export function DevEnginePanel({
             href={webuiUrl ?? undefined}
             target="_blank"
             rel="noreferrer"
-            title="Open the Spark Dev Engine web UI"
+            title="Open the Orchestrator web UI"
             className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
           >
             <ExternalLinkIcon className="h-3 w-3" />
-            Open engine
+            Open orchestrator
           </a>
         </div>
       }
     >
       {error ? (
         <div className="space-y-1">
-          <p className="text-xs text-warning">Dev engine unreachable</p>
+          <p className="text-xs text-warning">Orchestrator unreachable</p>
           <p className="break-all text-[11px] text-muted">{error}</p>
         </div>
       ) : (
@@ -588,7 +588,7 @@ export function DevEnginePanel({
         onSaved={(next) => {
           setSlots(next);
           // Re-poll so status totals reflect the new concurrency promptly.
-          void fetchDevEngineStatus().then((s) => setStatus(s)).catch(() => {});
+          void fetchOrchestratorStatus().then((s) => setStatus(s)).catch(() => {});
         }}
       />
     </Panel>
