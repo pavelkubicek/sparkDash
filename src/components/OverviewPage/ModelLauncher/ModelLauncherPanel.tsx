@@ -276,11 +276,15 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         </div>
       }
     >
-      {/* Single-column list: at least 600px tall, grows with the grid row —
-          taller content scrolls (slim nice-scrollbar). Cards reorder with
-          their ↑/↓ buttons. */}
-      <div className="nice-scroll min-h-[600px] overflow-y-auto pr-1">
-        <div className="grid" style={{ gap: "var(--density-card-gap)" }}>
+      {/* Single-column list: fills the card and scrolls when its own content
+          is taller (slim nice-scrollbar). The card stretches to its grid-row
+          partner (the Auditor is usually the taller one), so bottoms align —
+          this list absorbs the difference instead of leaving dead space under
+          the footer. min-height floors it at exactly 3 compact cards
+          (--density-models-cap per density) when the row is short. Cards
+          reorder with their ↑/↓ buttons. */}
+      <div className="nice-scroll min-h-[var(--density-models-cap)] flex-1 overflow-y-auto pr-1">
+        <div className="model-list-compact grid" style={{ gap: "var(--density-card-gap)" }}>
           {list.map((m, i) => (
             <ModelCard
               key={m.id}

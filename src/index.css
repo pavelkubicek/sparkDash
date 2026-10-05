@@ -190,6 +190,10 @@
   --density-card-gap: 8px;
   --density-overview-rhythm: 16px;
   --density-overview-title: 24px;
+  /* Model Launcher list floor — exactly 3 compact cards visible in this
+     density: compact 3 × ~159px card + 2 × 6px gap = 489px (comfortable 533px).
+     The list may grow beyond it to match the grid-row partner. */
+  --density-models-cap: 489px;
   --radius-panel: 14px;
   --radius-sm: 8px;
 }
@@ -205,6 +209,10 @@
   --density-card-gap: 12px;
   --density-overview-rhythm: 24px;
   --density-overview-title: 32px;
+  /* Model Launcher list floor — exactly 3 compact cards visible in this
+     density: comfortable 3 × ~172px card + 2 × 8px gap = 533px (compact 489px).
+     The list may grow beyond it to match the grid-row partner. */
+  --density-models-cap: 533px;
   --radius-panel: 22px;
   --radius-sm: 12px;
 }
@@ -691,6 +699,21 @@ input[type="checkbox"] {
 }
 .panel-title svg {
   color: var(--color-accent);
+}
+
+/* Model Launcher cards run tighter than overview cards. Overriding the two
+   density vars on the list wrapper cascades into every ModelCard (padding +
+   internal gaps read exactly these vars): comfortable drops to the compact
+   geometry, compact gets one notch tighter. Scoped: spark overview cards are
+   unaffected. */
+.model-list-compact {
+  --density-card-pad: 14px;
+  --density-card-gap: 8px;
+}
+:root:not([data-density="comfortable"]) .model-list-compact,
+[data-density="compact"] .model-list-compact {
+  --density-card-pad: 12px;
+  --density-card-gap: 6px;
 }
 
 /* ─── Overview card (frosted, clickable) ─────────────── */
