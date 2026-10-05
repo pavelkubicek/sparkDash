@@ -317,11 +317,11 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         </div>
       }
     >
-      {/* Single-column list capped at ~2 cards (density rem ≈ 19.4px: card
-          ≈ 10.3rem + 0.6rem gap) plus a sliver of the next as a scroll hint.
-          The slim scrollbar (nice-scroll) hugs the panel padding — cards keep
-          their width. Drag-to-reorder works across the scroll (HTML5 DnD). */}
-      <div className="nice-scroll max-h-[21.5rem] min-h-[6rem] overflow-y-auto pr-1">
+      {/* Single-column list that stretches: the panel is a grid sibling of
+          Auditor (equal row height), so the list grows to match — 2 cards is
+          the minimum visible; taller content scrolls (slim nice-scrollbar).
+          Drag-to-reorder works across the scroll (HTML5 DnD). */}
+      <div className="nice-scroll min-h-[21.5rem] flex-1 overflow-y-auto pr-1">
         <div className="grid" style={{ gap: "var(--density-card-gap)" }}>
           {list.map((m) => (
             <ModelCard
