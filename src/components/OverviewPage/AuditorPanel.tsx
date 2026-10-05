@@ -297,15 +297,21 @@ export function AuditorPanel() {
             )}
           </div>
 
-          {/* Finished — most recent findings-ready reports with actual findings */}
-          <div className="space-y-1">
+          {/* Finished — most recent findings-ready reports with actual findings.
+              This section is the panel's flex-grow region: when the grid row is
+              taller than the natural content (e.g. the Model Launcher beside it
+              is capped at 600px), the list absorbs the spare height and scrolls
+              instead of leaving a dead gap above the footer. */}
+          <div className="flex min-h-[7rem] flex-1 flex-col space-y-1">
             <p className="text-xs uppercase tracking-wide text-muted">
               Finished — Ready ({readyCount})
             </p>
             {finished.length > 0 ? (
-              finished.map((review) => (
-                <FinishedRow key={review.id} review={review} onOpen={() => openReviews(review)} />
-              ))
+              <div className="nice-scroll -mx-1 flex-1 space-y-1 overflow-y-auto px-1">
+                {finished.map((review) => (
+                  <FinishedRow key={review.id} review={review} onOpen={() => openReviews(review)} />
+                ))}
+              </div>
             ) : (
               <p className="text-xs text-muted">No ready reports with findings.</p>
             )}
