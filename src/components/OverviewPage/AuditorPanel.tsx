@@ -112,7 +112,8 @@ function AnalyzingRow({ review, onOpen }: { review: AuditorReview; onOpen: () =>
   );
 }
 
-/** One finished ("Ready") row: cyan badge + findings count, severity + seen state. */
+/** One finished ("Ready") row: cyan status dot (orchestrator-row style) + findings count, severity + seen state.
+ *  Clean reports (0 findings) are not listed — only rows with actual findings. */
 function FinishedRow({ review, onOpen }: { review: AuditorReview; onOpen: () => void }) {
   const sev = review.findings_by_severity ?? {};
   const critical = sev.critical ?? 0;
@@ -124,10 +125,10 @@ function FinishedRow({ review, onOpen }: { review: AuditorReview; onOpen: () => 
       title={`Open report ${review.title ?? review.id} in the auditor`}
     >
       <span
-        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_BADGE.findings_ready}`}
-      >
-        {STATUS_LABEL.findings_ready}
-      </span>
+        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: "#0891b2", boxShadow: "0 0 6px #0891b2" }}
+        title={STATUS_LABEL.findings_ready}
+      />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs text-text">
           {review.title ?? review.scope_key}
@@ -139,10 +140,7 @@ function FinishedRow({ review, onOpen }: { review: AuditorReview; onOpen: () => 
             {review.finding_count} finding{review.finding_count === 1 ? "" : "s"}
           </span>
           {critical > 0 && <span className="text-[#f87171]">{critical} critical</span>}
-          {review.finding_count === 0 && <span className="text-[#4b5563]">clean report</span>}
-          {!review.seen_at && review.finding_count > 0 && (
-            <span className="text-[#fbbf24]">not seen</span>
-          )}
+          {!review.seen_at && <span className="text-[#fbbf24]">not seen</span>}
           <span className="font-tabular">{ageLabel(review.finished_at ?? review.started_at)}</span>
         </span>
       </span>
@@ -161,7 +159,9 @@ export function AuditorPanel() {
   const [status, setStatus] = useState<AuditorStatus | null>(null);
   const [stats, setStats] = useState<AuditorStats | null>(null);
   const [analyzing, setAnalyzing] = useState<AuditorReview[]>([]);
+  const [analyzingCount, setAnalyzingCount] = useState(0);
   const [finished, setFinished] = useState<AuditorReview[]>([]);
+  const [readyCount, setReadyCount] = useState(0);
   const [slots, setSlots] = useState<AuditorSlotsConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [webuiUrl, setWebuiUrl] = useState<string | null>(null);
@@ -178,10 +178,14 @@ export function AuditorPanel() {
         fetchAuditorStatus().catch(() => null),
         fetchAuditorStats().catch(() => null),
         fetchAuditorReviews({ status: "analyzing", limit: LIST_LIMIT })
-          .then((r) => r.reviews)
+          .then((r) => r)
           .catch(() => null),
-        fetchAuditorReviews({ status: "findings_ready", limit: LIST_LIMIT })
-          .then((r) => r.reviews)
+        // The auditor's own UI pulls a WINDOW_LIMIT=1000 feed and renders
+        // count == len(items) — the daemon's `count` is the filtered page
+        // length, NOT the query total. Fetch the same window so the header
+        // count matches auditor.lan; the list shows only the first page.
+        fetchAuditorReviews({ status: "findings_ready", has_findings: true, limit: 1000 })
+          .then((r) => r)
           .catch(() => null),
         fetchAuditorSlotsConfig().catch(() => null),
       ]);
@@ -197,11 +201,13 @@ export function AuditorPanel() {
       }
       if (an) {
         saw = true;
-        setAnalyzing(an);
+        setAnalyzing(an.reviews);
+        setAnalyzingCount(an.count);
       }
       if (fin) {
         saw = true;
-        setFinished(fin);
+        setFinished(fin.reviews.slice(0, LIST_LIMIT));
+        setReadyCount(fin.count);
       }
       if (sc) {
         saw = true;
@@ -280,7 +286,7 @@ export function AuditorPanel() {
           {/* Analyzing now — the auditor's live slot consumers */}
           <div className="min-h-[4.5rem] space-y-1">
             <p className="text-xs uppercase tracking-wide text-muted">
-              Analyzing now ({status?.analyzing ?? analyzing.length})
+              Analyzing now ({analyzingCount || (status?.analyzing ?? 0)})
             </p>
             {analyzing.length > 0 ? (
               analyzing.map((review) => (
@@ -291,17 +297,17 @@ export function AuditorPanel() {
             )}
           </div>
 
-          {/* Finished — most recent findings-ready reports */}
+          {/* Finished — most recent findings-ready reports with actual findings */}
           <div className="space-y-1">
             <p className="text-xs uppercase tracking-wide text-muted">
-              Finished — Ready ({stats?.by_status.findings_ready ?? finished.length})
+              Finished — Ready ({readyCount})
             </p>
             {finished.length > 0 ? (
               finished.map((review) => (
                 <FinishedRow key={review.id} review={review} onOpen={() => openReviews(review)} />
               ))
             ) : (
-              <p className="text-xs text-muted">No ready reports.</p>
+              <p className="text-xs text-muted">No ready reports with findings.</p>
             )}
           </div>
 

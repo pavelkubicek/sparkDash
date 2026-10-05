@@ -568,11 +568,14 @@ export function fetchAuditorStatus(): Promise<AuditorStatus> {
 /** Review rows, filtered + paged server-side (e.g. status/limit/offset). */
 export function fetchAuditorReviews(query: {
   status?: AuditorReviewStatus;
+  /** Server-side "only reports with findings" — matches the auditor's own Ready count. */
+  has_findings?: boolean;
   limit?: number;
   offset?: number;
 }): Promise<AuditorReviewsResponse> {
   const search = new URLSearchParams();
   if (query.status) search.set("status", query.status);
+  if (query.has_findings != null) search.set("has_findings", String(query.has_findings));
   if (query.limit != null) search.set("limit", String(query.limit));
   if (query.offset != null) search.set("offset", String(query.offset));
   const qs = search.toString();
