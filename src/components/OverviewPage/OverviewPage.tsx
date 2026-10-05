@@ -608,13 +608,13 @@ export function OverviewPage({
         : "Click the + tab to add a DGX Spark unit.";
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-overview-rhythm)" }}>
+        {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
         <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
           <AiProxyPanel onIdleCounts={setProxyIdle} />
           <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
           <AuditorPanel />
+          {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
         </div>
-        {/* Full-width: direct child of the page column, not the 2-col grid. */}
-        {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
         <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
         <div className="panel mx-auto mt-4 max-w-md p-8 text-center">
           <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
@@ -631,14 +631,13 @@ export function OverviewPage({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-overview-rhythm)" }}>
-      {/* Panels first — AI Proxy + Orchestrator + Auditor */}
+      {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
       <div className="overview-page grid sm:grid-cols-2" style={{ gap: "var(--density-page-gap)" }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
         <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
         <AuditorPanel />
+        {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
       </div>
-      {/* Full-width: direct child of the page column, not the 2-col grid. */}
-      {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
       <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
       {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} /> : null}
       {showFleetExceptions ? <FleetAlertStrip sparks={sparks} onSelect={onSelectSpark} /> : null}

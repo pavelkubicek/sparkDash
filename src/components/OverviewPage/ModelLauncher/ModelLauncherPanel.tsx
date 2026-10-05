@@ -27,17 +27,16 @@ function countdown(epochMs: number, nowMs: number): string {
 }
 
 /**
- * Full-width Overview panel: one card per model repo, each with a
- * colour-swapped Start/Stop, Restart, and (running-only) Logs.
+ * Half-width Overview card: one card per model repo, each with a
+ * colour-swapped Start/Stop, Restart, and (running-only) Logs. It is the 4th
+ * child of the integration-cards grid (AI Proxy + Orchestrator / Auditor +
+ * Model Launcher), so it is ~50% wide; the model list is a single column
+ * capped at ~2 cards tall and scrolls (slim themed scrollbar).
  *
  * Data path: the `models` block rides the existing WS snapshot — no second
  * socket and no polling loop here. Actions just POST and then let the next
  * snapshot plus the job transcript describe the result. Panel chrome and the
  * graceful-degrade behaviour follow OrchestratorPanel.
- *
- * Full width comes from being a direct child of the page's flex column; it
- * deliberately does not join the `grid sm:grid-cols-2` row that AiProxy and
- * Orchestrator share. Its cards use their own inner grid.
  */
 export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProps) {
   const [refreshing, setRefreshing] = useState(false);
@@ -318,34 +317,33 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         </div>
       }
     >
-      {/* Cards stretch to equal height (grid default). The mt-auto actions row
-          is the card's last child, so a stretched card's spare room appears
-          above the buttons — the button rows line up at the same baseline. */}
-      <div className="grid sm:grid-cols-2 xl:grid-cols-3" style={{ gap: "var(--density-card-gap)" }}>
-        {list.map((m) => (
-          <ModelCard
-            key={m.id}
-            model={m}
-            busy={activeJob != null}
-            busyHere={activeJob?.modelId === m.id}
-            scheduledNow={scheduledNowId === m.id}
-            dragging={dragId === m.id}
-            dragOver={overId === m.id && dragId != null && dragId !== m.id}
-            onCardDragStart={handleDragStart}
-            onCardDragEnter={handleDragEnter}
-            onCardDrop={handleDrop}
-            onCardDragEnd={clearDrag}
-          />
-        ))}
+      {/* Single-column list capped at ~2 cards (density rem ≈ 19.4px: card
+          ≈ 10.3rem + 0.6rem gap) plus a sliver of the next as a scroll hint.
+          The slim scrollbar (nice-scroll) hugs the panel padding — cards keep
+          their width. Drag-to-reorder works across the scroll (HTML5 DnD). */}
+      <div className="nice-scroll max-h-[21.5rem] min-h-[6rem] overflow-y-auto pr-1">
+        <div className="grid" style={{ gap: "var(--density-card-gap)" }}>
+          {list.map((m) => (
+            <ModelCard
+              key={m.id}
+              model={m}
+              busy={activeJob != null}
+              busyHere={activeJob?.modelId === m.id}
+              scheduledNow={scheduledNowId === m.id}
+              dragging={dragId === m.id}
+              dragOver={overId === m.id && dragId != null && dragId !== m.id}
+              onCardDragStart={handleDragStart}
+              onCardDragEnter={handleDragEnter}
+              onCardDrop={handleDrop}
+              onCardDragEnd={clearDrag}
+            />
+          ))}
+        </div>
       </div>
 
-      {/* Whisper line tucked into the panel's own bottom padding — absolutely
-          positioned so it costs the body no height, no border-top and no dot
-          separators; phrases just breathe apart via the column gap. Only the
-          3-column (2xl) layout has that much spare padding below the cards, so
-          below 2xl it stays in normal flow instead. */}
+      {/* Whisper hints tucked under card bottom padding. */}
       <footer
-        className="pointer-events-none flex flex-wrap items-center gap-x-4 text-[9px] leading-none text-muted/60 2xl:absolute 2xl:bottom-[3px]"
+        className="pointer-events-none flex flex-wrap items-center gap-x-4 border-t border-border/60 pt-2 text-[9px] leading-none text-muted/60"
         style={{ left: "var(--density-panel-pad)", right: "var(--density-panel-pad)" }}
       >
         <span>one model at a time — starting one stops the other first</span>
