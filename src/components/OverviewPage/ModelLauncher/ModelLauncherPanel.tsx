@@ -48,6 +48,11 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
   const [overId, setOverId] = useState<string | null>(null);
   const [preview, setPreview] = useState<string[] | null>(null);
   const dragRef = useRef<{ from: string; to: string[] } | null>(null);
+  // Auto-scroll while dragging: cards outside the visible list must stay
+  // reachable, so moving near the list edge scrolls it at an edge-distance
+  // ramp. The rAF loop lives only while a drag is active.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const dragScroll = useRef<{ y: number; raf: number } | null>(null);
 
   const rawList: ModelInfo[] = models?.models ?? [];
   // The registry already stores the array in `position` order; sort again so a
@@ -70,6 +75,74 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
     dragRef.current = null;
     setPreview(null);
   }, []);
+
+  const EDGE_ZONE_PX = 56; // distance from the list edge where scrolling ramps in
+  const EDGE_MAX_SPEED = 14; // px/frame at (or beyond) the edge, ≈ 840 px/s
+
+  /** One rAF step: scroll the list toward dragScroll.y, re-arm while dragging. */
+  const dragScrollStep = useCallback(() => {
+    const state = dragScroll.current;
+    const el = scrollRef.current;
+    if (!state || !el) {
+      dragScroll.current = null;
+      return;
+    }
+    const max = el.scrollHeight - el.clientHeight;
+    if (max > 0) {
+      const next = Math.max(0, Math.min(max, el.scrollTop + state.y));
+      if (next !== el.scrollTop) el.scrollTop = next;
+    }
+    state.raf = requestAnimationFrame(dragScrollStep);
+  }, []);
+
+  // Track the pointer over the list while a drag is active and translate it
+  // into an edge-ramp scroll velocity; a plain dragover throttles on some
+  // browsers, so the raw pointer position drives a constant loop instead.
+  useEffect(() => {
+    if (!dragId) {
+      if (dragScroll.current) {
+        cancelAnimationFrame(dragScroll.current.raf);
+        dragScroll.current = null;
+      }
+      return;
+    }
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const onMove = (e: PointerEvent) => {
+      const rect = el.getBoundingClientRect();
+      const fromTop = e.clientY - rect.top;
+      const fromBottom = rect.bottom - e.clientY;
+      const inside = fromTop > -EDGE_ZONE_PX && fromBottom > -EDGE_ZONE_PX;
+      let vy = 0;
+      if (inside) {
+        if (fromTop < EDGE_ZONE_PX) {
+          vy = -((EDGE_ZONE_PX - Math.max(0, fromTop)) / EDGE_ZONE_PX) * EDGE_MAX_SPEED;
+        } else if (fromBottom < EDGE_ZONE_PX) {
+          vy = ((EDGE_ZONE_PX - Math.max(0, fromBottom)) / EDGE_ZONE_PX) * EDGE_MAX_SPEED;
+        }
+      }
+      if (!dragScroll.current) dragScroll.current = { y: vy, raf: 0 };
+      else dragScroll.current.y = vy;
+      if (!dragScroll.current.raf) dragScroll.current.raf = requestAnimationFrame(dragScrollStep);
+    };
+    // pointermove keeps firing outside the window edge zone — clamp there.
+    window.addEventListener("pointermove", onMove, { passive: true });
+    // dragover on the list keeps the browser from refusing the drop on gaps.
+    const onDragOver = (e: DragEvent) => {
+      if (el.contains(e.target as Node)) e.preventDefault();
+    };
+    el.addEventListener("dragover", onDragOver);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      el.removeEventListener("dragover", onDragOver);
+      if (dragScroll.current) {
+        cancelAnimationFrame(dragScroll.current.raf);
+        dragScroll.current = null;
+      }
+    };
+  }, [dragId, dragScrollStep]);
+
 
   /**
    * Hovering a card: preview moving the dragged card into that slot. Hovering
@@ -321,7 +394,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
           Auditor (equal row height), so the list grows to match — 2 cards is
           the minimum visible; taller content scrolls (slim nice-scrollbar).
           Drag-to-reorder works across the scroll (HTML5 DnD). */}
-      <div className="nice-scroll min-h-[21.5rem] flex-1 overflow-y-auto pr-1">
+      <div ref={scrollRef} className="nice-scroll min-h-[21.5rem] flex-1 overflow-y-auto pr-1">
         <div className="grid" style={{ gap: "var(--density-card-gap)" }}>
           {list.map((m) => (
             <ModelCard
