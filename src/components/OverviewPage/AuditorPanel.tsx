@@ -250,7 +250,7 @@ export function AuditorPanel() {
         />
       }
       accent
-      className="flex flex-col"
+      className="flex min-h-[600px] flex-col"
       bodyClassName="flex flex-1 flex-col space-y-3"
       actions={
         <div className="flex items-center gap-1.5">
