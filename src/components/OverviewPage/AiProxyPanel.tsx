@@ -24,12 +24,23 @@ const POLL_MS = 5000;
 function llmThroughput(metrics: LlmMetrics[] | undefined): {
   generationTps: number | null;
   prefillTps: number | null;
+  requestsRunning: number | null;
+  requestsWaiting: number | null;
 } {
   const avail = (metrics ?? []).filter((m) => m.available);
-  if (avail.length === 0) return { generationTps: null, prefillTps: null };
+  if (avail.length === 0) {
+    return { generationTps: null, prefillTps: null, requestsRunning: null, requestsWaiting: null };
+  }
+  // Running/waiting come from the engine's own load gauges (vLLM, SGLang).
+  // A backend that never exposes one (TensorFold/EXL3 report running only,
+  // waiting is null) stays null so the cell reads "—" instead of a fake 0.
+  const runSrc = avail.filter((m) => m.requestsRunning != null);
+  const waitSrc = avail.filter((m) => m.requestsWaiting != null);
   return {
     generationTps: avail.reduce((s, m) => s + (m.generationTps || 0), 0),
     prefillTps: avail.reduce((s, m) => s + (m.prefillTps || 0), 0),
+    requestsRunning: runSrc.length > 0 ? runSrc.reduce((s, m) => s + (m.requestsRunning ?? 0), 0) : null,
+    requestsWaiting: waitSrc.length > 0 ? waitSrc.reduce((s, m) => s + (m.requestsWaiting ?? 0), 0) : null,
   };
 }
 
@@ -335,12 +346,12 @@ export function AiProxyPanel({
           <p className="text-xs text-muted">No active requests.</p>
         )}
 
-        {/* Bottom-anchored stat footers — LLM throughput (tok/s + prefill,
-            cloned from the spark boxes) directly above today's reqs + total
-            tokens, pinned together at the bottom of the panel. */}
+        {/* Bottom-anchored stat footers — LLM throughput (tok/s + prefill +
+            engine run/wait, cloned from the spark boxes) directly above
+            today's reqs + total tokens, pinned at the panel bottom. */}
         <div className="mt-auto space-y-3">
           {tps.generationTps !== null && (
-            <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
+            <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
               <div className="text-center">
                 <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.generationTps.toFixed(0)}
@@ -352,6 +363,23 @@ export function AiProxyPanel({
                   {tps.prefillTps !== null ? tps.prefillTps.toFixed(0) : "—"}
                 </span>
                 <span className="text-sm font-normal text-muted"> prefill</span>
+              </div>
+              <div
+                className="border-l border-border text-center"
+                title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang gauges; backends without a wait gauge show the run count only)"
+              >
+                <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                  {tps.requestsRunning ?? (tps.requestsWaiting !== null ? tps.requestsWaiting : "—")}
+                </span>
+                <span className="text-sm font-normal text-muted">
+                  {tps.requestsRunning === null && tps.requestsWaiting !== null
+                    ? " wait"
+                    : tps.requestsWaiting !== null
+                      ? ` run / ${tps.requestsWaiting} wait`
+                      : tps.requestsRunning !== null
+                        ? " run"
+                        : " requests"}
+                </span>
               </div>
             </div>
           )}
