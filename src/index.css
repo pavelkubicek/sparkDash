@@ -26,6 +26,12 @@
   --color-bar-ram: #3b82d6; /* blue for RAM */
   --color-bar-usage: #2aa198; /* teal/cyan for GPU usage, distinct from RAM blue */
   --color-bar-vram: #8b5cf6; /* purple for VRAM */
+  /* Memory categories on the VRAM breakdown bar. Hues, not severity: they
+     stay clear of the amber accent/warning, the red danger and the green
+     success, and each holds >= 3.4:1 against the card in every theme. */
+  --color-mem-engine: #0891b2;
+  --color-mem-system: #6d28d9;
+  --color-mem-other: #8a8478;
   --color-grid: rgba(0, 0, 0, 0.04);
 
   --toggle-track-off: #55514a;
@@ -58,14 +64,17 @@
   --color-border-strong: #484f58;
   --color-text: #c9d1d9;
   --color-text-strong: #ffffff;
-  --color-muted: #8b949e;
-  --color-muted-strong: #b1bac4;
-  --color-accent: #58a6ff;
-  --color-accent-hover: #79c0ff;
-  --color-accent-soft: rgba(88, 166, 255, 0.15);
-  --color-danger: #f85149;
-  --color-warning: #d29922;
-  --color-success: #3fb950;
+  --color-muted: #8a8a8a;
+  --color-muted-strong: #b8b8b8;
+  --color-accent: #e8a830;
+  --color-accent-hover: #f0b840;
+  --color-accent-soft: rgba(232, 168, 48, 0.16);
+  --color-danger: #e5594d;
+  --color-warning: #e0a838;
+  --color-success: #4dbf91;
+  --color-mem-engine: #3fd0e4;
+  --color-mem-system: #8f6ff0;
+  --color-mem-other: #9aa3af;
   --color-bar: #58a6ff; /* GitHub blue progress fill */
   --color-bar-temp: #d29922; /* warm amber for temperatures */
   --color-bar-ram: #58a6ff; /* blue for RAM */
@@ -111,6 +120,9 @@
   --color-bar-ram: #3b82d6; /* blue for RAM */
   --color-bar-usage: #2aa198; /* teal/cyan for GPU usage, distinct from RAM blue */
   --color-bar-vram: #8b5cf6; /* purple for VRAM */
+  --color-mem-engine: #0891b2;
+  --color-mem-system: #6d28d9;
+  --color-mem-other: #8a8a8a;
   --color-grid: rgba(0, 0, 0, 0.04);
 
   --toggle-track-off: #505050;
@@ -154,6 +166,9 @@
   --color-bar-ram: #79c0ff; /* light blue for RAM */
   --color-bar-usage: #39c5cf; /* cyan for GPU usage, distinct from RAM blue */
   --color-bar-vram: #bc8cff; /* purple for VRAM */
+  --color-mem-engine: #3fd0e4;
+  --color-mem-system: #8f6ff0;
+  --color-mem-other: #9aa3af;
   --color-grid: rgba(255, 255, 255, 0.04);
 
   --toggle-track-off: #2a2a2a;
@@ -321,6 +336,18 @@ input:disabled {
 /* Dynamic metric bars — width via --bar-pct only */
 .metric-bar-fill {
   width: var(--bar-pct, 0%);
+}
+
+/* VRAM breakdown bar segments (see src/shared/vramBreakdown.ts) */
+.mem-seg-engine {
+  background-color: var(--color-mem-engine);
+}
+.mem-seg-system {
+  background-color: var(--color-mem-system);
+}
+.mem-seg-other,
+.mem-seg-gpu {
+  background-color: var(--color-mem-other);
 }
 
 .sparkline-box {
@@ -567,6 +594,54 @@ input:disabled {
 .icon-circle:hover {
   background: var(--color-surface-hover);
   color: var(--color-text);
+}
+
+/* ─── Open-access warning chip (header right) ─────────── */
+.open-access {
+  position: relative;
+}
+.open-access-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface-elevated));
+  color: var(--color-warning);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.open-access-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.open-access-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: min(280px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--shadow-shell);
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.45;
+  animation: menu-fade-in 0.12s ease-out;
+}
+.open-access-dismiss {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--color-muted-strong);
+  text-decoration: underline;
 }
 
 /* ─── Logo pill (sparkDash brand) ──────────────────────── */

@@ -86,12 +86,20 @@ export function CpuPanel({
               <span
                 className="text-muted"
                 title={
-                  tempLabel
-                    ? "Package/CPU sensor (coretemp / k10temp)"
-                    : "Board/SoC ACPI zone (no coretemp on GB10)"
+                  cpu?.temperatureSource
+                    ? `Reading from ${cpu.temperatureSource} — ${
+                        cpu.temperatureLabel === "CPU"
+                          ? "the CPU package sensor"
+                          : "an ACPI/board thermal zone, not a CPU package sensor"
+                      }`
+                    : tempLabel
+                      ? "Package/CPU sensor (coretemp / k10temp)"
+                      : "Board/SoC ACPI zone (no coretemp on GB10)"
                 }
               >
-                {tempLabel ?? "SoC temp"}
+                {cpu?.temperatureLabel && cpu.temperatureLabel !== "CPU"
+                  ? `Temperature (${cpu.temperatureLabel})`
+                  : (tempLabel ?? "SoC temp")}
               </span>
               <span className="font-tabular text-[13px] text-text">
                 {temperatureUnit === "fahrenheit"

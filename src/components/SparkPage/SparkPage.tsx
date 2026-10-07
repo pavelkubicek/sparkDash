@@ -14,12 +14,17 @@ import { LlmPanel } from "./LlmPanel";
 import { ComfyPanel } from "./ComfyPanel";
 import { ChevronDownIcon } from "../ui/icons";
 import { useSparkPinned } from "../../hooks/sparkVisibility";
+import { vramContextFor } from "../../shared/vramBreakdown";
 
 interface SparkPageProps {
   spark: SparkSnapshot;
+  /** Every unit's snapshot — lets a worker find its head's LLM endpoint. */
+  fleet?: SparkSnapshot[];
   temperatureUnit: "celsius" | "fahrenheit";
   /** Show "Copy image" in the benchmark dialogs (Settings, off by default). */
   benchShareImage?: boolean;
+  /** GPU panel VRAM bar split by engine / system / free (Settings, on by default). */
+  showVramBreakdown?: boolean;
   onEdit?: () => void;
 }
 
@@ -82,8 +87,10 @@ function SectionHeading({
 
 export function SparkPage({
   spark,
+  fleet,
   temperatureUnit,
   benchShareImage = false,
+  showVramBreakdown = true,
   onEdit,
 }: SparkPageProps) {
   const { metrics } = spark;
@@ -276,6 +283,7 @@ export function SparkPage({
               <>
                 <GpuPanel
                   gpu={metrics.gpu}
+                  vramContext={showVramBreakdown ? vramContextFor(spark, fleet) : null}
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                   className={tailscaleOn ? "md:row-span-4" : "md:row-span-3"}
@@ -314,6 +322,7 @@ export function SparkPage({
                 />
                 <GpuPanel
                   gpu={metrics.gpu}
+                  vramContext={showVramBreakdown ? vramContextFor(spark, fleet) : null}
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                   className={tailscaleOn ? "md:row-span-3" : "md:row-span-2"}

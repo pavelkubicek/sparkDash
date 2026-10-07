@@ -5,6 +5,7 @@ import { isWorkerSpark, resolveSparkRole } from "../../api/sparkRole";
 import { shutdownAllSparks, updateAllHermes, wakeAllSparks } from "../../api/client";
 import { ConfirmShutdownDialog } from "../ConfirmShutdownDialog";
 import { MetricBar } from "../ui/MetricBar";
+import { VramBreakdownBar } from "../ui/VramBreakdownBar";
 import { FleetEnergyCard } from "./FleetEnergyCard";
 import { FleetAlertStrip } from "./FleetAlertStrip";
 import { FleetTokenTotals } from "./FleetTokenTotals";
@@ -16,6 +17,13 @@ import { ModelLauncherPanel } from "./ModelLauncher/ModelLauncherPanel";
 import { AutoPowerPanel } from "./AutoPowerPanel";
 import { useSparkGraphRef } from "../../hooks/sparkVisibility";
 
+import { formatDiskSize, formatMb } from "../../shared/formatBytes";
+import {
+  computeVramBreakdown,
+  headroomMiniStatTone,
+  vramContextFor,
+  type VramBreakdownContext,
+} from "../../shared/vramBreakdown";
 
 interface OverviewPageProps {
   sparks: SparkSnapshot[];
@@ -26,6 +34,8 @@ interface OverviewPageProps {
   showOverviewSearch?: boolean;
   /** Overview LLM token totals card (cumulative tokens per model). */
   showLlmTokenTotals?: boolean;
+  /** VRAM bar split by engine / system / free, judged by headroom. On by default. */
+  showVramBreakdown?: boolean;
   temperatureUnit?: "celsius" | "fahrenheit";
   onSelectSpark?: (id: string) => void;
   /** Model launcher block from the WS snapshot (undefined until it arrives). */
@@ -106,11 +116,14 @@ function MiniStat({
 function SparkCard({
   spark,
   headSparkName,
+  vramContext = null,
   temperatureUnit,
   onSelect,
 }: {
   spark: SparkSnapshot;
   headSparkName?: string | null;
+  /** Breakdown inputs (see `vramContextFor`); null keeps the plain VRAM bar. */
+  vramContext?: VramBreakdownContext | null;
   temperatureUnit: "celsius" | "fahrenheit";
   onSelect?: (id: string) => void;
 }) {
@@ -133,11 +146,13 @@ function SparkCard({
 
   // Temperature bar: <68°C green, 68–73°C orange, 73°C+ red
   const tempBarColor =
-    tempRaw >= 73 ? "bg-danger" : tempRaw >= 68 ? "bg-warning" : "bg-success";
-  // Usage bar: cyan, red from 90%+
-  const usageBarColor = usage >= 90 ? "bg-danger" : "bg-bar-usage";
-  // VRAM allocation: purple, red only at critical
-  const vramBarColor = vramPct > 95 ? "bg-danger" : "bg-bar-vram";
+    tempRaw > 85 ? "bg-danger" : tempRaw > 65 ? "bg-warning" : tempRaw > 40 ? "bg-accent" : "bg-success";
+  // Usage bar: accent for moderate, warning high, danger critical
+  const usageBarColor = usage > 85 ? "bg-danger" : usage > 60 ? "bg-warning" : "bg-accent";
+  // VRAM allocation: accent normal → warning/danger as it fills
+  const vramBarColor = vramPct > 85 ? "bg-danger" : vramPct > 60 ? "bg-warning" : "bg-accent";
+  const breakdown =
+    gpu && vramContext ? computeVramBreakdown(gpu.vram, gpu.processes, vramContext) : null;
 
   return (
     <div
@@ -235,11 +250,24 @@ function SparkCard({
         </div>
       ) : (
         <>
-          {/* Three headline bars: RAM, GPU alloc, Temp, Usage */}
+          {/* Headline bars: VRAM, (RAM), GPU temp, (CPU temp), GPU util */}
           <div className="flex flex-col gap-3.5">
-            {(() => {
-              // System RAM — always shown on the dashboard (crucial when we
-              // track more than just VRAM). Separate from discrete VRAM.
+            {gpuMonitored && (breakdown ? (
+              <VramBreakdownBar
+                label={breakdown.systemMB != null ? "Unified memory" : "VRAM"}
+                breakdown={breakdown}
+              />
+            ) : (
+              <MetricBar
+                label="VRAM"
+                value={vramUsed}
+                max={vramTotal}
+                color={vramBarColor}
+                caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
+              />
+            ))}
+            {spark.kind === "host" && (() => {
+              // Non-Spark hosts: system RAM is separate from discrete VRAM.
               const ram = spark.metrics.ram;
               const rUsed = ram?.used ?? 0;
               const rTotal = ram?.total ?? 0;
@@ -257,20 +285,7 @@ function SparkCard({
             })()}
             {gpuMonitored && (
               <MetricBar
-                label="VRAM"
-                value={vramUsed}
-                max={vramTotal}
-                color={vramBarColor}
-                caption={vramTotal > 0 ? `${fmtStorage(vramUsed, false)} / ${fmtStorage(vramTotal, true)}` : "—"}
-              />
-            )}
-            {gpuMonitored && (
-              <MetricBar
-                label={
-                  spark.kind === "host" || (spark.metrics.cpu?.temperature ?? 0) > 0
-                    ? "GPU"
-                    : "Temperature"
-                }
+                label="GPU temp"
                 value={displayTemp}
                 max={temperatureUnit === "fahrenheit" ? 212 : 100}
                 color={tempBarColor}
@@ -287,7 +302,7 @@ function SparkCard({
                 cpuRaw >= 73 ? "bg-danger" : cpuRaw >= 68 ? "bg-warning" : "bg-success";
               return (
                 <MetricBar
-                  label="CPU"
+                  label="CPU temp"
                   value={cpuDisplay}
                   max={temperatureUnit === "fahrenheit" ? 212 : 100}
                   color={cpuBarColor}
@@ -305,7 +320,7 @@ function SparkCard({
             )}
             {gpuMonitored && (
               <MetricBar
-                label="Usage"
+                label="GPU util"
                 value={usage}
                 max={100}
                 color={usageBarColor}
@@ -331,6 +346,21 @@ function SparkCard({
                 value={`${gpu?.power?.draw ?? 0}W / ${gpu?.power?.limit ?? 0}W`}
               />
             )}
+            {breakdown ? (
+              <MiniStat
+                label="Available"
+                value={formatMb(breakdown.freeMB)}
+                tone={headroomMiniStatTone(breakdown.tone)}
+              />
+            ) : (
+              vramAvail > 0 && (
+                <MiniStat
+                  label="Available"
+                  value={formatMb(vramAvail)}
+                  tone={vramAvail < 4096 ? "danger" : vramAvail < 16384 ? "warning" : "accent"}
+                />
+              )
+            )}
             <MiniStat
               label="CPU Power"
               value={`${spark.metrics.cpu?.draw ?? 0}W / ${spark.metrics.cpu?.tdp ?? 0}W`}
@@ -346,7 +376,8 @@ function SparkCard({
                 return (
                   <MiniStat
                     label="Storage"
-                    value={`${fmtStorage(rootDisk.used, false)} / ${fmtStorage(rootDisk.total, true)}`}
+                    value={`${formatDiskSize(rootDisk.used)} / ${formatDiskSize(rootDisk.total)}`}
+                    title={`${fmtStorage(rootDisk.used, true)} of ${fmtStorage(rootDisk.total, true)} used (${Math.round(rootDisk.percentage)}%)`}
                     tone={rootDisk.percentage > 85 ? "danger" : rootDisk.percentage > 60 ? "warning" : "default"}
                     bold={false}
                   />
@@ -390,7 +421,7 @@ function SparkCard({
                       : llm.backend === "ds4"
                         ? "ds4"
                         : llm.backend === "sglang"
-                          ? "sgLang"
+                          ? "SGLang"
                           : llm.backend === "exl3"
                             ? "EXL3"
                             : llm.backend === "q27"
@@ -445,6 +476,7 @@ export function OverviewPage({
   showFleetExceptions = false,
   showOverviewSearch = false,
   showLlmTokenTotals = false,
+  showVramBreakdown = true,
   temperatureUnit = "celsius",
   onSelectSpark,
   models,
@@ -789,6 +821,7 @@ export function OverviewPage({
                 ? sparks.find((s) => s.id === spark.workerHeadId)?.name ?? null
                 : null
             }
+            vramContext={showVramBreakdown ? vramContextFor(spark, sparks) : null}
             temperatureUnit={temperatureUnit}
             onSelect={onSelectSpark}
           />

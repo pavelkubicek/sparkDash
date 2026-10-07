@@ -1,6 +1,7 @@
-/** Color band for metric bars — metric-specific base, red only at critical. */
-export function bandColor(pct: number, base = "bg-bar"): string {
-  if (pct > 95) return "bg-danger";
+/** Color band for metric bars — green normal, amber elevated, red critical. */
+export function bandColor(pct: number, base = "bg-accent"): string {
+  if (pct > 85) return "bg-danger";
+  if (pct > 60) return "bg-warning";
   return base;
 }
 
@@ -22,7 +23,7 @@ export function MetricBar({
   label,
   value,
   max,
-  color = "bg-bar",
+  color = "bg-accent",
   caption,
   subCaption,
 }: MetricBarProps) {

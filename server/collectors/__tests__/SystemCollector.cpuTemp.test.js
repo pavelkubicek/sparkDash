@@ -6,6 +6,8 @@ import { HOST_PATHS } from "../../config.js";
 
 const c = Object.create(SystemCollector.prototype);
 const parse = (raw) => c._parseSensorTemp(raw);
+const pick = (candidates) => c._pickCpuTemperature(candidates);
+const label = (source) => c._cpuTempSourceLabel(source);
 
 // ─── _getCPUTemperature with mocked sysfs ─────────────────
 const SYS = HOST_PATHS.SYS; // /host/sys
@@ -85,7 +87,9 @@ test("remote CPU command includes the sensor dump and the RAPL triple", () => {
   const hostCmd = host._buildRemoteCpuCommand();
   assert.equal(sparkCmd, hostCmd);
   assert.match(sparkCmd, /coretemp\|k10temp\|zenpower\|acpitz/);
-  assert.match(sparkCmd, /thermal_zone\*\/temp/);
+  // Every sensor line names itself, so the reader can say which one it used.
+  assert.match(sparkCmd, /echo "\$n \$v"/);
+  assert.match(sparkCmd, /\$z\/type/);
   assert.match(sparkCmd, /\|\| true$/);
   // stat / cpuinfo / temps / rapl energy / rapl max-range / rapl PL1
   assert.equal((sparkCmd.match(/echo '---'/g) || []).length, 5);
@@ -98,14 +102,15 @@ test("remote CPU collection returns temperature for DGX Spark nodes", async () =
   const result = await collector._getRemoteCpu(async (spark, command) => {
     assert.equal(spark.id, "spark-test");
     assert.match(command, /coretemp\|k10temp\|zenpower\|acpitz/);
-    assert.match(command, /thermal_zone\*\/temp/);
+    assert.match(command, /thermal_zone\*/);
     // GB10: the three RAPL sections come back EMPTY — estimate path must survive.
+    assert.equal((command.match(/echo '---'/g) || []).length, 5);
     return [
       "cpu 100 0 40 860 0 0 0 0",
       "---",
       "CPU architecture: 8",
       "---",
-      "70900",
+      "acpitz 70900",
       "---",
       "",
       "---",
@@ -118,6 +123,9 @@ test("remote CPU collection returns temperature for DGX Spark nodes", async () =
   assert.equal(result.temperature, 70.9);
   assert.equal(result.tdp, 65);
   assert.equal(result.source, "estimate");
+  // GB10 exposes no CPU package sensor, and the card must not claim otherwise.
+  assert.equal(result.temperatureLabel, "ACPI");
+  assert.equal(result.temperatureSource, "acpitz");
 });
 
 test("remote CPU collection reports measured RAPL package watts", async () => {
@@ -202,133 +210,52 @@ test("rounds to one decimal", () => {
   assert.equal(parse("69240"), 69.2);
 });
 
-// ─── sensor-selection tests ───────────────────────────────
-test("prefers the hottest coretemp input over lower ones", async () => {
-  mockSysfs({
-    names: { hwmon0: "acpitz", hwmon1: "coretemp" },
-    temps: {
-      hwmon0: { temp1_input: "84000", temp2_input: "68000" },
-      hwmon1: { temp1_input: "52000", temp2_input: "61000", temp3_input: "58000" },
-    },
-    zones: {},
+test("names what the sensor actually is", () => {
+  assert.equal(label("coretemp"), "CPU");
+  assert.equal(label("k10temp"), "CPU");
+  assert.equal(label("acpitz"), "ACPI");
+  assert.equal(label("soc_thermal"), "SoC");
+  assert.equal(label("mt7925_phy0"), "mt7925_phy0");
+  assert.equal(label(null), null);
+});
+
+test("prefers a real CPU sensor wherever it appears, and labels the fallback", () => {
+  // The reported bug: the first zone on a GB10 is acpitz, ~15 °C above the die,
+  // and the panel called it "CPU". A CPU sensor must win wherever it is found...
+  const preferred = pick([
+    { source: "acpitz", millidegrees: 44800 },
+    { source: "coretemp", millidegrees: 38200 },
+  ]);
+  assert.deepEqual(preferred, { temperature: 38.2, temperatureLabel: "CPU", temperatureSource: "coretemp" });
+
+  // ...and when there is none, the reading is kept but named honestly.
+  const fallback = pick([
+    { source: "acpitz", millidegrees: 44800 },
+    { source: "acpitz", millidegrees: 43100 },
+  ]);
+  assert.deepEqual(fallback, { temperature: 44.8, temperatureLabel: "ACPI", temperatureSource: "acpitz" });
+
+  // Unnamed (older command shape) readings still work, unlabelled.
+  assert.deepEqual(pick([{ source: null, millidegrees: 70900 }]), {
+    temperature: 70.9,
+    temperatureLabel: null,
+    temperatureSource: null,
   });
-  try {
-    const t = await c._getCPUTemperature();
-    // hottest coretemp input wins, not temp1 (52) nor acpitz (84)
-    assert.equal(t, 61);
-  } finally {
-    restoreFs();
-  }
-});
 
-test("falls back to hottest acpitz zone when no CPU sensor exists", async () => {
-  mockSysfs({
-    names: { hwmon0: "acpitz" },
-    temps: {
-      hwmon0: { temp1_input: "84000", temp2_input: "68000", temp3_input: "71000" },
-    },
-    zones: {
-      thermal_zone0: 83000,
-      thermal_zone1: 69000,
-      thermal_zone2: 85000,
-    },
+  // Implausible values are skipped; nothing readable means 0 with no label.
+  assert.deepEqual(pick([{ source: "coretemp", millidegrees: 0 }]), {
+    temperature: 0,
+    temperatureLabel: null,
+    temperatureSource: null,
   });
-  try {
-    const t = await c._getCPUTemperature();
-    // hottest board zone (85), above hwmon acpitz temp1 (84)
-    assert.equal(t, 85);
-  } finally {
-    restoreFs();
-  }
+  assert.deepEqual(pick([]), { temperature: 0, temperatureLabel: null, temperatureSource: null });
 });
 
-test("thermal-zone fallback picks the max zone", async () => {
-  mockSysfs({ names: {}, temps: {}, zones: { thermal_zone0: 70000, thermal_zone1: 82000 } });
-  try {
-    const t = await c._getCPUTemperature();
-    assert.equal(t, 82);
-  } finally {
-    restoreFs();
-  }
-});
-
-test("returns 0 when no sensors are readable", async () => {
-  mockSysfs({ names: {}, temps: {}, zones: {} });
-  try {
-    const t = await c._getCPUTemperature();
-    assert.equal(t, 0);
-  } finally {
-    restoreFs();
-  }
-});
-
-test("ignores non-CPU/non-board hwmon drivers (nvme, mlx5, mt7925)", async () => {
-  mockSysfs({
-    names: { hwmon0: "nvme", hwmon1: "mlx5", hwmon2: "mt7925_phy0", hwmon3: "acpitz" },
-    temps: {
-      hwmon0: { temp1_input: "52850" },
-      hwmon1: { temp1_input: "68000" },
-      hwmon2: { temp1_input: "59000" },
-      hwmon3: { temp1_input: "76000" },
-    },
-    zones: {},
-  });
-  try {
-    const t = await c._getCPUTemperature();
-    // only acpitz is considered → hottest (only) = 76
-    assert.equal(t, 76);
-  } finally {
-    restoreFs();
-  }
-});
-
-test("rejects out-of-range values and falls through", async () => {
-  mockSysfs({
-    names: { hwmon0: "coretemp" },
-    temps: { hwmon0: { temp1_input: "0", temp2_input: "250000", temp3_input: "70900" } },
-    zones: {},
-  });
-  try {
-    const t = await c._getCPUTemperature();
-    assert.equal(t, 70.9);
-  } finally {
-    restoreFs();
-  }
-});
-
-test("collectCpu reports SoC/board temp for non-host kinds (GB10 acpitz)", async () => {
-  // Object.create drops the constructor fields; build a real instance-like obj
-  // with the methods stubbed so we only exercise the temperature path.
-  const spark = Object.create(SystemCollector.prototype);
-  spark.spark = { kind: "spark", isLocal: true, id: "spark1" };
-  // Baseline so the /proc/stat diff yields 50%: used +50 on total +100.
-  spark.lastCpuStat = { total: 100, used: 50 };
-  spark.lastCpuUsagePct = 50;
-  spark._getCPUUsage = async () => ({ total: 200, used: 100 });
-  spark._getCPUPower = async () => ({ draw: 20, tdp: 65 });
-  spark._getCPUTemperature = async () => 84; // GB10 acpitz SoC/board reading
-  try {
-    const result = await spark.collectCpu();
-    assert.equal(result.temperature, 84, "non-host kind reports the acpitz SoC temp");
-    assert.equal(result.usage, 50);
-  } finally {
-    restoreFs();
-  }
-});
-
-test("collectCpu reports temp for host kind", async () => {
-  const spark = Object.create(SystemCollector.prototype);
-  spark.spark = { kind: "host", isLocal: true, id: "host1" };
-  spark.lastCpuStat = { total: 100, used: 50 };
-  spark.lastCpuUsagePct = 50;
-  spark._getCPUUsage = async () => ({ total: 200, used: 100 });
-  spark._getCPUPower = async () => ({ draw: 120, tdp: 185 });
-  spark._getCPUTemperature = async () => 61;
-  try {
-    const result = await spark.collectCpu();
-    assert.equal(result.temperature, 61);
-    assert.equal(result.usage, 50);
-  } finally {
-    restoreFs();
-  }
+test("remote sensor dump parsing tolerates both formats", () => {
+  assert.deepEqual(c._parseSensorCandidates("acpitz 44800\ncoretemp 38200\n"), [
+    { source: "acpitz", millidegrees: 44800 },
+    { source: "coretemp", millidegrees: 38200 },
+  ]);
+  assert.deepEqual(c._parseSensorCandidates("\n70900\n"), [{ source: null, millidegrees: 70900 }]);
+  assert.deepEqual(c._parseSensorCandidates(""), []);
 });

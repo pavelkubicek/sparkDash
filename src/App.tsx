@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppRoute, useRoute } from "./hooks/useRoute";
-import { fetchSparks, reorderSparks, fetchSettings } from "./api/client";
+import { fetchSparks, reorderSparks, fetchSettings, fetchHealth } from "./api/client";
 import { SparkTabs } from "./components/SparkTabs";
 import { AddSparkDialog } from "./components/AddSparkDialog";
 import { EditSparkDialog } from "./components/EditSparkDialog";
@@ -13,12 +13,15 @@ import { ModelEditDialog } from "./components/OverviewPage/ModelLauncher/ModelEd
 import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
 import { ThemeSwitch } from "./components/ThemeSwitch";
+import { OpenAccessChip } from "./components/OpenAccessChip";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { AccessTokenPrompt } from "./components/AccessTokenDialog";
+import { onTokenChange } from "./api/authToken";
 import { GearIcon, BoltIcon } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
 import { OVERVIEW_ID } from "./constants";
-import type { Settings, SparkSnapshot } from "./api/types";
+import type { AuthMode, Settings, SparkSnapshot } from "./api/types";
 import { isWorkerSpark } from "./api/sparkRole";
 import { useAppBadge } from "./hooks/useAppBadge";
 
@@ -150,6 +153,7 @@ function DashboardApp() {
   const [editId, setEditId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   /** Used when WS is down so add/delete still updates the tab bar */
   const [fallbackSparks, setFallbackSparks] = useState<SparkSnapshot[]>([]);
@@ -214,15 +218,31 @@ function DashboardApp() {
     if (sparks.length > 0) setFallbackSparks([]);
   }, [sparks]);
 
-  // Fetch global settings on mount
+  // Fetch global settings on mount, and again when a new access token is
+  // saved (the first load may have been refused for the missing token).
   useEffect(() => {
-    fetchSettings()
-      .then(setSettings)
-      .catch((err) =>
-        setActionError(
-          `Could not load settings: ${err instanceof Error ? err.message : String(err)}. Reload to retry.`
-        )
-      );
+    const load = (afterTokenChange: boolean) =>
+      fetchSettings()
+        .then((s) => {
+          setSettings(s);
+          if (afterTokenChange) setActionError(null);
+        })
+        .catch((err) =>
+          setActionError(
+            `Could not load settings: ${err instanceof Error ? err.message : String(err)}. Reload to retry.`
+          )
+        );
+    void load(false);
+    return onTokenChange((token) => {
+      if (token) void load(true);
+    });
+  }, []);
+
+  // Auth posture once on load — drives the "Open access" header warning.
+  useEffect(() => {
+    fetchHealth()
+      .then((h) => setAuthMode(h.authMode))
+      .catch(() => setAuthMode(null));
   }, []);
 
   const handleSettingsSaved = useCallback((s: Settings) => {
@@ -337,6 +357,7 @@ function DashboardApp() {
             onReorder={handleReorder}
           />
           <div className="ml-auto flex items-center gap-2.5">
+            <OpenAccessChip authMode={authMode} />
             <button
               type="button"
               onClick={() => setShowSettings(true)}
@@ -367,6 +388,7 @@ function DashboardApp() {
               showFleetExceptions={settings?.showFleetExceptions ?? false}
               showOverviewSearch={settings?.showOverviewSearch ?? false}
               showLlmTokenTotals={settings?.showLlmTokenTotals ?? false}
+              showVramBreakdown={settings?.showVramBreakdown ?? true}
               temperatureUnit={settings?.temperatureUnit ?? "celsius"}
               onSelectSpark={navigate}
               models={models}
@@ -376,8 +398,10 @@ function DashboardApp() {
           ) : displayActive ? (
             <SparkPage
               spark={displayActive}
+              fleet={displaySparks}
               temperatureUnit={settings?.temperatureUnit ?? "celsius"}
               benchShareImage={settings?.benchShareImage ?? false}
+              showVramBreakdown={settings?.showVramBreakdown ?? true}
               onEdit={() => setEditId(displayActive.id)}
             />
           ) : (
@@ -434,10 +458,16 @@ function DashboardApp() {
 
 function App() {
   const route = useAppRoute();
-  if (route.mode === "showcase" && route.showcaseSparkId) {
-    return <ShowcasePage sparkId={route.showcaseSparkId} />;
-  }
-  return <DashboardApp />;
+  return (
+    <>
+      {route.mode === "showcase" && route.showcaseSparkId ? (
+        <ShowcasePage sparkId={route.showcaseSparkId} />
+      ) : (
+        <DashboardApp />
+      )}
+      <AccessTokenPrompt />
+    </>
+  );
 }
 
 export default App;

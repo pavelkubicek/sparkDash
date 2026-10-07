@@ -16,7 +16,7 @@ import {
   validateDecodeBudget,
   validatePrefillBudget,
 } from "./validate.js";
-import { authorizeUpgrade, configuredToken, createAuthMiddleware, requireRemoteAuth } from "./auth.js";
+import { authStatus, authorizeUpgrade, createAuthMiddleware, isLoopbackBind, setTailscaleName } from "./auth.js";
 import { inspectHealth } from "./health.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
@@ -58,6 +58,7 @@ import {
   registerFleetEnergyRoute,
 } from "./energy/FleetEnergyRuntime.js";
 import { testSparkConnectivity } from "./connectivity.js";
+import { TailscaleProbe } from "./collectors/TailscaleProbe.js";
 import { inspectStartupPreflight, logStartupPreflight } from "./startupPreflight.js";
 
 dotenv.config();
@@ -66,9 +67,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 
-// Default to loopback. Direct non-loopback binds fail closed because this release
-// does not authenticate LAN clients. Use an SSH tunnel, authenticated reverse
-// proxy, or Tailscale Serve (docs/REMOTE-ACCESS.md).
+// Default to loopback. A non-loopback bind without SPARKDASH_TOKEN stays OPEN —
+// anyone who can reach the port can mutate settings and power units — unless
+// SPARKDASH_ALLOW_OPEN_REMOTE=0, which makes startup fail closed instead. Prefer
+// SPARKDASH_TOKEN, an SSH tunnel, an authenticated reverse proxy, or Tailscale
+// Serve (docs/REMOTE-ACCESS.md).
 const BIND_HOST = process.env.BIND_HOST || "127.0.0.1";
 const PORT = parseInt(process.env.PORT || "5555", 10);
 const LLM_PORT = parseInt(process.env.LLM_PORT || "8888", 10);
@@ -341,6 +344,11 @@ const app = express();
 const server = createServer(app);
 
 app.use(express.json());
+// Registered ahead of the auth middleware: a remote browser holding no token
+// (or a stale one) must still be able to learn that it needs one.
+app.get("/api/auth/status", (req, res) => {
+  res.json(authStatus(req));
+});
 app.use(createAuthMiddleware());
 
 app.get("/api/health", (_req, res) => {
@@ -711,6 +719,7 @@ app.patch("/api/sparks/:id", (req, res) => {
       const existing = registry.getSpark(req.params.id);
       if (!existing) return res.status(404).json({ error: "Spark not found" });
       const merged = {
+        isLocal: body.isLocal ?? existing.isLocal,
         lanIp: body.lanIp ?? existing.lanIp,
         ssh: { ...existing.ssh, ...(body.ssh || {}) },
       };
@@ -1727,8 +1736,9 @@ app.delete("/api/sparks/:id/llm/showcase/:sessionId", (req, res) => {
 // over SSH (sudo -n /usr/local/bin/spark-shutdown, passwordless), the local Spark
 // reaches host systemd via nsenter when running inside the sparkDash container.
 // Wake-on-LAN helper is server/wol.js.
-// These routes are unauthenticated like the rest of the LAN dashboard — do not
-// expose port 5555 beyond a trusted network.
+// These routes sit behind the same auth middleware as every other mutation: a
+// bearer token when SPARKDASH_TOKEN is set, otherwise open on loopback and on an
+// open remote bind — so do not expose port 5555 beyond a trusted network.
 // initiateSparkShutdown / shutdownErrorStatus come from ./shutdown.js.
 /** Batch routes first so they never collide with /:id/* if routing changes. */
 app.post("/api/sparks/shutdown-all", async (_req, res) => {
@@ -2073,14 +2083,21 @@ logStartupPreflight(startupPreflight, BIND_HOST, PORT);
 
 if (!startupPreflight.fatal) {
   startBroadcast();
+  if (isLoopbackBind(BIND_HOST)) {
+    // Learn this machine's MagicDNS name (via the host namespace in Docker) so Tailscale Serve
+    // needs no SPARKDASH_ALLOWED_HOSTS entry; re-checked now and then in case tailscaled starts later.
+    const learnTailscaleName = () =>
+      new TailscaleProbe({ isLocal: true }).probe().then(({ dnsName }) => dnsName && setTailscaleName(dnsName));
+    learnTailscaleName();
+    setInterval(learnTailscaleName, 10 * 60 * 1000).unref();
+  }
   server.listen(PORT, BIND_HOST, () => {
     console.log(`[sparkDash] server listening on http://${BIND_HOST}:${PORT}`);
     console.log(`[sparkDash] WebSocket endpoint ws://${BIND_HOST}:${PORT}/ws`);
-    const remote = requireRemoteAuth(BIND_HOST);
-    const tokenConfigured = Boolean(configuredToken());
-    console.log(`[sparkDash] bind=${BIND_HOST} auth=${tokenConfigured ? "bearer" : remote ? "required-missing" : "loopback-open"}`);
-    if (remote && !tokenConfigured) {
-      console.warn("[sparkDash] WARNING: remote bind without SPARKDASH_TOKEN — mutations and telemetry will fail closed until a token is set.");
+    const { authMode } = inspectHealth(BIND_HOST);
+    console.log(`[sparkDash] bind=${BIND_HOST} auth=${authMode}`);
+    if (authMode === "open-remote") {
+      console.warn("[sparkDash] WARNING: remote bind without SPARKDASH_TOKEN is OPEN — anyone who can reach this port can change settings and power units off. Set SPARKDASH_TOKEN to require a token.");
     }
     startAllMonitors();
     fleetEnergyRuntime.start();
