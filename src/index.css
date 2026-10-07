@@ -257,6 +257,8 @@
 html {
   color-scheme: light;
   font-size: var(--density-root-font, 121%);
+  /* Whole page never renders narrower than 1200px; smaller viewports scroll horizontally */
+  min-width: 1200px;
 }
 
 [data-theme="dark"] {
