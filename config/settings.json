@@ -11,7 +11,7 @@
   "energyAlwaysSampling": false,
   "showFleetExceptions": false,
   "showOverviewSearch": false,
-  "showLlmTokenTotals": true,
+  "showLlmTokenTotals": false,
   "benchShareImage": true,
   "showVramBreakdown": true
 }
