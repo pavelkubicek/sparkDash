@@ -164,6 +164,50 @@ test("_applyTensorFoldHealth: CUDA 0.6.0 streams size the slot tile and count bu
   assert.equal(probe.slotsActive, 0);
 });
 
+test("_applyTensorFoldHealth: the live block carries the run/wait gauges", () => {
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8000);
+  // Shape captured from spark1's TensorFold server while one stream decoded.
+  probe._applyTensorFoldHealth(
+    {
+      status: "ok",
+      model: "qwen3.8-flash-xhigh",
+      max_batch_size: 16,
+      warming: false,
+      memory: {},
+      live: {
+        connections: 1,
+        waiting: 0,
+        decode_tokens_per_second: 106.5,
+        prefill_tokens_per_second: 0.0,
+      },
+    },
+    2
+  );
+  // No `busy` field: the running count is live.connections, not the EXL3 0/1 flag.
+  assert.equal(probe.requestsRunning, 1);
+  assert.equal(probe.slotsActive, 1);
+  assert.equal(probe.slotsTotal, 16);
+  assert.equal(probe.requestsWaiting, 0);
+
+  // Requests queued past the batch are the waiting ones.
+  probe._applyTensorFoldHealth({ status: "ok", max_batch_size: 16, live: { connections: 16, waiting: 3 } }, 2);
+  assert.equal(probe.requestsRunning, 16);
+  assert.equal(probe.requestsWaiting, 3);
+
+  // A server publishing both keeps requests_running authoritative.
+  probe._applyTensorFoldHealth(
+    { ok: true, requests_running: 2, streams: { max: 4 }, live: { connections: 5, waiting: 1 } },
+    2
+  );
+  assert.equal(probe.requestsRunning, 2);
+  assert.equal(probe.slotsActive, 2);
+  assert.equal(probe.requestsWaiting, 1);
+
+  // No live block (MLX / older CUDA): wait stays unknown, not a fake 0.
+  probe._applyTensorFoldHealth({ ok: true, busy: true, max_batch_size: 8 }, 2);
+  assert.equal(probe.requestsWaiting, null);
+});
+
 test("_applyTensorFoldHealth: CUDA 0.6.0 KV pool tokens give the KV fill", () => {
   const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888);
   // spark-1, TensorFold 0.6.0 CUDA, idle with 32 kept prompts.
@@ -207,4 +251,22 @@ test("probe: tensorfold snapshot carries kvCacheUsage and null pool sizes", asyn
   assert.equal(snap.kvCacheUsage, 0.0549);
   assert.equal(snap.kvCacheGb, null);
   assert.equal(snap.weightsGb, null);
+});
+
+test("probe: tensorfold snapshot exposes live run/wait to the panels", async () => {
+  const probe = new LlmProbe({ lanIp: "10.0.0.1" }, 8000);
+  probe._fetch = async (url) => {
+    const u = String(url);
+    if (u.endsWith("/v1/models")) return jsonRes(CUDA_MODELS);
+    if (u.endsWith("/health")) {
+      return jsonRes({ status: "ok", max_batch_size: 16, live: { connections: 2, waiting: 5 } });
+    }
+    return notFound();
+  };
+  const snap = await probe.probe();
+  assert.equal(snap.backend, "tensorfold");
+  assert.equal(snap.requestsRunning, 2);
+  assert.equal(snap.requestsWaiting, 5);
+  assert.equal(snap.slotsActive, 2);
+  assert.equal(snap.slotsTotal, 16);
 });

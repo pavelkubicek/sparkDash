@@ -343,9 +343,9 @@ export interface LlmMetrics {
   kvCacheGb?: number | null;
   /** Engine model weights resident in GPU memory, GB (SGLang). null when not reported. */
   weightsGb?: number | null;
-  /** vLLM running request count. null when unavailable. */
+  /** Requests the engine is serving right now (vLLM/SGLang gauges, TensorFold `requests_running` / `live.connections`). null when unavailable. */
   requestsRunning?: number | null;
-  /** vLLM waiting request count. null when unavailable. */
+  /** Requests accepted but queued for a slot (vLLM/SGLang gauges, TensorFold `live.waiting`). null when the backend has no wait gauge. */
   requestsWaiting?: number | null;
   /** vLLM time-to-first-token p95 in seconds. null when unavailable. */
   ttftP95Seconds?: number | null;

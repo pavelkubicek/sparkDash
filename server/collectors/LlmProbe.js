@@ -911,7 +911,9 @@ export class LlmProbe {
    * `completion_tokens_total`, optional `busy` / `context_length`). The MLX server's
    * `max_batch_size` sizes the slot tile, and so does the CUDA 0.6.0 server's
    * `streams.max`; the older CUDA server's `{ok: true}` has no counters, so rates
-   * read 0 instead of a made-up number.
+   * read 0 instead of a made-up number. The load gauges come from
+   * `requests_running` / `streams` (CUDA 0.6.0) or from the `live` block
+   * (`connections` / `waiting`) on servers that publish it instead.
    * @param {Record<string, unknown> | null} data
    * @param {number} dtSec
    */
@@ -935,6 +937,17 @@ export class LlmProbe {
     if (Number.isFinite(max) && max > 0) this.slotsTotal = Math.round(max);
     // null must not read as 0 busy streams (Number(null) === 0).
     const count = (v) => (v == null ? NaN : Number(v));
+    // Newer TensorFold servers answer with a `live` block instead of the CUDA
+    // 0.6.0 fields: `connections` are the requests being served right now and
+    // `waiting` the ones accepted but queued for a free slot — the same pair
+    // vLLM exposes as num_requests_running / num_requests_waiting (observed on
+    // spark1: connections 1, waiting 0, max_batch_size 16 while decoding).
+    // Free slots say nothing about a queue, so a server without `live` keeps
+    // requestsWaiting null and the panels show the run count alone.
+    const live =
+      health.live && typeof health.live === "object" && !Array.isArray(health.live)
+        ? health.live
+        : {};
     let running = count(health.requests_running);
     if (!Number.isFinite(running)) {
       const decoding = count(streams.decoding);
@@ -945,10 +958,13 @@ export class LlmProbe {
           (Number.isFinite(prefilling) ? prefilling : 0);
       }
     }
+    if (!Number.isFinite(running)) running = count(live.connections);
     if (Number.isFinite(running) && running >= 0) {
       this.requestsRunning = Math.round(running);
       this.slotsActive = Math.round(running);
     }
+    const waiting = count(live.waiting);
+    if (Number.isFinite(waiting) && waiting >= 0) this.requestsWaiting = Math.round(waiting);
     // 0.6.0 CUDA sizes its KV pool in tokens: `pool_tokens` in all,
     // `pool_free_tokens` not held by a request (kept prompts count as held).
     const pool = count(health.pool_tokens);

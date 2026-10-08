@@ -31,9 +31,10 @@ function llmThroughput(metrics: LlmMetrics[] | undefined): {
   if (avail.length === 0) {
     return { generationTps: null, prefillTps: null, requestsRunning: null, requestsWaiting: null };
   }
-  // Running/waiting come from the engine's own load gauges (vLLM, SGLang).
-  // A backend that never exposes one (TensorFold/EXL3 report running only,
-  // waiting is null) stays null so the cell reads "—" instead of a fake 0.
+  // Running/waiting come from the engine's own load gauges (vLLM, SGLang, and
+  // TensorFold's /health `live` block). A backend that never exposes one
+  // (EXL3 / ds4 / q27 / llama.cpp report running only, waiting is null) stays
+  // null so the cell reads "—" instead of a fake 0.
   const runSrc = avail.filter((m) => m.requestsRunning != null);
   const waitSrc = avail.filter((m) => m.requestsWaiting != null);
   return {
@@ -366,7 +367,7 @@ export function AiProxyPanel({
               </div>
               <div
                 className="border-l border-border text-center"
-                title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang gauges; backends without a wait gauge show the run count only)"
+                title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
               >
                 <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.requestsRunning ?? (tps.requestsWaiting !== null ? tps.requestsWaiting : "—")}
