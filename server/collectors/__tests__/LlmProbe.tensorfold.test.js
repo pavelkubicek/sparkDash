@@ -270,3 +270,121 @@ test("probe: tensorfold snapshot exposes live run/wait to the panels", async () 
   assert.equal(snap.slotsActive, 2);
   assert.equal(snap.slotsTotal, 16);
 });
+
+/** Shape captured from `tensorfold serve` on spark1 (multi-model CUDA server). */
+const NEW_HEALTH = {
+  status: "ok",
+  model: "qwen3.8-flash-xhigh",
+  model_ids: ["qwen3.8-flash-xhigh"],
+  max_batch_size: 16,
+  warming: false,
+  memory: {},
+  live: {
+    connections: 2,
+    waiting: 0,
+    decode_tokens_per_second: 143.5,
+    prefill_tokens_per_second: 7.25,
+  },
+};
+
+function textRes(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => ({}),
+    text: async () => body,
+  };
+}
+
+/** Trimmed from the real `GET /metrics` on spark1:8000; buckets kept cumulative. */
+function tfMetrics({ prompt = 12832023, gen = 96610, ttftSum = 379.309569, ttftCount = 364 } = {}) {
+  return [
+    "tensorfold:requests_running 2",
+    "tensorfold:requests_waiting 0",
+    `tensorfold:prompt_tokens_total ${prompt}`,
+    `tensorfold:generation_tokens_total ${gen}`,
+    'tensorfold:kv_cache_usage_ratio{pool="0"} 0.094266',
+    'tensorfold:kv_cache_usage_ratio{pool="1"} 0.056007',
+    "tensorfold:mtp_drafted_total 118321",
+    "tensorfold:mtp_accepted_total 66674",
+    "tensorfold:preemptions_total 0",
+    'tensorfold:time_to_first_token_seconds_bucket{le="1"} 295',
+    'tensorfold:time_to_first_token_seconds_bucket{le="2.5"} 337',
+    'tensorfold:time_to_first_token_seconds_bucket{le="5"} 348',
+    'tensorfold:time_to_first_token_seconds_bucket{le="+Inf"} 364',
+    `tensorfold:time_to_first_token_seconds_sum ${ttftSum}`,
+    `tensorfold:time_to_first_token_seconds_count ${ttftCount}`,
+    'tensorfold:request_latency_seconds_bucket{le="10"} 234',
+    'tensorfold:request_latency_seconds_bucket{le="30"} 352',
+    'tensorfold:request_latency_seconds_bucket{le="+Inf"} 364',
+    "tensorfold:request_latency_seconds_sum 3179.692112",
+    "tensorfold:request_latency_seconds_count 364",
+    'tensorfold:request_time_per_output_token_seconds_bucket{le="0.05"} 332',
+    'tensorfold:request_time_per_output_token_seconds_bucket{le="0.075"} 348',
+    'tensorfold:request_time_per_output_token_seconds_bucket{le="+Inf"} 364',
+    "tensorfold:request_time_per_output_token_seconds_sum 11.278409",
+    "tensorfold:request_time_per_output_token_seconds_count 364",
+  ].join("\n");
+}
+
+test("_applyTensorFoldHealth: live block rates fill tok/s, no counters needed", () => {
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8000);
+  probe._applyTensorFoldHealth(NEW_HEALTH, 1);
+  assert.equal(probe.generationTps, 143.5);
+  assert.equal(probe.prefillTps, 7.25);
+  assert.equal(probe.requestsRunning, 2);
+  assert.equal(probe.slotsActive, 2);
+  assert.equal(probe.slotsTotal, 16);
+  // Idle live gauges must clear a stale rate, not keep it.
+  probe._applyTensorFoldHealth(
+    {
+      ...NEW_HEALTH,
+      live: { connections: 0, waiting: 0, decode_tokens_per_second: 0, prefill_tokens_per_second: 0 },
+    },
+    1
+  );
+  assert.equal(probe.generationTps, 0);
+  assert.equal(probe.prefillTps, 0);
+});
+
+test("_applyTensorFoldMetrics: totals, KV max, p95s, TTFT delta and reset", () => {
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8000);
+  assert.equal(LlmProbe._metricsLookLikeTensorFold(tfMetrics()), true);
+  assert.equal(LlmProbe._metricsLookLikeTensorFold("# nothing here"), false);
+  probe._applyTensorFoldHealth(NEW_HEALTH, 1);
+  probe._applyTensorFoldMetrics(tfMetrics());
+  assert.equal(probe.totalPromptTokens, 12832023);
+  assert.equal(probe.totalOutputTokens, 96610);
+  assert.equal(probe.kvCacheUsage, 0.0943);
+  assert.equal(probe.preemptionsTotal, 0);
+  assert.equal(probe.mtpAcceptanceRate, 0.5635);
+  assert.equal(probe.ttftP95Seconds, 4.5);
+  assert.equal(probe.e2eP95Seconds, 28.949);
+  assert.equal(probe.itlP95Seconds, 0.072);
+  // Mean TTFT needs two samples; +21s over +10 requests → 2.1s.
+  assert.equal(probe.ttftSeconds, null);
+  probe._applyTensorFoldMetrics(tfMetrics({ ttftSum: 400.309569, ttftCount: 374 }));
+  assert.equal(probe.ttftSeconds, 2.1);
+  // Counter reset (server restart) → no negative mean.
+  probe._applyTensorFoldMetrics(tfMetrics({ ttftSum: 5, ttftCount: 3 }));
+  assert.equal(probe.ttftSeconds, null);
+});
+
+test("probe: new tensorfold server → rates from health live, totals from /metrics", async () => {
+  const probe = new LlmProbe({ lanIp: "10.0.0.1" }, 8000);
+  probe._fetch = async (url) => {
+    const u = String(url);
+    if (u.endsWith("/v1/models")) return jsonRes(CUDA_MODELS);
+    if (u.endsWith("/health")) return jsonRes(NEW_HEALTH);
+    if (u.endsWith("/metrics")) return textRes(tfMetrics());
+    return notFound();
+  };
+  const snap = await probe.probe();
+  assert.equal(snap.backend, "tensorfold");
+  assert.equal(snap.generationTps, 143.5);
+  assert.equal(snap.prefillTps, 7.25);
+  assert.equal(snap.totalPromptTokens, 12832023);
+  assert.equal(snap.totalOutputTokens, 96610);
+  assert.equal(snap.kvCacheUsage, 0.0943);
+  assert.equal(snap.ttftP95Seconds, 4.5);
+});

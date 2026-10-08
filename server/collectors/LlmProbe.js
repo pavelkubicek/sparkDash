@@ -518,19 +518,23 @@ export class LlmProbe {
     this.kvCacheGb = null;
     this.weightsGb = null;
 
-    // TensorFold: no Prometheus. /health carries cumulative token totals when the
-    // server publishes them; without them tok/s stays 0 rather than guessing.
+    // TensorFold: /health carries the load gauges and, on newer builds, the
+    // server-computed live tok/s; servers with Prometheus publish cumulative
+    // counters under the `tensorfold:` prefix (older CUDA/MLX builds have
+    // neither, and rates stay 0 rather than a guessed number).
     if (this.backendType === "tensorfold") {
-      try {
-        const healthRes = await this._fetch(`${this.baseUrl}/health`);
-        if (healthRes.ok) {
-          const health = await healthRes.json().catch(() => null);
-          this._applyTensorFoldHealth(health, dtSec);
-        } else {
-          this._applyTensorFoldHealth(null, dtSec);
+      const [healthRes, metricsRes] = await Promise.all([
+        this._fetch(`${this.baseUrl}/health`).catch(() => null),
+        this._fetch(`${this.baseUrl}/metrics`).catch(() => null),
+      ]);
+      let health = null;
+      if (healthRes && healthRes.ok) health = await healthRes.json().catch(() => null);
+      this._applyTensorFoldHealth(health, dtSec);
+      if (metricsRes && metricsRes.ok) {
+        const metricsTxt = await metricsRes.text().catch(() => "");
+        if (LlmProbe._metricsLookLikeTensorFold(metricsTxt)) {
+          this._applyTensorFoldMetrics(metricsTxt);
         }
-      } catch {
-        this._applyTensorFoldHealth(null, dtSec);
       }
       return this._getSnapshot();
     }
@@ -913,7 +917,8 @@ export class LlmProbe {
    * `streams.max`; the older CUDA server's `{ok: true}` has no counters, so rates
    * read 0 instead of a made-up number. The load gauges come from
    * `requests_running` / `streams` (CUDA 0.6.0) or from the `live` block
-   * (`connections` / `waiting`) on servers that publish it instead.
+   * (`connections` / `waiting` / `decode_tokens_per_second` /
+   * `prefill_tokens_per_second`) on servers that publish it instead.
    * @param {Record<string, unknown> | null} data
    * @param {number} dtSec
    */
@@ -965,6 +970,18 @@ export class LlmProbe {
     }
     const waiting = count(live.waiting);
     if (Number.isFinite(waiting) && waiting >= 0) this.requestsWaiting = Math.round(waiting);
+    // The `live` block also computes the instantaneous rates server-side. They
+    // beat any counter diff on this build: prompt/generation counters only
+    // advance when a request FINISHES, so diffs read 0 for the whole length of
+    // a stream while the engine is clearly decoding.
+    const decodeTps = count(live.decode_tokens_per_second);
+    if (Number.isFinite(decodeTps) && decodeTps >= 0) {
+      this.generationTps = Math.round(decodeTps * 100) / 100;
+    }
+    const prefillTps = count(live.prefill_tokens_per_second);
+    if (Number.isFinite(prefillTps) && prefillTps >= 0) {
+      this.prefillTps = Math.round(prefillTps * 100) / 100;
+    }
     // 0.6.0 CUDA sizes its KV pool in tokens: `pool_tokens` in all,
     // `pool_free_tokens` not held by a request (kept prompts count as held).
     const pool = count(health.pool_tokens);
@@ -973,6 +990,84 @@ export class LlmProbe {
       const used = 1 - Math.min(poolFree, pool) / pool;
       this.kvCacheUsage = Math.round(used * 10000) / 10000;
     }
+  }
+
+  /** True when Prometheus /metrics exposes TensorFold `tensorfold:` series. */
+  static _metricsLookLikeTensorFold(body) {
+    return /^tensorfold:(?:prompt_tokens_total|requests_running)(?:\{|\s)/m.test(
+      String(body || "")
+    );
+  }
+
+  /**
+   * Apply TensorFold Prometheus /metrics (`tensorfold:` series). The token
+   * counters cover FINISHED requests only, so they fill totals and never the
+   * live rates — those come from the /health `live` gauges upstream.
+   * @param {string} txt
+   */
+  _applyTensorFoldMetrics(txt) {
+    const tf = (name) => this._getPromMetric(txt, `tensorfold:${name}`);
+    const prompt = tf("prompt_tokens_total");
+    const gen = tf("generation_tokens_total");
+    if (prompt != null) this.totalPromptTokens = prompt;
+    if (gen != null) this.totalOutputTokens = gen;
+    if (this.totalCachedTokens == null) {
+      const cached = tf("cached_tokens_total");
+      if (cached != null) this.totalCachedTokens = cached;
+    }
+
+    // Gauges mirror the /health `live` block; the engine's own counters also
+    // cover the case where /health failed this poll.
+    const running = tf("requests_running");
+    if (running != null) {
+      this.requestsRunning = Math.round(running);
+      this.slotsActive = Math.round(running);
+    }
+    const waiting = tf("requests_waiting");
+    if (waiting != null) this.requestsWaiting = Math.round(waiting);
+    // KV fill is reported per pool/stream; the most pressured pool is the one
+    // that preempts, so max is the honest headline.
+    const kv =
+      this._getPromMetricMax(txt, "tensorfold:kv_cache_usage_ratio") ??
+      this._getPromMetricMax(txt, "tensorfold:kv_cache_usage_perc");
+    if (kv != null) this.kvCacheUsage = Math.round(kv * 10000) / 10000;
+    const preemptions = tf("preemptions_total");
+    if (preemptions != null) this.preemptionsTotal = preemptions;
+
+    // Live mean TTFT over the last poll window from histogram sum/count deltas
+    // (same contract as the vLLM path; one backend owns the baseline anyway).
+    const ttftSum = tf("time_to_first_token_seconds_sum");
+    const ttftCount = tf("time_to_first_token_seconds_count");
+    if (ttftCount != null) {
+      const deltaSum =
+        ttftSum != null && this.lastTtftSum != null ? ttftSum - this.lastTtftSum : null;
+      const deltaCount =
+        this.lastTtftCount != null ? ttftCount - this.lastTtftCount : null;
+      this.ttftSeconds =
+        deltaSum != null && deltaCount != null && deltaCount > 0 && deltaSum >= 0
+          ? Math.round((deltaSum / deltaCount) * 1000) / 1000
+          : null;
+      this.lastTtftCount = ttftCount;
+    }
+    if (ttftSum != null) this.lastTtftSum = ttftSum;
+
+    const p95 = (name) => {
+      const hist = this._parseHistogram(txt, `tensorfold:${name}`, `tensorfold:${name}_count`);
+      const v = this._histogramQuantile(hist.buckets, hist.total, 0.95);
+      return v == null ? null : Math.round(v * 1000) / 1000;
+    };
+    this.ttftP95Seconds = p95("time_to_first_token_seconds");
+    this.e2eP95Seconds = p95("request_latency_seconds");
+    // No per-token-inter-arrival series; per-request mean time per output
+    // token is the closest published ITL proxy.
+    this.itlP95Seconds = p95("request_time_per_output_token_seconds");
+
+    const mtpAccepted = tf("mtp_accepted_total");
+    const mtpDrafted = tf("mtp_drafted_total");
+    this.mtpAcceptanceRate =
+      mtpAccepted != null && mtpDrafted != null && mtpDrafted > 0
+        ? Math.round((mtpAccepted / mtpDrafted) * 10000) / 10000
+        : null;
   }
 
   /**
