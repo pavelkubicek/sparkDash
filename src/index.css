@@ -298,6 +298,12 @@
   --color-success: var(--color-success);
   --color-info: var(--color-info);
   --color-violet: var(--color-violet);
+  /* Fork bar palette (AI Proxy cached tokens, fork MetricBar tones). */
+  --color-bar: var(--color-bar);
+  --color-bar-temp: var(--color-bar-temp);
+  --color-bar-ram: var(--color-bar-ram);
+  --color-bar-usage: var(--color-bar-usage);
+  --color-bar-vram: var(--color-bar-vram);
   --color-accent-text: var(--color-accent-text);
 }
 
@@ -893,8 +899,6 @@ html {
    Kept after upstream's theme blocks so fork values sit on top of them. */
 :root,
 [data-theme="light"],
-[data-theme="dark"],
-[data-theme="oled"],
 [data-theme="white"] {
   --color-bar: #5b8dd9;
   --color-bar-temp: #cf7d1a;
@@ -907,7 +911,21 @@ html {
 }
 
 [data-theme="dark"] {
+  --color-bar: #58a6ff;
+  --color-bar-temp: #cf7d1a;
+  --color-bar-ram: #3b82d6;
+  --color-bar-usage: #2aa198;
+  --color-bar-vram: #8b5cf6;
   --toggle-track-off: #30363d;
+}
+
+[data-theme="oled"] {
+  --color-bar: #79c0ff;
+  --color-bar-temp: #cf7d1a;
+  --color-bar-ram: #3b82d6;
+  --color-bar-usage: #2aa198;
+  --color-bar-vram: #8b5cf6;
+  --toggle-track-off: #505050;
 }
 
 :root,

@@ -89,6 +89,7 @@ function SparkCardImpl({
   const [wakeMsg, setWakeMsg] = useState<string | null>(null);
   const [waking, setWaking] = useState(false);
 
+  const cpuUsage = spark.metrics.cpu?.usage ?? 0;
   const usage = gpu?.usage ?? 0;
   const tempRaw = gpu?.temperature ?? 0;
   const unitSuffix = temperatureUnit === "fahrenheit" ? "°F" : "°C";
@@ -233,7 +234,7 @@ function SparkCardImpl({
 
       {online ? <HealthChips findings={spark.health} /> : null}
 
-      {!online || !gpu ? (
+      {!online || (!gpu && spark.gpuMonitoring !== false) ? (
         <div className="ov-sc__off">
           <span>{online ? "Waiting for metrics…" : "Host unreachable"}</span>
           {!online && spark.kind === "host" ? (
@@ -254,22 +255,24 @@ function SparkCardImpl({
         <>
           <div className="ov-sc__body">
             <div className="ov-sc__stats">
-              {breakdown ? (
-                <VramBreakdownBar
-                  label={breakdown.systemMB != null ? "Unified memory" : "VRAM"}
-                  breakdown={breakdown}
-                  showLegend
-                />
-              ) : (
-                <Bar
-                  label={gpu.vram?.total ? "VRAM" : "Unified memory"}
-                  caption={memTotal > 0 ? `${fmtStorage(memUsed, false)} / ${fmtStorage(memTotal, true)}` : "—"}
-                  pct={memPct}
-                  color={memColor}
-                  sub={memTotal > 0 && memAvail > 0 ? { label: "Available", value: formatMb(memAvail) } : null}
-                />
-              )}
-              <Bar label="GPU" caption={`${Math.round(usage)}%`} pct={usage} color={ringColor} />
+              {gpu ? (
+                breakdown ? (
+                  <VramBreakdownBar
+                    label={breakdown.systemMB != null ? "Unified memory" : "VRAM"}
+                    breakdown={breakdown}
+                    showLegend
+                  />
+                ) : (
+                  <Bar
+                    label={gpu.vram?.total ? "VRAM" : "Unified memory"}
+                    caption={memTotal > 0 ? `${fmtStorage(memUsed, false)} / ${fmtStorage(memTotal, true)}` : "—"}
+                    pct={memPct}
+                    color={memColor}
+                    sub={memTotal > 0 && memAvail > 0 ? { label: "Available", value: formatMb(memAvail) } : null}
+                  />
+                )
+              ) : null}
+              {gpu ? <Bar label="GPU" caption={`${Math.round(usage)}%`} pct={usage} color={ringColor} /> : null}
               {spark.kind === "host" && spark.metrics.ram?.total ? (
                 <Bar
                   label="RAM"
@@ -278,13 +281,36 @@ function SparkCardImpl({
                   color="var(--color-info)"
                 />
               ) : null}
-              <Bar label="GPU temp" caption={fmtTemp(tempRaw)} pct={(tempVal / tempMax) * 100} color={tempColor} />
-              <Bar
-                label="GPU power"
-                caption={`${power?.draw ?? 0} / ${power?.limit ?? 0} W`}
-                pct={powerPct}
-                color="var(--color-violet)"
-              />
+              {!gpu && (spark.metrics.cpu?.temperature ?? 0) > 0 ? (() => {
+                const cpuRaw = spark.metrics.cpu?.temperature ?? 0;
+                const cpuDisplay = temperatureUnit === "fahrenheit" ? toF(cpuRaw) : cpuRaw;
+                const cpuLabel = spark.metrics.cpu?.temperatureLabel ?? "CPU";
+                return (
+                  <Bar
+                    label={cpuLabel === "CPU" ? "CPU temp" : `CPU temp (${cpuLabel})`}
+                    caption={fmtTemp(cpuRaw)}
+                    pct={(cpuDisplay / tempMax) * 100}
+                    color={cpuRaw > 80 ? "var(--color-danger)" : cpuRaw >= 75 ? "var(--color-warning)" : "var(--color-success)"}
+                  />
+                );
+              })() : null}
+              {!gpu ? (
+                <Bar
+                  label="Usage - CPU"
+                  caption={`${cpuUsage}%`}
+                  pct={cpuUsage}
+                  color={cpuUsage >= 90 ? "var(--color-danger)" : "var(--color-bar-usage)"}
+                />
+              ) : null}
+              {gpu ? <Bar label="GPU temp" caption={fmtTemp(tempRaw)} pct={(tempVal / tempMax) * 100} color={tempColor} /> : null}
+              {gpu ? (
+                <Bar
+                  label="GPU power"
+                  caption={`${power?.draw ?? 0} / ${power?.limit ?? 0} W`}
+                  pct={powerPct}
+                  color="var(--color-violet)"
+                />
+              ) : null}
             </div>
           </div>
           {showLauncher ? <ModelLauncher spark={spark} onOpen={onSelect} busy={loadingHint} /> : null}
