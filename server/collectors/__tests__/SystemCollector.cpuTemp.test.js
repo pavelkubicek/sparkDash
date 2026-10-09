@@ -121,6 +121,7 @@ test("remote CPU collection returns temperature for DGX Spark nodes", async () =
   });
 
   assert.equal(result.temperature, 70.9);
+  assert.equal(result.temperatureSource, "acpitz");
   assert.equal(result.tdp, 65);
   assert.equal(result.source, "estimate");
   // GB10 exposes no CPU package sensor, and the card must not claim otherwise.
@@ -171,6 +172,13 @@ test("RAPL counter wrap is corrected by max_energy_range", () => {
   const s = collector._raplSample({ energyUj: 1_000_000, maxRangeUj: 262_143_328_850, now: 3_000 });
   // delta = 1e6 − 262_141_128_850 + range = 3_200_000 uJ over 2 s = 1.6 W
   assert.equal(s.watts, 1.6);
+});
+
+test("remote CPU temperature names an x86 die sensor", () => {
+  const sensor = pick(c._parseSensorCandidates("coretemp 45200\n"));
+  assert.equal(sensor.temperature, 45.2);
+  assert.equal(sensor.temperatureSource, "coretemp");
+  assert.equal(sensor.temperatureLabel, "CPU");
 });
 
 test("converts millidegrees to Celsius", () => {

@@ -3,7 +3,7 @@ import type { SparkSnapshot, WsSnapshot } from "../api/types";
 import type { ModelsSnapshot } from "../api/modelTypes";
 import { ingestSnapshots } from "./metricsStore";
 import { getVisibleSparkIds, subscribeSparkVisibility } from "./sparkVisibility";
-import { OVERVIEW_ID } from "../constants";
+import { initialActiveId } from "../constants";
 import { fetchAuthStatus, getToken, onTokenChange, reportAuthRequired } from "../api/authToken";
 
 const RECONNECT_DELAY = 2000;
@@ -26,7 +26,7 @@ export function useSnapshot() {
   const [snapshotGeneratedAt, setSnapshotGeneratedAt] = useState<number | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] = useState<number | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(OVERVIEW_ID);
+  const [activeId, setActiveId] = useState<string | null>(initialActiveId);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** When false, onclose must not schedule reconnect (unmount / intentional close). */
@@ -127,13 +127,6 @@ export function useSnapshot() {
             Number.isFinite(msg.refreshInterval) ? Number(msg.refreshInterval) : null
           );
           setSnapshotError(null);
-          // Default to the Overview tab; keep the current selection if it
-          // is still valid (Overview is always valid).
-          setActiveId((prev) => {
-            if (prev === OVERVIEW_ID) return OVERVIEW_ID;
-            if (prev && msg.sparks.some((s) => s.id === prev)) return prev;
-            return OVERVIEW_ID;
-          });
         } else {
           setSnapshotError("The server sent an invalid telemetry payload.");
         }

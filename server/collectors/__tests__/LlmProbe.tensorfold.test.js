@@ -72,6 +72,7 @@ test("_applyTensorFoldHealth: counter diffs → tok/s; idle → 0", () => {
     { ok: true, busy: true, backend: "tensorfold", prompt_tokens_total: 100, completion_tokens_total: 50 },
     2
   );
+  assert.equal(probe.generationTps, 0);
   probe._applyTensorFoldHealth(
     { ok: true, busy: true, backend: "tensorfold", prompt_tokens_total: 100, completion_tokens_total: 150 },
     2
@@ -104,6 +105,34 @@ test("_applyTensorFoldHealth: 0.5.0 health maps cached_tokens_total", () => {
   probe._applyTensorFoldHealth({ ok: true }, 2);
   assert.equal(probe.totalCachedTokens, 640);
   assert.equal(probe.totalPromptTokens, 1000);
+});
+
+test("_applyTensorFoldHealth: prefill tok/s uses prefill time, not the poll window", () => {
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888);
+  const base = {
+    ok: true,
+    busy: true,
+    backend: "tensorfold",
+    prompt_tokens_total: 0,
+    completion_tokens_total: 0,
+    prefill_seconds_total: 0,
+    requests_running: 0,
+  };
+  probe._applyTensorFoldHealth(base, 2);
+  probe._applyTensorFoldHealth(
+    {
+      ...base,
+      prompt_tokens_total: 1000,
+      completion_tokens_total: 10,
+      prefill_seconds_total: 0.25,
+      requests_running: 2,
+    },
+    2
+  );
+  assert.equal(probe.prefillTps, 4000);
+  assert.equal(probe.generationTps, 5);
+  assert.equal(probe.requestsRunning, 2);
+  assert.equal(probe.slotsActive, 2);
 });
 
 test("_applyTensorFoldHealth: MLX health sizes the slot tile; null health is safe", () => {
@@ -387,4 +416,23 @@ test("probe: new tensorfold server → rates from health live, totals from /metr
   assert.equal(snap.totalOutputTokens, 96610);
   assert.equal(snap.kvCacheUsage, 0.0943);
   assert.equal(snap.ttftP95Seconds, 4.5);
+});
+test("_applyTensorFoldHealth: prefillActive follows streams.prefilling and the last finished rate is held", () => {
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888);
+  const h = (prompt, sec, prefilling) => ({
+    prompt_tokens_total: prompt,
+    completion_tokens_total: 10,
+    prefill_seconds_total: sec,
+    streams: { prefilling, decoding: 0, max: 8 },
+  });
+  probe._applyTensorFoldHealth(h(1000, 10, 0), 2); // seeds
+  probe._applyTensorFoldHealth(h(3000, 12, 0), 2); // 2000 tokens in 2 s
+  assert.equal(probe.prefillTps, 1000);
+  assert.equal(probe.prefillActive, false);
+  probe._applyTensorFoldHealth(h(3000, 12, 1), 2); // a new long prefill: totals do not move
+  assert.equal(probe.prefillActive, true);
+  assert.equal(probe.prefillTps, 1000); // held, not 0
+  probe._tensorfoldLastPrefill.at -= 60_000;
+  probe._applyTensorFoldHealth(h(3000, 12, 1), 2);
+  assert.equal(probe.prefillTps, 0);
 });

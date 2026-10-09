@@ -1,3 +1,5 @@
+import { AppLink } from "../ui/AppLink";
+import { ENERGY_ID, idToPath } from "../../constants";
 import { useEffect, useState } from "react";
 import { fetchFleetEnergy, updateSettings } from "../../api/client";
 import type { FleetEnergy } from "../../api/types";
@@ -8,7 +10,7 @@ function number(value: number | null, digits = 2): string {
   return value == null ? "—" : value.toFixed(digits);
 }
 
-export function FleetEnergyCard({ nodeCount }: { nodeCount: number }) {
+export function FleetEnergyCard({ nodeCount, onOpenDetails }: { nodeCount: number; onOpenDetails?: () => void }) {
   const [data, setData] = useState<FleetEnergy | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [switchBusy, setSwitchBusy] = useState(false);
@@ -63,46 +65,58 @@ export function FleetEnergyCard({ nodeCount }: { nodeCount: number }) {
             ? "Warming up — no complete energy interval recorded yet."
             : null;
 
+  const hourly = data?.hourlyWatts24h ?? Array(24).fill(null);
+  const max = Math.max(1, ...hourly.filter((value): value is number => value != null));
   return (
-    <section className="panel p-4" aria-labelledby="fleet-energy-title">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h2 id="fleet-energy-title" className="text-sm font-semibold text-text-strong">Fleet Energy</h2>
-          <p className="text-[10px] text-muted">Estimated, not wall-metered · 24h coverage {coverage.toFixed(1)}%</p>
+    <section className="panel ov-card" aria-labelledby="fleet-energy-title">
+      <div className="ov-card__head">
+        <h2 id="fleet-energy-title" className="ov-card__title">Fleet energy</h2>
+        <div className="ov-card__tools">
+          <span className="tag">{data ? `${data.freshNodeCount}/${nodeCount} fresh` : "\u2014"}</span>
+          {onOpenDetails ? (
+            <AppLink href={idToPath(ENERGY_ID)} className="btn btn--sm btn--ghost" onNavigate={onOpenDetails}>
+              Details
+            </AppLink>
+          ) : null}
         </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-[10px] text-muted" title={alwaysSampling
-            ? "24/7 sampling ON: nodes keep being polled even when no dashboard tab is open, so the 24 h series fills overnight."
-            : "24/7 sampling OFF: telemetry (and the 24 h series) pauses while no dashboard tab watches the fleet."}>
-            <span>24/7</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={alwaysSampling}
-              aria-label="Keep sampling with no dashboard open"
-              disabled={!data || switchBusy}
-              onClick={() => void toggleSampling()}
-              className={`toggle-track relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${alwaysSampling ? "is-on" : ""}`}
-            >
-              <span className={`toggle-dot inline-block h-4 w-4 transform rounded-full shadow transition-transform ${alwaysSampling ? "translate-x-4" : "translate-x-0"}`} />
-            </button>
-          </label>
-          <span className="text-xs text-muted">{data ? `${data.freshNodeCount}/${nodeCount} fresh` : "—"}</span>
-        </div>
+        <label className="flex items-center gap-1.5 text-[10px] text-muted" title={alwaysSampling
+          ? "24/7 sampling ON: nodes keep being polled even when no dashboard tab is open, so the 24 h series fills overnight."
+          : "24/7 sampling OFF: telemetry (and the 24 h series) pauses while no dashboard tab watches the fleet."}>
+          <span>24/7</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={alwaysSampling}
+            aria-label="Keep sampling with no dashboard open"
+            disabled={!data || switchBusy}
+            onClick={() => void toggleSampling()}
+            className={`toggle-track relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${alwaysSampling ? "is-on" : ""}`}
+          >
+            <span className={`toggle-dot inline-block h-4 w-4 transform rounded-full shadow transition-transform ${alwaysSampling ? "translate-x-4" : "translate-x-0"}`} />
+          </button>
+        </label>
       </div>
-      {state && <p className="mt-3 rounded bg-warning/10 px-3 py-2 text-xs text-warning" role="status">{state}</p>}
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div><div className="text-[10px] text-muted">Current</div><strong className="font-tabular text-sm">{number(data?.currentWatts30s ?? null, 0)} W</strong></div>
-        <div><div className="text-[10px] text-muted">24 hours</div><strong className="font-tabular text-sm">{number(data?.energy24hKwh ?? null)} kWh</strong></div>
-        <div><div className="text-[10px] text-muted">31 days</div><strong className="font-tabular text-sm">{number(data?.energy31dKwh ?? null)} kWh</strong></div>
-        <div><div className="text-[10px] text-muted">Efficiency</div><strong className="font-tabular text-sm">{number(data?.whPerOutputToken24h ?? null, 4)} Wh/token</strong></div>
+      {state && <p className="ov-note" role="status">{state}</p>}
+      <div>
+        <div className="big-num">{number(data?.energy24hKwh ?? null)}<small>kWh / 24 h</small></div>
+        <div className="ov-card__sub mono">Estimated, not wall-metered · 24h coverage {coverage.toFixed(1)}%</div>
       </div>
-      <div className="mt-3 flex h-12 items-end gap-px" aria-label="Hourly estimated watts for the last 24 hours, with gaps shown empty">
-        {(data?.hourlyWatts24h ?? Array(24).fill(null)).map((watts, index, values) => {
-          const max = Math.max(1, ...values.filter((value): value is number => value != null));
-          return <span key={index} className="min-w-0 flex-1 bg-accent/60" style={{ height: watts == null ? 0 : `${Math.max(4, (watts / max) * 100)}%` }} title={watts == null ? "No complete coverage" : `${watts.toFixed(0)} W`} />;
-        })}
+      <div className="ov-bars" aria-label="Hourly estimated watts for the last 24 hours, with gaps shown empty">
+        {hourly.map((watts, index) => (
+          <span
+            key={index}
+            className={index === hourly.length - 1 ? "is-now" : undefined}
+            style={{ height: watts == null ? 0 : `${Math.max(4, (watts / max) * 100)}%` }}
+            title={watts == null ? "No complete coverage" : `${watts.toFixed(0)} W`}
+          />
+        ))}
       </div>
+      <div className="ov-axis mono"><span>24h ago</span><span>12h</span><span>now</span></div>
+      <dl className="ov-stats">
+        <div><dt>Current</dt><dd className="mono">{number(data?.currentWatts30s ?? null, 0)} W</dd></div>
+        <div><dt>31 days</dt><dd className="mono">{number(data?.energy31dKwh ?? null)} kWh</dd></div>
+        <div><dt>Efficiency</dt><dd className="mono">{number(data?.whPerOutputToken24h ?? null, 4)} Wh/token</dd></div>
+      </dl>
     </section>
   );
 }
