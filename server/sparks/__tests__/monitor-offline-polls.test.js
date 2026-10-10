@@ -40,6 +40,17 @@ function countingMonitor(overrides) {
   const monitor = new SparkMonitor(spark(overrides));
   monitor._running = true;
   const calls = { gpu: 0, cpu: 0, uptime: 0 };
+  // A remote spark's gpu poll is the bundled SSH exec (see SparkMonitor._pollDomain).
+  monitor.collector.collectRemoteBundle = async () => {
+    calls.gpu += 1;
+    return {
+      cpu: monitor.collector._defaultCpu(),
+      ram: { total: 128, used: 40 },
+      unifiedMemory: {},
+      network: null,
+      gpu: monitor.collector._defaultGpu(),
+    };
+  };
   monitor.collector.collectGpu = async () => {
     calls.gpu += 1;
     return monitor.collector._defaultGpu();

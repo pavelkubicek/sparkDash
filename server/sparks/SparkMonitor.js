@@ -31,6 +31,14 @@ import {
 const FAST_TIMER_DOMAINS = ["gpu", "cpu", "network", "ram", "memory"];
 
 /**
+ * Domains that a REMOTE spark collects as ONE bundled SSH exec per cycle
+ * (`_pollSystem`). Their timers still fire at their own cadences (per-domain
+ * env pins honored); concurrent fires share the in-flight bundle instead of
+ * opening five round-trips per tick.
+ */
+const BUNDLE_DOMAINS = ["gpu", "cpu", "ram", "network", "memory"];
+
+/**
  * Liveness retry schedule. Network failures widen gradually — a rebooting host
  * comes back on its own. Credential failures get a handful of quick attempts
  * and then effectively stop: they are a configuration problem, and hammering a
@@ -543,16 +551,6 @@ export class SparkMonitor {
     return id;
   }
 
-  /**
-   * Remote sparks: ONE bundled SSH exec refreshes gpu/cpu/ram/network/unified
-   * memory, so a single timer follows the cpu cadence (see _armFastCollectors).
-   */
-  _armSystemTimer() {
-    const id = setInterval(() => this._pollSystem(), this._fastIntervals.cpu);
-    this._intervals.push(id);
-    return id;
-  }
-
   _clearTimer(id) {
     clearInterval(id);
     this._intervals = this._intervals.filter((other) => other !== id);
@@ -571,7 +569,8 @@ export class SparkMonitor {
     if (!this._running || this._paused) return; // paused: resume() re-arms at the new cadence
     for (const domain of FAST_TIMER_DOMAINS) {
       if (prev[domain] === this._fastIntervals[domain]) continue;
-      if (this._domainTimers[domain] != null) this._clearTimer(this._domainTimers[domain]);
+      if (this._domainTimers[domain] == null) continue; // not armed (remote bundle path arms "system")
+      this._clearTimer(this._domainTimers[domain]);
       this._domainTimers[domain] = this._armDomainTimer(domain);
     }
     if (this._domainTimers.system != null && prev.cpu !== this._fastIntervals.cpu) {
@@ -648,12 +647,8 @@ export class SparkMonitor {
    * local path.
    */
   _armFastCollectors() {
-    if (this.spark.isLocal) {
-      for (const domain of FAST_TIMER_DOMAINS) {
-        this._domainTimers[domain] = this._armDomainTimer(domain);
-      }
-    } else {
-      this._domainTimers.system = this._armSystemTimer();
+    for (const domain of FAST_TIMER_DOMAINS) {
+      this._domainTimers[domain] = this._armDomainTimer(domain);
     }
     this._intervals.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
   }
@@ -1058,6 +1053,21 @@ export class SparkMonitor {
     if (domain === "hermes" && !this._hermesMonitoringEnabled()) return;
     if (domain === "gpu" && !this._gpuMonitoringEnabled()) return;
     if (domain === "tailscale" && !this._tailscaleMonitoringEnabled()) return;
+    // Remote sparks: the five fast domains share ONE bundled SSH exec
+    // (_pollSystem) — same contract as refreshDomain. The bundle's own
+    // in-flight guard dedupes concurrent fires into a single round-trip.
+    if (!this.spark.isLocal && BUNDLE_DOMAINS.includes(domain)) {
+      const bundleGeneration = this._runGeneration;
+      await this._pollSystem();
+      if (domain === "network") {
+        const roce = await this._collectRoce();
+        if (!this._running || this._runGeneration !== bundleGeneration) return;
+        if (roce !== undefined) this._metrics.roce = roce;
+        if (roce?.sampledAt) this._lastSuccess.roce = roce.sampledAt;
+        this._updateHealth();
+      }
+      return;
+    }
     const runGeneration = this._runGeneration;
     const pollToken = Symbol(domain);
     this._inflight[domain] = pollToken;
@@ -1078,11 +1088,7 @@ export class SparkMonitor {
           result = await this.collector.collectNetwork();
           // RoCE rides the network tick: it throttles itself, never fails the poll and never
           // holds the network result for more than a moment (a wedged NIC can stall ethtool).
-          // `undefined` = could not read this time: keep the previous value.
-          roce = await Promise.race([
-            this.collector.collectRoce().catch(() => undefined),
-            new Promise((resolve) => setTimeout(() => resolve(undefined), 3000).unref?.()),
-          ]);
+          roce = await this._collectRoce();
           break;
         case "storage":
           result = await this.collector.collectStorage();
@@ -1188,6 +1194,18 @@ export class SparkMonitor {
   }
 
   /**
+   * RoCE read with a hard 3 s cap. `undefined` = could not read this time:
+   * keep the previous value. Never fails the poll and never holds the
+   * network result for more than a moment (a wedged NIC can stall ethtool).
+   */
+  _collectRoce() {
+    return Promise.race([
+      this.collector.collectRoce().catch(() => undefined),
+      new Promise((resolve) => setTimeout(() => resolve(undefined), 3000).unref?.()),
+    ]);
+  }
+
+  /**
    * Remote sparks: one SSH exec refreshes cpu + ram + network + unified
    * memory + gpu together. Transport failure aborts the whole cycle and the
    * metrics keep their last values (liveness handles offline); a domain the
@@ -1196,6 +1214,24 @@ export class SparkMonitor {
    */
   async _pollSystem() {
     if (!this._running || this._paused || this._inflight.system) return;
+    // Same SSH-backoff contract as _pollDomain: an unreachable remote unit
+    // pauses collector polls (HTTP-only probes keep running) and a reachable
+    // one resumes them — a broken unit must not open a bundled SSH exec per
+    // tick on top of the per-domain ones. Only an explicit liveness OFFLINE
+    // pauses here; an unknown state (no liveness yet) polls as before.
+    if (this.online === false && this._livenessFailures > 0) {
+      if (!this._pollsPaused) {
+        this._pollsPaused = true;
+        console.log(
+          `[SparkMonitor] ${this.spark.id}: unreachable (${this.offlineReason || "no liveness"}) — pausing collector polls`
+        );
+      }
+      return;
+    }
+    if (this._pollsPaused && this.online) {
+      this._pollsPaused = false;
+      console.log(`[SparkMonitor] ${this.spark.id}: reachable again — resuming collector polls`);
+    }
     this._inflight.system = true;
     try {
       const bundle = await this.collector.collectRemoteBundle();
@@ -1224,6 +1260,24 @@ export class SparkMonitor {
         this._metricCollectionSuccessful.gpu = collectionWasSuccessful(bundle.gpu);
         this._lastUpdate.gpu = now;
       }
+      // Same provenance bookkeeping as the per-domain commit path: the
+      // collector-last-success metric and the health rules must see the
+      // bundle exactly like five separate polls.
+      for (const [domain, result] of Object.entries({
+        gpu: bundle.gpu,
+        cpu: bundle.cpu,
+        ram: bundle.ram,
+        network: bundle.network,
+        memory: bundle.unifiedMemory,
+      })) {
+        if (result == null) continue;
+        if (this._domainSucceeded(domain, result)) this._lastSuccess[domain] = now;
+      }
+      if (bundle.gpu && this._gpuMonitoringEnabled()) {
+        this._noteThrottle(bundle.gpu);
+        this._updateHealth("gpu");
+      }
+      this._updateHealth();
     } catch (err) {
       // Transport failure: nothing in this bundle was collected, so drop
       // power-telemetry provenance exactly like a rejected per-domain poll.
@@ -1241,10 +1295,7 @@ export class SparkMonitor {
   async refreshDomain(domain) {
     // Remote sparks: the five fast domains share the bundled exec — refreshing
     // any one of them refreshes the whole bundle (one exec, fresher result).
-    if (
-      !this.spark.isLocal &&
-      ["gpu", "cpu", "ram", "network", "memory"].includes(domain)
-    ) {
+    if (!this.spark.isLocal && BUNDLE_DOMAINS.includes(domain)) {
       return this._pollSystem();
     }
     if (domain !== "storage") return this._pollDomain(domain);

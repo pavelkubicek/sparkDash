@@ -9,7 +9,6 @@ vi.mock("../../api/client", () => ({
   fetchRestartAvailable: vi.fn().mockResolvedValue({ available: false }),
   restartServer: vi.fn(),
 }));
-}));
 
 import { fetchFleetEnergy, updateSettings } from "../../api/client";
 

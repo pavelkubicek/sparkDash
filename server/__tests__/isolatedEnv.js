@@ -28,6 +28,13 @@ export const CONFIG_PATH_VARS = [
   "FLEET_ENERGY_JSON_PATH",
   "FLEET_ENERGY_MONTHLY_JSON_PATH",
   "EVENTS_JSON_PATH",
+  // Model launcher / scheduler and AutoPower state (merge/v2.0.0).
+  "MODELS_JSON_PATH",
+  "SCHEDULER_JSON_PATH",
+  "AUTOPOWER_JSON_PATH",
+  "AUTOPOWER_STATE_PATH",
+  "MODEL_ACTIVE_PATH",
+  "MODEL_SCHEDULER_STATE_PATH",
 ];
 
 /** Variables that point at a directory the server writes into. */

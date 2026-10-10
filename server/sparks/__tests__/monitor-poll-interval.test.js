@@ -178,13 +178,20 @@ test("re-arming keeps the in-flight guard: no double poll, and the running poll 
   const { monitor } = countingMonitor(t, { pollIntervalMs: 2000 });
   let gpuCalls = 0;
   let release;
-  monitor.collector.collectGpu = () => {
+  monitor.collector.collectRemoteBundle = () => {
     gpuCalls += 1;
     return new Promise((resolve) => {
-      release = () => resolve({ ...monitor.collector._defaultGpu(), temperature: 61 });
+      release = () =>
+        resolve({
+          cpu: monitor.collector._defaultCpu(),
+          ram: { total: 128, used: 40 },
+          unifiedMemory: {},
+          network: null,
+          gpu: { ...monitor.collector._defaultGpu(), temperature: 61 },
+        });
     });
   };
-  monitor.start(); // the initial poll starts a GPU collection that hangs
+  monitor.start(); // the initial poll starts a bundled SSH exec that hangs
   await flush();
   assert.equal(gpuCalls, 1);
   const generation = monitor._runGeneration;
