@@ -13,5 +13,7 @@
   "showOverviewSearch": false,
   "showLlmTokenTotals": false,
   "benchShareImage": true,
+  "energyPricePerKwh": null,
+  "energyCurrency": "$",
   "showVramBreakdown": true
 }
