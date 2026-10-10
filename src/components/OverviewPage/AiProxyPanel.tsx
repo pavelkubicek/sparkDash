@@ -24,12 +24,13 @@ const POLL_MS = 5000;
 function llmThroughput(metrics: LlmMetrics[] | undefined): {
   generationTps: number | null;
   prefillTps: number | null;
+  prefillActive: boolean;
   requestsRunning: number | null;
   requestsWaiting: number | null;
 } {
   const avail = (metrics ?? []).filter((m) => m.available);
   if (avail.length === 0) {
-    return { generationTps: null, prefillTps: null, requestsRunning: null, requestsWaiting: null };
+    return { generationTps: null, prefillTps: null, prefillActive: false, requestsRunning: null, requestsWaiting: null };
   }
   // Running/waiting come from the engine's own load gauges (vLLM, SGLang, and
   // TensorFold's /health `live` block). A backend that never exposes one
@@ -40,6 +41,7 @@ function llmThroughput(metrics: LlmMetrics[] | undefined): {
   return {
     generationTps: avail.reduce((s, m) => s + (m.generationTps || 0), 0),
     prefillTps: avail.reduce((s, m) => s + (m.prefillTps || 0), 0),
+    prefillActive: avail.some((m) => m.prefillActive === true),
     requestsRunning: runSrc.length > 0 ? runSrc.reduce((s, m) => s + (m.requestsRunning ?? 0), 0) : null,
     requestsWaiting: waitSrc.length > 0 ? waitSrc.reduce((s, m) => s + (m.requestsWaiting ?? 0), 0) : null,
   };
@@ -353,20 +355,32 @@ export function AiProxyPanel({
         <div className="mt-auto space-y-3">
           {tps.generationTps !== null && (
             <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
-              <div className="text-center">
+              <div className="text-center whitespace-nowrap">
                 <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.generationTps.toFixed(0)}
                 </span>
                 <span className="text-sm font-normal text-muted"> tok/s</span>
               </div>
-              <div className="border-l border-border text-center">
-                <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
-                  {tps.prefillTps !== null ? tps.prefillTps.toFixed(0) : "—"}
-                </span>
-                <span className="text-sm font-normal text-muted"> prefill</span>
+              <div className="border-l border-border text-center whitespace-nowrap">
+                {tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? (
+                  <div
+                    className="big-num ov-tps__num ov-tps__num--live"
+                    title="A prompt is being processed. The engine reports its speed only when the request finishes."
+                  >
+                    <span className="ov-tps__dots" aria-hidden />
+                    <small>prefilling</small>
+                  </div>
+                ) : (
+                  <>
+                    <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                      {tps.prefillTps !== null ? tps.prefillTps.toFixed(0) : "—"}
+                    </span>
+                    <span className="text-sm font-normal text-muted"> prefill</span>
+                  </>
+                )}
               </div>
               <div
-                className="border-l border-border text-center"
+                className="border-l border-border text-center whitespace-nowrap"
                 title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
               >
                 <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">

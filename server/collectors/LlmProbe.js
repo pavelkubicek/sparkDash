@@ -1157,10 +1157,9 @@ export class LlmProbe {
     if (Number.isFinite(decodeTps) && decodeTps >= 0) {
       this.generationTps = Math.round(decodeTps * 100) / 100;
     }
-    const prefillTps = count(live.prefill_tokens_per_second);
-    if (Number.isFinite(prefillTps) && prefillTps >= 0) {
-      this.prefillTps = Math.round(prefillTps * 100) / 100;
-    }
+    // Applied AFTER the counter-diff/hold block below: the engine's own
+    // instantaneous rate beats any held diff value.
+    const livePrefillTps = count(live.prefill_tokens_per_second);
     // 0.6.0 CUDA sizes its KV pool in tokens: `pool_tokens` in all,
     // `pool_free_tokens` not held by a request (kept prompts count as held).
     const pool = count(health.pool_tokens);
@@ -1169,26 +1168,36 @@ export class LlmProbe {
       const used = 1 - Math.min(poolFree, pool) / pool;
       this.kvCacheUsage = Math.round(used * 10000) / 10000;
     }
+    // The engine's own instantaneous rate (when published) is the only source
+    // that matters this poll: the counter-diff hold below must not override it.
+    const hasLivePrefill = Number.isFinite(livePrefillTps) && livePrefillTps >= 0;
+    if (hasLivePrefill) this.prefillTps = Math.round(livePrefillTps * 100) / 100;
     if (!Number.isFinite(prefillSec) || !Number.isFinite(prompt)) return;
     if (prevPrefillSec == null) {
       this._tensorfoldPrefillSeconds = prefillSec;
-      return;
-    }
-    if (!(dtSec > 0 && dtSec < 10)) return;
-    const dSec = prefillSec - prevPrefillSec;
-    const dIn = prompt - prevIn;
-    if (dSec > 0 && dIn > 0) {
-      // A request just finished: its average prefill rate. TensorFold publishes token and time
-      // totals only for finished requests, so nothing is measurable while a long prefill runs;
-      // keep the last finished rate on screen for a while instead of flashing to 0.
-      this._tensorfoldLastPrefill = { tps: Math.max(0, Math.round((dIn / dSec) * 100) / 100), at: Date.now() };
-      this.prefillTps = this._tensorfoldLastPrefill.tps;
-    } else if (this._tensorfoldLastPrefill && Date.now() - this._tensorfoldLastPrefill.at < 20_000) {
-      this.prefillTps = this._tensorfoldLastPrefill.tps;
+    } else if (!hasLivePrefill) {
+      // A paused monitor (visibility gating) resumes with dtSec >= 10: the diff
+      // is then unreliable, but the hold/reset below is wall-clock and must run
+      // anyway — an early return here would pin the last held rate forever.
+      const freshPoll = dtSec > 0 && dtSec < 10;
+      const dSec = freshPoll ? prefillSec - prevPrefillSec : 0;
+      const dIn = freshPoll ? prompt - prevIn : 0;
+      if (freshPoll && dSec > 0 && dIn > 0) {
+        // A request just finished: its average prefill rate. TensorFold publishes token and time
+        // totals only for finished requests, so nothing is measurable while a long prefill runs;
+        // keep the last finished rate on screen for a while instead of flashing to 0.
+        this._tensorfoldLastPrefill = { tps: Math.max(0, Math.round((dIn / dSec) * 100) / 100), at: Date.now() };
+        this.prefillTps = this._tensorfoldLastPrefill.tps;
+      } else if (!(this._tensorfoldLastPrefill && Date.now() - this._tensorfoldLastPrefill.at < 20_000)) {
+        // No finish this poll and the hold expired.
+        this.prefillTps = 0;
+      } else if (freshPoll) {
+        this.prefillTps = this._tensorfoldLastPrefill.tps;
+      }
+      this._tensorfoldPrefillSeconds = prefillSec;
     } else {
-      this.prefillTps = 0;
+      this._tensorfoldPrefillSeconds = prefillSec;
     }
-    this._tensorfoldPrefillSeconds = prefillSec;
   }
 
   /**
