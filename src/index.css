@@ -972,3 +972,20 @@ html {
 .toggle-dot {
   background: var(--toggle-dot);
 }
+
+/* ─── Fork: Overview KPI strip on top ───────────────────── */
+/* The strip is the second child of .ov-grid (upstream order: sparks grid,
+   KPIs, side cards). Areas move it above the spark grid without touching
+   OverviewPage.tsx, so upstream reorders cannot conflict. */
+.ov .ov-grid {
+  grid-template-areas: "kpis" "sparks" "side";
+}
+.ov .ov-kpis {
+  grid-area: kpis;
+}
+.ov .ov-sparks {
+  grid-area: sparks;
+}
+.ov .ov-side {
+  grid-area: side;
+}

@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { SparkSnapshot } from "../../api/types";
-import { fetchLlmTokenTotals } from "../../api/llmTokenClient";
-import { formatTokensCompact } from "../../shared/tokenFormat";
+import { fetchFleetEnergy } from "../../api/client";
 import { TrendLine } from "../ui/TrendLine";
-import { aggregateModelTotals } from "./FleetTokenTotals";
 import { computeFleetTotals, pushRolling } from "./fleetStats";
 
 interface Trends {
@@ -52,7 +50,7 @@ function Kpi({
   );
 }
 
-/** Four fleet-wide KPI tiles computed from live snapshots. */
+/** Three fleet-wide KPI tiles computed from live snapshots. */
 export function FleetKpis({
   sparks,
   snapshotKey = sparks,
@@ -68,7 +66,10 @@ export function FleetKpis({
   const totalsRef = useRef(totals);
   totalsRef.current = totals;
   const [trends, setTrends] = useState<Trends>(persisted);
-  const [tokens, setTokens] = useState<{ completion: number; prompt: number } | null>(null);
+  // 24 h average draw from the persisted energy minute buckets. Distinct from
+  // the Fleet energy card, which headlines the 24 h kWh total and the current
+  // 30 s window; this tile headlines the average and keeps "now" as a chip.
+  const [avgW24h, setAvgW24h] = useState<number | null>(null);
 
   useEffect(() => {
     const t = totalsRef.current;
@@ -86,14 +87,14 @@ export function FleetKpis({
   useEffect(() => {
     let cancelled = false;
     const load = () =>
-      fetchLlmTokenTotals("today")
+      fetchFleetEnergy()
         .then((res) => {
           if (cancelled) return;
-          const agg = aggregateModelTotals(res.series || []);
-          setTokens(agg.totalCompletion + agg.totalPrompt > 0 ? { completion: agg.totalCompletion, prompt: agg.totalPrompt } : null);
+          const hours = (res.hourlyWatts24h ?? []).filter((w): w is number => w != null);
+          setAvgW24h(hours.length > 0 ? Math.round(hours.reduce((a, b) => a + b, 0) / hours.length) : null);
         })
         .catch(() => {
-          if (!cancelled) setTokens(null);
+          if (!cancelled) setAvgW24h(null);
         });
     void load();
     const t = window.setInterval(load, 60_000);
@@ -105,7 +106,6 @@ export function FleetKpis({
 
   const memGb = totals.memUsedMb / 1024;
   const memPct = totals.memTotalMb > 0 ? Math.round((totals.memUsedMb / totals.memTotalMb) * 100) : null;
-  const tokensCompact = tokens ? formatTokensCompact(tokens.completion).match(/^([\d.,]+)\s*(.*)$/) : null;
 
   return (
     <div className="ov-kpis">
@@ -120,7 +120,14 @@ export function FleetKpis({
         label="Fleet power"
         value={totals.powerW.toFixed(0)}
         unit="W"
-                trend={trends.power}
+        right={
+          avgW24h != null ? (
+            <span className="ov-delta mono" title="Average draw over the last 24 hours (persisted energy minute buckets)">
+              24h {avgW24h} W
+            </span>
+          ) : undefined
+        }
+        trend={trends.power}
         color="var(--color-violet)"
       />
       <Kpi
@@ -131,23 +138,13 @@ export function FleetKpis({
         trend={trends.mem}
         color="var(--color-info)"
       />
-      {tokens && tokensCompact ? (
-        <Kpi
-          label="Tokens today"
-          value={tokensCompact[1]}
-          unit={tokensCompact[2] || "tok"}
-          foot={`generated · ${formatTokensCompact(tokens.prompt)} prefill`}
-          color="var(--color-success)"
-        />
-      ) : (
-        <Kpi
-          label="Online"
-          value={String(totals.online)}
-          unit={`/ ${totals.total} units`}
-          foot={totals.online === totals.total ? "all units reachable" : `${totals.total - totals.online} offline`}
-          color="var(--color-success)"
-        />
-      )}
+      <Kpi
+        label="Online"
+        value={String(totals.online)}
+        unit={`/ ${totals.total} units`}
+        foot={totals.online === totals.total ? "all units reachable" : `${totals.total - totals.online} offline`}
+        color="var(--color-success)"
+      />
     </div>
   );
 }
