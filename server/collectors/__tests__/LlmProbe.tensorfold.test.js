@@ -417,7 +417,7 @@ test("probe: new tensorfold server → rates from health live, totals from /metr
   assert.equal(snap.kvCacheUsage, 0.0943);
   assert.equal(snap.ttftP95Seconds, 4.5);
 });
-test("_applyTensorFoldHealth: prefillActive follows streams.prefilling and the last finished rate is held", () => {
+test("_applyTensorFoldHealth: prefillActive gates the rate; held only while prefilling", () => {
   const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888);
   const h = (prompt, sec, prefilling) => ({
     prompt_tokens_total: prompt,
@@ -426,13 +426,17 @@ test("_applyTensorFoldHealth: prefillActive follows streams.prefilling and the l
     streams: { prefilling, decoding: 0, max: 8 },
   });
   probe._applyTensorFoldHealth(h(1000, 10, 0), 2); // seeds
-  probe._applyTensorFoldHealth(h(3000, 12, 0), 2); // 2000 tokens in 2 s
-  assert.equal(probe.prefillTps, 1000);
+  probe._applyTensorFoldHealth(h(3000, 12, 0), 2); // diff > 0 but nothing prefilling
   assert.equal(probe.prefillActive, false);
-  probe._applyTensorFoldHealth(h(3000, 12, 1), 2); // a new long prefill: totals do not move
+  assert.equal(probe.prefillTps, 0); // reset — a diff from cache-hit tokens is not a visible prefill
+  probe._applyTensorFoldHealth(h(5000, 14, 1), 2); // active prefill with a fresh diff
   assert.equal(probe.prefillActive, true);
-  assert.equal(probe.prefillTps, 1000); // held, not 0
+  assert.equal(probe.prefillTps, 1000);
+  probe._applyTensorFoldHealth(h(5000, 14, 1), 2); // counters stall mid-prefill: hold the last rate
+  assert.equal(probe.prefillTps, 1000);
   probe._tensorfoldLastPrefill.at -= 60_000;
-  probe._applyTensorFoldHealth(h(3000, 12, 1), 2);
+  probe._applyTensorFoldHealth(h(5000, 14, 1), 2); // hold expired while still prefilling
+  assert.equal(probe.prefillTps, 0); // UI shows the prefilling indicator here
+  probe._applyTensorFoldHealth(h(5000, 14, 0), 2); // prefill ended
   assert.equal(probe.prefillTps, 0);
 });

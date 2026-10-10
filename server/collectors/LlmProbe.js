@@ -1088,7 +1088,10 @@ export class LlmProbe {
   _applyTensorFoldHealth(data, dtSec) {
     const health = data && typeof data === "object" && !Array.isArray(data) ? data : {};
     // A prompt is being processed right now (no live rate exists for it, see below).
-    this.prefillActive = Number(health.streams?.prefilling) > 0;
+    // Builds without a streams block simply don't report it — leave the flag alone.
+    if (health.streams && health.streams.prefilling != null) {
+      this.prefillActive = Number(health.streams.prefilling) > 0;
+    }
     // Number(null) is 0: a null counter means "absent", not "zero".
     const prompt = health.prompt_tokens_total == null ? NaN : Number(health.prompt_tokens_total);
     const completion = health.completion_tokens_total == null ? NaN : Number(health.completion_tokens_total);
@@ -1173,30 +1176,40 @@ export class LlmProbe {
     const hasLivePrefill = Number.isFinite(livePrefillTps) && livePrefillTps >= 0;
     if (hasLivePrefill) this.prefillTps = Math.round(livePrefillTps * 100) / 100;
     if (!Number.isFinite(prefillSec) || !Number.isFinite(prompt)) return;
-    if (prevPrefillSec == null) {
-      this._tensorfoldPrefillSeconds = prefillSec;
-    } else if (!hasLivePrefill) {
-      // A paused monitor (visibility gating) resumes with dtSec >= 10: the diff
-      // is then unreliable, but the hold/reset below is wall-clock and must run
-      // anyway — an early return here would pin the last held rate forever.
-      const freshPoll = dtSec > 0 && dtSec < 10;
-      const dSec = freshPoll ? prefillSec - prevPrefillSec : 0;
-      const dIn = freshPoll ? prompt - prevIn : 0;
-      if (freshPoll && dSec > 0 && dIn > 0) {
-        // A request just finished: its average prefill rate. TensorFold publishes token and time
-        // totals only for finished requests, so nothing is measurable while a long prefill runs;
-        // keep the last finished rate on screen for a while instead of flashing to 0.
-        this._tensorfoldLastPrefill = { tps: Math.max(0, Math.round((dIn / dSec) * 100) / 100), at: Date.now() };
+    // A paused monitor (visibility gating) resumes with dtSec >= 10: the diff
+    // is then unreliable, but the hold/reset below is wall-clock and must run
+    // anyway — an early return here would pin the last held rate forever.
+    const freshPoll = dtSec > 0 && dtSec < 10;
+    const dSec = freshPoll ? prefillSec - prevPrefillSec : 0;
+    const dIn = freshPoll ? prompt - prevIn : 0;
+    if (freshPoll && dSec > 0 && dIn > 0) {
+      this._tensorfoldLastPrefill = { tps: Math.max(0, Math.round((dIn / dSec) * 100) / 100), at: Date.now() };
+      if (!hasLivePrefill) this.prefillTps = this._tensorfoldLastPrefill.tps;
+    }
+    this._tensorfoldPrefillSeconds = prefillSec;
+    if (hasLivePrefill) return;
+    const reportsPrefilling = health.streams != null && health.streams.prefilling != null;
+    if (!reportsPrefilling) {
+      // Build without a streams block: prefill activity is unknowable, keep the
+      // finished-request hold (20 s) so the tile does not flicker to 0.
+      if (this._tensorfoldLastPrefill && Date.now() - this._tensorfoldLastPrefill.at < 20_000) {
         this.prefillTps = this._tensorfoldLastPrefill.tps;
-      } else if (!(this._tensorfoldLastPrefill && Date.now() - this._tensorfoldLastPrefill.at < 20_000)) {
-        // No finish this poll and the hold expired.
+      } else {
         this.prefillTps = 0;
-      } else if (freshPoll) {
-        this.prefillTps = this._tensorfoldLastPrefill.tps;
       }
-      this._tensorfoldPrefillSeconds = prefillSec;
+    } else if (!this.prefillActive) {
+      // Nothing is prefilling right now: reset immediately. prompt_tokens_total
+      // keeps advancing from cache-hit prompt tokens (TensorFold counts them),
+      // so an unconditional diff would pin a phantom rate forever.
+      this.prefillTps = 0;
+    } else if (this._tensorfoldLastPrefill && Date.now() - this._tensorfoldLastPrefill.at < 20_000) {
+      // Active prefill without a fresh diff: keep the last measured rate briefly
+      // instead of flashing 0 (older builds publish totals only on finish).
+      this.prefillTps = this._tensorfoldLastPrefill.tps;
     } else {
-      this._tensorfoldPrefillSeconds = prefillSec;
+      // Active prefill with no measurable rate: 0 — the UI shows the
+      // "prefilling" indicator for prefillActive && rate <= 0.
+      this.prefillTps = 0;
     }
   }
 
