@@ -313,12 +313,17 @@ html {
   font-size: var(--density-root-font, 121%);
 }
 
-/* 1200px desktop floor ONLY for a phone rendering the browser's "Desktop
-   site" viewport (~980px): index.html sets html.desktop-viewport for that
-   case, so the desktop layout keeps its shape and scrolls sideways. A normal
-   mobile viewport (and tablets) adapts instead of scrolling horizontally. */
-html.desktop-viewport {
-  min-width: 1200px;
+/* 1200px desktop floor ONLY when a phone renders the browser's "Desktop
+   site" viewport (~980px): wide layout viewport + touch pointer + a
+   phone-sized DEVICE screen. Pure CSS — no JS, evaluated against the real
+   viewport on every change (rotation, desktop-site toggle, PWA).
+   Normal phone: viewport 412 → min-width fails. Desktop-site: 980 ✓ + coarse
+   ✓ + device 412 ≤ 700 ✓ → floor on. Desktop PC: pointer is fine → off.
+   Tablet: device-width 700+ → off (adapts). */
+@media (min-width: 960px) and (pointer: coarse) and (max-device-width: 700px) {
+  html {
+    min-width: 1200px;
+  }
 }
 
 [data-theme="dark"] {
