@@ -373,7 +373,7 @@ export function AiProxyPanel({
                 ) : (
                   <>
                     <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
-                      {tps.prefillTps !== null ? tps.prefillTps.toFixed(0) : "—"}
+                      {tps.prefillTps !== null ? Math.round(tps.prefillTps).toLocaleString() : "—"}
                     </span>
                     <span className="text-sm font-normal text-muted"> prefill</span>
                   </>
