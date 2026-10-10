@@ -244,6 +244,7 @@ export function OverviewPage({
 
   return (
     <div className="ov">
+      <FleetKpis sparks={visibleSparks} snapshotKey={sparks} />
       {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
       <div className="grid sm:grid-cols-2" style={{ gap: 16 }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
@@ -370,7 +371,6 @@ export function OverviewPage({
             );
           })}
         </div>
-        <FleetKpis sparks={visibleSparks} snapshotKey={sparks} />
         <div className="ov-side">
           {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} onOpenDetails={onNavigate ? () => onNavigate(ENERGY_ID) : undefined} /> : null}
           {showLlmTokenTotals ? <FleetTokenTotals onOpenDetails={onNavigate ? () => onNavigate(TOKENS_ID) : undefined} /> : null}
