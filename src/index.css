@@ -311,7 +311,13 @@
 html {
   color-scheme: light;
   font-size: var(--density-root-font, 121%);
-  /* Whole page never renders narrower than 1200px; smaller viewports scroll horizontally */
+}
+
+/* 1200px desktop floor ONLY for a phone rendering the browser's "Desktop
+   site" viewport (~980px): index.html sets html.desktop-viewport for that
+   case, so the desktop layout keeps its shape and scrolls sideways. A normal
+   mobile viewport (and tablets) adapts instead of scrolling horizontally. */
+html.desktop-viewport {
   min-width: 1200px;
 }
 

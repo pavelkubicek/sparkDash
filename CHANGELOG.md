@@ -31,6 +31,7 @@ Format: version sections are listed newest first.
 - Health findings also write Activity events when they appear and when they clear (`health.*`).
 
 ### Fixed
+- **Mobile renders the adaptive layout; the 1200px desktop floor applies only in "Desktop site" mode.** The whole-page `min-width: 1200px` used to force every phone into the desktop layout with a sideways scrollbar. It now applies only when a phone actually renders the browser's desktop-mode viewport (~980px: touch input, phone-sized screen, wide layout viewport — `html.desktop-viewport`, set before first paint and re-checked on rotation), and the Overview integration-card grid no longer stretches to its widest panel's text on narrow screens (`grid-cols-1` base, so a long unbroken title cannot blow the column out).
 - **Health findings no longer flap at a threshold.** A GPU hovering around 85 °C raised "running hot" and "back to normal" every minute and filled Activity with identical events. A finding now stays active for 90 s after its rule last raised it, so a reading that crosses a threshold back and forth produces one event and one "back to normal" when it has really settled. This applies to every health rule (temperature, memory, link speed, RoCE, concurrency).
 
 

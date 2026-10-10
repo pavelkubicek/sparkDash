@@ -8,6 +8,20 @@
       var t = localStorage.getItem("sparkdash-theme");
       if (t === "white" || t === "light" || t === "dark" || t === "oled") document.documentElement.setAttribute("data-theme", t);
     } catch (e) {}
+    // "Desktop site" on a phone: the browser ignores the viewport meta and lays
+    // the page out at ~980px. Only there (touch input + phone-sized screen +
+    // wide viewport) does the 1200px desktop floor apply (html.desktop-viewport
+    // in index.css); a normal mobile viewport adapts. Re-checked on rotate.
+    var setDesktopViewport = function () {
+      document.documentElement.classList.toggle(
+        "desktop-viewport",
+        navigator.maxTouchPoints > 0 &&
+          Math.min(screen.width, screen.height) <= 600 &&
+          window.innerWidth >= 960
+      );
+    };
+    setDesktopViewport();
+    window.addEventListener("resize", setDesktopViewport);
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0a0c0f" />

@@ -221,7 +221,7 @@ export function OverviewPage({
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
         {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
-        <div className="grid sm:grid-cols-2" style={{ gap: 16 }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 16 }}>
           <AiProxyPanel onIdleCounts={setProxyIdle} />
           <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
           {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
@@ -246,7 +246,7 @@ export function OverviewPage({
     <div className="ov">
       <FleetKpis sparks={visibleSparks} snapshotKey={sparks} />
       {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
-      <div className="grid sm:grid-cols-2" style={{ gap: 16 }}>
+      <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 16 }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
         <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
         {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
