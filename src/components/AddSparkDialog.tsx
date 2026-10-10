@@ -14,6 +14,7 @@ import {
   validateConnect,
   type AddStep,
 } from "./addSparkSteps";
+import { addDeviceLabel, UNIT_TYPE_OPTIONS, unitTypeOf, unitTypePatch, type UnitType } from "../shared/deviceKind";
 import { TestResultList } from "./TestResultList";
 import { resolveSparkRole } from "../api/sparkRole";
 import type { SparkRole } from "../api/types";
@@ -216,22 +217,31 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
                 <label htmlFor="add-spark-kind">Unit type</label>
                 <select
                   id="add-spark-kind"
-                  value={config.kind ?? "spark"}
-                  onChange={(e) => update({ kind: e.target.value as "spark" | "host" })}
+                  value={unitTypeOf(config)}
+                  onChange={(e) => update(unitTypePatch(e.target.value as UnitType, config))}
                 >
-                  <option value="spark">NVIDIA DGX Spark</option>
-                  <option value="host">Dedicated GPU host (Linux, nvidia-smi, not a Spark)</option>
+                  {UNIT_TYPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
                 </select>
               </div>
 
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={config.isLocal}
-                  onChange={(e) => update({ isLocal: e.target.checked })}
-                />
-                <span>This host (local collectors, no SSH for metrics)</span>
-              </label>
+              {config.platform !== "windows" && (
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={config.isLocal}
+                    onChange={(e) => update({ isLocal: e.target.checked })}
+                  />
+                  <span>This host (local collectors, no SSH for metrics)</span>
+                </label>
+              )}
+              {config.platform === "windows" && (
+                <p className="field-hint">
+                  Needs the Windows OpenSSH Server and the NVIDIA driver (nvidia-smi). Metrics come from
+                  PowerShell over SSH; Hermes and Tailnet checks are not available for Windows.
+                </p>
+              )}
 
               <div className="field">
                 <label htmlFor="add-spark-lan-ip">
@@ -440,30 +450,32 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
                 </div>
               </div>
 
-              <div className="set-row">
-                <div className="set-row__text">
-                  <span className="set-row__title">Monitor Hermes updates</span>
-                  <small>Checks for new releases every 10 min and adds an Update Hermes button.</small>
-                </div>
-                <div className="set-row__control">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={Boolean(config.hermesMonitoring)}
-                    aria-label="Monitor Hermes updates"
-                    onClick={() => update({ hermesMonitoring: !config.hermesMonitoring })}
-                    className={`toggle-track relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors${
-                      config.hermesMonitoring ? " is-on" : ""
-                    }`}
-                  >
-                    <span
-                      className={`toggle-dot inline-block h-4 w-4 transform rounded-full shadow transition-transform ${
-                        config.hermesMonitoring ? "translate-x-4" : "translate-x-0"
+              {config.platform !== "windows" && (
+                <div className="set-row">
+                  <div className="set-row__text">
+                    <span className="set-row__title">Monitor Hermes updates</span>
+                    <small>Checks for new releases every 10 min and adds an Update Hermes button.</small>
+                  </div>
+                  <div className="set-row__control">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={Boolean(config.hermesMonitoring)}
+                      aria-label="Monitor Hermes updates"
+                      onClick={() => update({ hermesMonitoring: !config.hermesMonitoring })}
+                      className={`toggle-track relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors${
+                        config.hermesMonitoring ? " is-on" : ""
                       }`}
-                    />
-                  </button>
+                    >
+                      <span
+                        className={`toggle-dot inline-block h-4 w-4 transform rounded-full shadow transition-transform ${
+                          config.hermesMonitoring ? "translate-x-4" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           )}
 
@@ -492,7 +504,7 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
                 disabled={saving || !stepReady}
                 className="btn btn--primary"
               >
-                {saving ? "Saving..." : "Add Spark"}
+                {saving ? "Saving..." : addDeviceLabel(config.kind)}
               </button>
             )}
           </div>

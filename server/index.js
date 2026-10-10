@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { SparkRegistry } from "./sparks/SparkRegistry.js";
+import { resolveFrontendDir, FRONTEND_MISSING_MESSAGE } from "./frontendDir.js";
 import { SparkMonitor } from "./sparks/SparkMonitor.js";
 import { collectionWasSuccessful } from "./collectors/SystemCollector.js";
 import { sshExec } from "./collectors/ssh.js";
@@ -58,10 +59,10 @@ import { compareSemver, getLatestRelease } from "./collectors/HermesReleases.js"
 import { initModelLauncher } from "./models/ModelLauncher.js";
 import { registerModelRoutes } from "./models/modelRoutes.js";
 import { loadSchedulerConfig } from "./models/schedulerStore.js";
-import { AUTOPOWER_FEATURE, FLEET_ENERGY_JSON_PATH } from "./config.js";
+import { AUTOPOWER_FEATURE, FLEET_ENERGY_JSON_PATH, FLEET_ENERGY_MONTHLY_JSON_PATH } from "./config.js";
 import { FleetEnergyTracker } from "./energy/FleetEnergyTracker.js";
 import { EventLog } from "./events/EventLog.js";
-import { GpuHistory } from "./metrics/GpuHistory.js";
+import { GpuHistory, deviceReadings } from "./metrics/GpuHistory.js";
 import { LauncherStore } from "./llmlaunch/LauncherStore.js";
 import { LauncherManager } from "./llmlaunch/LauncherManager.js";
 import { ToolEvalStore } from "./tooleval/ToolEvalStore.js";
@@ -75,6 +76,7 @@ import {
 import { testSparkConnectivity } from "./connectivity.js";
 import { TailscaleProbe } from "./collectors/TailscaleProbe.js";
 import { inspectStartupPreflight, logStartupPreflight } from "./startupPreflight.js";
+import { PROMETHEUS_CONTENT_TYPE, metricsEntries, renderPrometheusMetrics } from "./prometheus.js";
 
 dotenv.config();
 
@@ -301,6 +303,7 @@ const registry = new SparkRegistry();
 const fleetEnergyTracker = new FleetEnergyTracker({
   nodeIds: registry.sparkIds,
   filePath: FLEET_ENERGY_JSON_PATH,
+  monthlyFilePath: FLEET_ENERGY_MONTHLY_JSON_PATH,
 });
 
 // ─── Fleet event log ─────────────────────────────────────
@@ -324,7 +327,7 @@ function sampleGpuHistory() {
       const draw = gpu.power?.draw;
       const limit = gpu.power?.limit;
       const powerPct = Number.isFinite(draw) && Number.isFinite(limit) && limit > 0 ? Math.min(100, (draw / limit) * 100) : null;
-      gpuHistory.record(snap.id, Date.now(), gpu.usage, gpu.temperature, powerPct);
+      gpuHistory.record(snap.id, Date.now(), gpu.usage, gpu.temperature, powerPct, deviceReadings(gpu.gpus));
     }
   } catch {
     /* sampling must never break the server */
@@ -427,6 +430,8 @@ function startMonitor(spark) {
     // Returns null when the head is unknown/offline/model-less so workers
     // never display a stale model. Display-only; never writes to config.
     resolveHeadModelId: (headId) => monitors.get(headId)?.headLlmModelId() ?? null,
+    // Settings → Poll interval drives the collectors, not just the broadcast.
+    pollIntervalMs: getSettings().pollIntervalMs,
   });
   monitors.set(spark.id, monitor);
   monitor.start();
@@ -512,6 +517,36 @@ app.delete("/api/events", (req, res) => {
     return res.status(400).json({ error: "olderThanMs must be a positive number" });
   }
   res.json({ removed: eventLog.clear({ olderThanMs }) });
+});
+
+/**
+ * In-app restart. Only offered inside the Docker container, where the node --watch
+ * supervisor is PID 1 and the compose file's `restart: always` brings the container
+ * back; anywhere else exiting would simply stop the server.
+ */
+const restartSupported = () => {
+  try {
+    if (!fs.existsSync("/.dockerenv")) return false;
+    // The container may share the host PID namespace, so look for the supervisor by command line.
+    return fs.readFileSync(`/proc/${process.ppid}/cmdline`, "utf8").split("\0").includes("--watch");
+  } catch {
+    return false;
+  }
+};
+
+app.get("/api/restart", (_req, res) => {
+  res.json({ available: restartSupported() });
+});
+
+app.post("/api/restart", (_req, res) => {
+  if (!restartSupported()) {
+    return res.status(409).json({ error: "Restart is only available when sparkDash runs in Docker with restart: always" });
+  }
+  console.log("[sparkDash] restart requested from the UI");
+  res.json({ restarting: true });
+  // Stopping the supervisor makes the child shut down gracefully (SIGTERM) and
+  // lets Docker's restart policy start a fresh container.
+  res.on("finish", () => setTimeout(() => process.kill(process.ppid, "SIGTERM"), 200).unref());
 });
 
 app.get("/api/health", (_req, res) => {
@@ -822,7 +857,10 @@ app.post("/api/sparks/test", async (req, res) => {
       id: body.id || "ephemeral-test",
       name: body.name || "test",
       lanIp: body.lanIp || "",
+      llmHost: body.llmHost,
       cx7Ip: body.cx7Ip || null,
+      platform: body.platform === "windows" ? "windows" : body.platform === "darwin" ? "darwin" : "linux",
+      kind: body.platform === "windows" ? "host" : body.kind,
       isLocal: Boolean(body.isLocal),
       role: body.role,
       workerNode: Boolean(body.workerNode),
@@ -888,6 +926,8 @@ app.patch("/api/sparks/:id", (req, res) => {
     // Only validate host fields if they are being updated
     if (
       body.lanIp != null ||
+      body.llmHost != null ||
+      body.isLocal != null ||
       body.ssh?.host != null ||
       body.ssh?.user != null ||
       body.ssh?.port != null
@@ -897,6 +937,7 @@ app.patch("/api/sparks/:id", (req, res) => {
       const merged = {
         isLocal: body.isLocal ?? existing.isLocal,
         lanIp: body.lanIp ?? existing.lanIp,
+        llmHost: body.llmHost ?? existing.llmHost,
         ssh: { ...existing.ssh, ...(body.ssh || {}) },
       };
       const validationError = validateSparkTarget(merged);
@@ -988,8 +1029,12 @@ app.put("/api/settings", (req, res) => {
     // polling right now: off without a watching client pauses immediately
     // instead of waiting for the next WS event.
     if ("energyAlwaysSampling" in patch) updateMonitorStates();
-    // If poll interval changed, restart the broadcast timer
+    // Poll interval changed: re-arm the running monitors' collector timers
+    // (in place — no restart, no lost backoff state) and the broadcast timer.
     if (patch.pollIntervalMs != null) {
+      for (const monitor of monitors.values()) {
+        monitor.setPollInterval(newSettings.pollIntervalMs);
+      }
       restartBroadcast();
     }
     res.json(newSettings);
@@ -1067,6 +1112,11 @@ function launcherContext(req, res) {
   const spark = registry.getSpark(req.params.id);
   if (!spark) {
     res.status(404).json({ error: "Spark not found" });
+    return null;
+  }
+  if (spark.platform === "windows") {
+    // Launchers run bash start/stop scripts; not supported on Windows PCs (yet).
+    res.status(400).json({ error: "Starting and stopping models from sparkDash is not supported on Windows PCs" });
     return null;
   }
   return spark;
@@ -1188,8 +1238,8 @@ app.post("/api/sparks/:id/refresh/:domain", async (req, res) => {
     const monitor = monitors.get(req.params.id);
     if (!monitor) return res.status(404).json({ error: "Spark not found" });
     const { domain } = req.params;
-    if (domain !== "storage") {
-      return res.status(400).json({ error: "Only 'storage' domain is supported" });
+    if (domain !== "storage" && domain !== "llm") {
+      return res.status(400).json({ error: "Only 'storage' and 'llm' domains are supported" });
     }
     await monitor.refreshDomain(domain);
     forceBroadcast();
@@ -2185,6 +2235,17 @@ app.delete("/api/sparks/:id/llm/showcase/:sessionId", (req, res) => {
 // bearer token when SPARKDASH_TOKEN is set, otherwise open on loopback and on an
 // open remote bind — so do not expose port 5555 beyond a trusted network.
 // initiateSparkShutdown / shutdownErrorStatus come from ./shutdown.js.
+
+/** Event-log a successful Wake-on-LAN send (server/wol.js does the sending). */
+function noteWake(spark) {
+  recordEvent({
+    type: "power.wake",
+    severity: "info",
+    sparkId: spark.id,
+    sparkName: spark.name,
+    message: `Wake-on-LAN sent to ${spark.name || spark.id}`,
+  });
+}
 /** Batch routes first so they never collide with /:id/* if routing changes. */
 app.post("/api/sparks/shutdown-all", async (_req, res) => {
   const results = [];
@@ -2358,20 +2419,41 @@ const autoPower = new AutoPowerManager({
 });
 registerAutoPowerRoutes(app, autoPower);
 
+// ─── Prometheus exposition (opt-in) ──────────────────────
+// Registered after the auth middleware (a token-protected install needs the
+// scraper's bearer token) and before the SPA fallback, which would otherwise
+// answer /metrics with index.html.
+app.get("/metrics", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (!getSettings().prometheusExport) {
+    return res
+      .status(404)
+      .type("text")
+      .send("Prometheus export is off. Enable it in Settings → Prometheus metrics.\n");
+  }
+  const entries = metricsEntries(registry.sparkIds.map((id) => monitors.get(id)));
+  // res.end, not res.send: send() reorders the media type parameters; keep the
+  // header exactly as the exposition format spells it.
+  res.setHeader("Content-Type", PROMETHEUS_CONTENT_TYPE);
+  res.end(renderPrometheusMetrics(entries));
+});
+
 // ─── Static files (built frontend) ───────────────────────
-const distDir = path.join(ROOT, "dist");
-const indexHtml = path.join(distDir, "index.html");
-app.use(express.static(distDir));
+const staticByDir = new Map();
+app.use((req, res, next) => {
+  const dir = resolveFrontendDir(ROOT);
+  if (!dir) return next();
+  if (!staticByDir.has(dir)) staticByDir.set(dir, express.static(dir));
+  return staticByDir.get(dir)(req, res, next);
+});
 
 // ─── SPA fallback (Express v5 wildcard) ───────────────────
 app.get("*splat", (_req, res) => {
-  if (!fs.existsSync(indexHtml)) {
-    return res
-      .status(503)
-      .type("text")
-      .send("Frontend not built. Run `npm run build` or use `npm run dev`.");
+  const dir = resolveFrontendDir(ROOT);
+  if (!dir) {
+    return res.status(503).type("text").send(FRONTEND_MISSING_MESSAGE);
   }
-  res.sendFile(indexHtml);
+  res.sendFile(path.join(dir, "index.html"));
 });
 
 // ─── Process-level safety net ─────────────────────────────

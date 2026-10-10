@@ -1,6 +1,6 @@
 {
   "name": "sparkdash",
-  "version": "2.0.0",
+  "version": "2.31.0",
   "description": "sparkDash — Multi-DGX Spark Monitoring Dashboard",
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "build:watch": "vite build --watch",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:server && npm run test:frontend",
-    "test:server": "node --test server/collectors/__tests__/*.test.js server/sparks/__tests__/*.test.js server/models/__tests__/*.test.js server/autopower/__tests__/*.test.js server/llmtokens/__tests__/*.test.js server/llmlaunch/__tests__/*.test.js server/tooleval/__tests__/*.test.js server/metrics/__tests__/*.test.js server/health/__tests__/*.test.js",
+    "test:server": "node --test server/__tests__/*.test.js server/collectors/__tests__/*.test.js server/models/__tests__/*.test.js server/sparks/__tests__/*.test.js server/autopower/__tests__/*.test.js server/llmtokens/__tests__/*.test.js server/llmlaunch/__tests__/*.test.js server/tooleval/__tests__/*.test.js server/metrics/__tests__/*.test.js server/health/__tests__/*.test.js",
     "test:frontend": "vitest run",
     "preview": "vite preview",
     "start": "node server/index.js",
@@ -20,8 +20,7 @@
     "docker:dev:build": "docker compose -f docker-compose.dev.yml up --build",
     "docker:prod": "docker compose up -d",
     "docker:rebuild": "docker compose up --build -d",
-    "frontend": "npm run build",
-    "pwa:icons": "node scripts/make-pwa-icons.mjs"
+    "frontend": "npm run build"
   },
   "keywords": [
     "nvidia",

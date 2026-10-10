@@ -353,7 +353,7 @@ export function OverviewPage({
       ) : null}
 
       <div className="ov-grid">
-        <div className="ov-sparks">
+        <div className="ov-sparks" data-count={visibleSparks.length}>
           {visibleSparks.length === 0 && (
             <p className="panel ov-empty">No units match the current search and status filters.</p>
           )}
@@ -372,7 +372,7 @@ export function OverviewPage({
           })}
         </div>
         <div className="ov-side">
-          {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} onOpenDetails={onNavigate ? () => onNavigate(ENERGY_ID) : undefined} /> : null}
+          {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} nodeNames={Object.fromEntries(sparks.map((s) => [s.id, s.name]))} onOpenDetails={onNavigate ? () => onNavigate(ENERGY_ID) : undefined} /> : null}
           {showLlmTokenTotals ? <FleetTokenTotals onOpenDetails={onNavigate ? () => onNavigate(TOKENS_ID) : undefined} /> : null}
           <section className="panel ov-card" aria-label="Recent activity">
             <ActivityFeed limit={6} onSelectSpark={onSelectSpark} onViewAll={onNavigate ? () => onNavigate(ACTIVITY_ID) : undefined} />

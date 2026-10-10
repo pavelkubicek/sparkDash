@@ -73,6 +73,7 @@ export class LlmProbe {
     this.stepId = 0;
     this.modelId = null;
     this.modelPath = null;
+    this.models = [];
     this.contextLength = null;
     this.gpuMemoryUtilization = null;
     this.slotsActive = 0;
@@ -255,6 +256,7 @@ export class LlmProbe {
   }
 
   _noteFailure(message) {
+    this.models = [];
     this.error = message;
     this._consecutiveFailures += 1;
     if (this._consecutiveFailures >= FAIL_RESET_THRESHOLD) {
@@ -268,6 +270,7 @@ export class LlmProbe {
     this.authOpen = null;
     this.modelId = null;
     this.modelPath = null;
+    this.models = [];
     this.generationTps = 0;
     this.prefillTps = 0;
     this.cachedPrefillTps = null;
@@ -330,7 +333,8 @@ export class LlmProbe {
       this.backendType !== "ds4" &&
       this.backendType !== "exl3" &&
       this.backendType !== "q27" &&
-      this.backendType !== "tensorfold"
+      this.backendType !== "tensorfold" &&
+      this.backendType !== "freetoken"
     ) {
       const slotUrl = `${this.baseUrl}/slots`;
       try {
@@ -362,7 +366,8 @@ export class LlmProbe {
         if (auth === "ok") {
           try {
             const modelsData = await modelRes.json();
-            owned = modelsData?.data?.[0]?.owned_by;
+            const records = Array.isArray(modelsData?.data) ? modelsData.data : [];
+            owned = records.find((model) => typeof model?.id === "string" && model.id.trim().length > 0)?.owned_by;
           } catch {
             /* body optional for detection */
           }
@@ -524,6 +529,7 @@ export class LlmProbe {
     let modelsOk = false;
     let owned = null;
     let servedModelId = null;
+    this.models = [];
     try {
       const modelsRes = await this._fetch(`${this.baseUrl}/v1/models`);
       const auth = this._noteAuthStatus(modelsRes.status);
@@ -533,14 +539,21 @@ export class LlmProbe {
       if (auth === "ok") {
         modelsOk = true;
         const modelsData = await modelsRes.json();
-        const model = modelsData?.data?.[0];
-        servedModelId = normalizeModelId(model?.id || null);
+        const records = Array.isArray(modelsData?.data) ? modelsData.data : [];
+        const validModels = records.filter((model) =>
+          typeof model?.id === "string" && model.id.trim().length > 0
+        );
+        this.models = [...new Set(validModels.map((model) => model.id))];
+        const model = validModels[0];
+        servedModelId = this.models.length > 1
+          ? model.id
+          : normalizeModelId(model?.id || null);
         this.modelId = servedModelId;
-        // Drop HF hub cache paths from modelPath if /v1/models id was a cache dir
-        if (isHfHubCachePath(model?.id)) this.modelPath = null;
+        // Only native enrichment owns modelPath, never the served ID list.
+        this.modelPath = null;
         // ds4-server uses context_length; vLLM uses max_model_len
         this.contextLength =
-          model?.max_model_len ?? model?.context_length ?? this.contextLength;
+          model?.max_model_len ?? model?.context_length ?? null;
         owned = model?.owned_by;
       }
     } catch {}
@@ -568,6 +581,8 @@ export class LlmProbe {
       this._clearEngineMemory();
       try {
         const statsRes = await this._fetch(`${this.baseUrl}/v1/stats`);
+        // A protected /v1/stats is "needs a key", not "no data".
+        this._noteAuthStatus(statsRes.status);
         if (!statsRes.ok) {
           this._clearFreeTokenRates();
         } else {
@@ -2253,9 +2268,11 @@ export class LlmProbe {
     return {
       available: metricsLive,
       backend: this.backendType,
-      modelId: this.modelId || null,
+      modelId: this.models.length > 1 ? this.models[0] : this.modelId || null,
       modelPath: this.modelPath || null,
-      contextLength: this.contextLength,
+      models: metricsLive ? [...this.models] : [],
+      // Native enrichment may set a context limit; routers have no shared limit.
+      contextLength: this.models.length > 1 ? null : this.contextLength,
       gpuMemoryUtilization: this.gpuMemoryUtilization,
       slotsActive: this.slotsActive,
       slotsTotal: this.slotsTotal,
@@ -2293,6 +2310,7 @@ export class LlmProbe {
       backend: this.backendType,
       modelId: null,
       modelPath: null,
+      models: [],
       contextLength: null,
       gpuMemoryUtilization: null,
       slotsActive: 0,

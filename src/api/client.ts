@@ -8,6 +8,7 @@ import type {
   ActivityEvent,
   ActivityEventsPage,
   EnergyHistory,
+  MonthlyEnergy,
   TokenHistory,
   DecodeBenchJob,
   DecodeBenchListResponse,
@@ -108,6 +109,16 @@ export function clearEvents(olderThanMs?: number): Promise<{ removed: number }> 
   return apiFetch(`/api/events${qs}`, { method: "DELETE" });
 }
 
+/** Whether this server can restart itself (Docker with a restart policy). */
+export function fetchRestartAvailable(): Promise<{ available: boolean }> {
+  return apiFetch("/api/restart");
+}
+
+/** Ask the server to restart; Docker brings it back a few seconds later. */
+export function restartServer(): Promise<{ restarting: boolean }> {
+  return apiFetch("/api/restart", { method: "POST" });
+}
+
 /** Delete recorded fleet energy: everything, or only minutes older than `olderThanMs`. */
 export function clearFleetEnergy(olderThanMs?: number): Promise<{ removed: number }> {
   const qs = olderThanMs != null ? `?olderThanMs=${Math.floor(olderThanMs)}` : "";
@@ -142,6 +153,11 @@ export function fetchTokenHistory(): Promise<TokenHistory> {
 /** Hourly fleet energy for up to 31 days, per node. */
 export function fetchEnergyHistory(): Promise<EnergyHistory> {
   return apiFetch("/api/fleet-energy/history");
+}
+
+/** Permanent per-month fleet energy (survives resets, restarts and fleet changes). */
+export function fetchMonthlyEnergy(): Promise<MonthlyEnergy> {
+  return apiFetch("/api/fleet-energy/monthly");
 }
 
 /** Latest metrics snapshot for one Spark (includes per-port LLM modelId). */
@@ -931,6 +947,8 @@ export interface GpuHistoryResponse {
   u: number[];
   c: number[];
   p: Array<number | null>;
+  /** Per-card series of a multi-GPU host, parallel to `t` (null where the card had no reading). Absent on older servers. */
+  gpus?: Array<{ index: number; name: string | null; u: Array<number | null>; c: Array<number | null>; p: Array<number | null> }>;
 }
 
 export function getGpuHistory(sparkId: string, windowMs: number): Promise<GpuHistoryResponse> {

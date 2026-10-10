@@ -15,6 +15,7 @@ import { LlmPanel } from "./LlmPanel";
 import { ComfyPanel } from "./ComfyPanel";
 import { useSparkPinned } from "../../hooks/sparkVisibility";
 import { LlmModelsPanel } from "./LlmModelsPanel";
+import { RocePanel } from "./RocePanel";
 import { UnifiedMemoryPanel } from "./UnifiedMemoryPanel";
 import "../../styles/spark.css";
 import { vramContextFor } from "../../shared/vramBreakdown";
@@ -237,7 +238,7 @@ export function SparkPage({
                 hideMemory={showUnified}
               />
             </Item>
-            {/* Unified memory and CPU sit side by side (they stack when the column is narrow). */}
+            {/* Unified memory (or RAM on a dedicated host) and CPU sit side by side (they stack when the column is narrow). */}
             <Item order={2}>
               <div className="sp-pair">
                 {showUnified && <UnifiedMemoryPanel um={unified} gpu={metrics.gpu} llm={metrics.llm} />}
@@ -247,14 +248,12 @@ export function SparkPage({
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                 />
+                {/* Dedicated hosts have system RAM instead of a unified pool: CPU and RAM side by side. */}
+                {spark.kind === "host" && <RamPanel ram={metrics.ram} sparkId={spark.id} />}
+                {/* Models is the third column of the row (Windows PCs have no launchers). */}
+                {spark.platform !== "windows" && modelsPanel}
               </div>
             </Item>
-            <Item order={4}>{modelsPanel}</Item>
-            {spark.kind === "host" && (
-              <Item order={6}>
-                <RamPanel ram={metrics.ram} sparkId={spark.id} />
-              </Item>
-            )}
           </div>
           <div className="sp-col">
             {view === "all" && showSvc && llmOn && primaryPort != null && (
@@ -288,6 +287,11 @@ export function SparkPage({
                 onDisabledChange={setDisabledInterfaces}
               />
             </Item>
+            {metrics.roce && metrics.roce.devices.length > 0 && (
+              <Item order={8}>
+                <RocePanel roce={metrics.roce} />
+              </Item>
+            )}
             {tailscaleOn && (
               <Item order={9}>
                 <TailscalePanel tailscale={metrics.tailscale ?? null} />

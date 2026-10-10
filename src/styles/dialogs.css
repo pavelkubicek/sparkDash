@@ -1783,3 +1783,39 @@
 .set-token__state.is-set i {
   background: var(--color-success);
 }
+
+/* A row whose control sits under the text instead of beside it. */
+.set-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+.set-row--stack .set-row__control {
+  flex-direction: column;
+  align-items: flex-start;
+  flex-shrink: 1;
+  gap: 4px;
+}
+
+/* Settings → Time zone: input with suggestions, plus "Use browser". The message line is
+   always reserved, so showing it never moves the field. */
+.set-tz {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.set-tz .field-input {
+  width: min(16rem, 100%);
+  min-width: 0;
+}
+.set-tz .field-input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+.set-tz__msg {
+  display: block;
+  min-height: 1.4em;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--color-danger);
+}

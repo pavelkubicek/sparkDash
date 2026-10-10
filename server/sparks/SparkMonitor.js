@@ -12,21 +12,23 @@ import { llmDaily } from "../collectors/LlmDaily.js";
 import { HealthEvaluator } from "../health/HealthEvaluator.js";
 import { sshExec } from "../collectors/ssh.js";
 import {
-  POLL_INTERVAL_GPU,
-  POLL_INTERVAL_CPU,
-  POLL_INTERVAL_NETWORK,
   POLL_INTERVAL_STORAGE,
-  POLL_INTERVAL_LLM,
-  POLL_INTERVAL_COMFY,
-  POLL_INTERVAL_BANDWIDTH,
   POLL_INTERVAL_LIVENESS,
   POLL_INTERVAL_HERMES,
   POLL_INTERVAL_TAILSCALE,
   LLM_PORT,
   COMFY_PORT,
   HOST_PATHS,
+  resolveFastPollIntervals,
 } from "../config.js";
-import { getSettings } from "../settings.js";
+
+/**
+ * Domains on a timer of their own that follow Settings → Poll interval
+ * (unless pinned by env — see resolveFastPollIntervals). LLM and ComfyUI follow
+ * it too but are armed only while their monitoring is on. Storage, liveness,
+ * Tailnet, Hermes and the NV_ERR journal scan keep their own cadences.
+ */
+const FAST_TIMER_DOMAINS = ["gpu", "cpu", "network", "ram", "memory"];
 
 /**
  * Liveness retry schedule. Network failures widen gradually — a rebooting host
@@ -83,18 +85,24 @@ const ONLINE_GRACE_MS = 10000;
  * SparkMonitor — one per Spark. Owns collectors + rate state + poll loop.
  * Exposes snapshot() for WebSocket pushed payload.
  */
+/** A finding stays this long after its rule last raised it, so a reading near a threshold does not flap. */
+export const HEALTH_CLEAR_HOLD_MS = 90_000;
+
 const HEALTH_LABELS = {
   thermal: "GPU temperature",
   "low-power": "GPU power draw",
   memory: "Unified memory",
   concurrency: "Model concurrency",
   "link-speed": "Network link speed",
+  "roce-link": "RoCE link",
+  "roce-loss": "RoCE packet loss",
 };
 
 export class SparkMonitor {
   /**
    * @param {object} spark
-   * @param {{ onWolMac?: (sparkId: string, mac: string) => void, onHermesChange?: () => void, resolveHeadModelId?: ((headId: string) => string | null) }} [options]
+   * @param {{ onWolMac?: (sparkId: string, mac: string) => void, onHermesChange?: () => void, resolveHeadModelId?: ((headId: string) => string | null), pollIntervalMs?: number }} [options]
+   *   pollIntervalMs: Settings → Poll interval; drives the fast collector timers.
    */
   constructor(spark, options = {}) {
     this.spark = spark;
@@ -179,12 +187,15 @@ export class SparkMonitor {
       ram: this.collector._defaultRam(),
       storage: [],
       network: this.collector._defaultNetwork(),
+      roce: null,
       unifiedMemory: this.collector._defaultUnifiedMemory(),
       llm: [],
       comfy: null,
       tailscale: null,
     };
     this._lastUpdate = {};
+    /** domain → epoch ms of the last poll that returned real data (see _domainSucceeded). Not in snapshot(): it would defeat the broadcast cache. */
+    this._lastSuccess = {};
     this._metricCollectionSuccessful = { gpu: false, cpu: false };
     /**
      * Last poll (epoch ms) in which each LLM port generated or prefilled
@@ -199,8 +210,7 @@ export class SparkMonitor {
     this._hardwareSummary = this._staticHardwareSummary(spark);
     this._stopped = false;
     if (spark?.kind === "host") {
-      void this.collector
-        .detectHardware()
+      void (spark.platform === "windows" ? this.collector.detectWindowsHardware() : this.collector.detectHardware())
         .then((detected) => {
           if (this._stopped || !detected) return;
           this._hardwareSummary = { ...this._hardwareSummary, ...detected };
@@ -209,6 +219,10 @@ export class SparkMonitor {
     }
 
     // Timers
+    /** Per-domain cadence for the fast collectors (ms). */
+    this._fastIntervals = resolveFastPollIntervals(options.pollIntervalMs);
+    /** @type {Record<string, ReturnType<typeof setInterval>>} fast domain → timer */
+    this._domainTimers = {};
     this._intervals = [];
     /** @type {ReturnType<typeof setInterval> | null} */
     this._llmIntervalId = null;
@@ -386,8 +400,7 @@ export class SparkMonitor {
       this._llmIntervalId = null;
     }
     if (this._llmMonitoringEnabled() && this._running) {
-      this._llmIntervalId = setInterval(() => this._pollDomain("llm"), POLL_INTERVAL_LLM);
-      this._intervals.push(this._llmIntervalId);
+      this._llmIntervalId = this._armDomainTimer("llm");
       void this._pollDomain("llm");
     }
   }
@@ -415,8 +428,7 @@ export class SparkMonitor {
       this._comfyIntervalId = null;
     }
     if (this._comfyMonitoringEnabled() && this._running) {
-      this._comfyIntervalId = setInterval(() => this._pollDomain("comfy"), POLL_INTERVAL_COMFY);
-      this._intervals.push(this._comfyIntervalId);
+      this._comfyIntervalId = this._armDomainTimer("comfy");
       void this._pollDomain("comfy");
     }
   }
@@ -524,9 +536,56 @@ export class SparkMonitor {
     return [LLM_PORT];
   }
 
-  /** Resolve the LLM poll interval from settings (falls back to config default). */
-  _llmPollInterval() {
-    return getSettings().pollIntervalMs || POLL_INTERVAL_LLM;
+  /** Repeating poll of one domain at its current cadence; tracked for stop(). */
+  _armDomainTimer(domain) {
+    const id = setInterval(() => this._pollDomain(domain), this._fastIntervals[domain]);
+    this._intervals.push(id);
+    return id;
+  }
+
+  /**
+   * Remote sparks: ONE bundled SSH exec refreshes gpu/cpu/ram/network/unified
+   * memory, so a single timer follows the cpu cadence (see _armFastCollectors).
+   */
+  _armSystemTimer() {
+    const id = setInterval(() => this._pollSystem(), this._fastIntervals.cpu);
+    this._intervals.push(id);
+    return id;
+  }
+
+  _clearTimer(id) {
+    clearInterval(id);
+    this._intervals = this._intervals.filter((other) => other !== id);
+  }
+
+  /**
+   * Apply a new Settings → Poll interval. Only timers whose cadence actually
+   * changes are re-armed, and nothing else is touched: in-flight guards, the
+   * run generation, liveness backoff and the offline pause all carry over, so
+   * a poll already running is neither duplicated nor discarded.
+   * @param {number} pollIntervalMs
+   */
+  setPollInterval(pollIntervalMs) {
+    const prev = this._fastIntervals;
+    this._fastIntervals = resolveFastPollIntervals(pollIntervalMs);
+    if (!this._running || this._paused) return; // paused: resume() re-arms at the new cadence
+    for (const domain of FAST_TIMER_DOMAINS) {
+      if (prev[domain] === this._fastIntervals[domain]) continue;
+      if (this._domainTimers[domain] != null) this._clearTimer(this._domainTimers[domain]);
+      this._domainTimers[domain] = this._armDomainTimer(domain);
+    }
+    if (this._domainTimers.system != null && prev.cpu !== this._fastIntervals.cpu) {
+      this._clearTimer(this._domainTimers.system);
+      this._domainTimers.system = this._armSystemTimer();
+    }
+    if (this._llmIntervalId != null && prev.llm !== this._fastIntervals.llm) {
+      this._clearTimer(this._llmIntervalId);
+      this._llmIntervalId = this._armDomainTimer("llm");
+    }
+    if (this._comfyIntervalId != null && prev.comfy !== this._fastIntervals.comfy) {
+      this._clearTimer(this._comfyIntervalId);
+      this._comfyIntervalId = this._armDomainTimer("comfy");
+    }
   }
 
   /** Start background polling. */
@@ -537,7 +596,7 @@ export class SparkMonitor {
     this._paused = false;
     this._stopped = false;
     this._poll();
-    this._intervals.push(...this._installSystemTimers());
+    this._armFastCollectors();
     this._restartLlmPollInterval();
     this._restartComfyPollInterval();
     this._restartHermesPollInterval();
@@ -556,6 +615,7 @@ export class SparkMonitor {
     this._stopped = true;
     for (const id of this._intervals) clearInterval(id);
     this._intervals = [];
+    this._domainTimers = {};
     this._llmIntervalId = null;
     this._comfyIntervalId = null;
     this._hermesIntervalId = null;
@@ -577,30 +637,25 @@ export class SparkMonitor {
   }
 
   /**
-   * Fast-domain poll timers. LOCAL sparks read /proc + sysfs directly (cheap
-   * fs reads + occasional nsenter) so each domain keeps its own cadence.
-   * REMOTE sparks collapse gpu/cpu/ram/network/unified-memory into ONE
-   * bundled SSH exec per cycle (`collectRemoteBundle`) — previously five
-   * separate sshExec round-trips every 2s, which burned ~1.4 cores of the
-   * dashboard host in handshake crypto alone and corrupted idle stats.
-   * Storage stays on its own slower cadence; cadence overrides via
-   * POLL_INTERVAL_* env vars apply to the local path.
+   * Arm the fast collector timers at their current cadence. LOCAL sparks read
+   * /proc + sysfs directly (cheap fs reads + occasional nsenter) so each
+   * domain keeps its own cadence. REMOTE sparks collapse
+   * gpu/cpu/ram/network/unified-memory into ONE bundled SSH exec per cycle
+   * (`collectRemoteBundle`) — previously five separate sshExec round-trips
+   * every 2s, which burned ~1.4 cores of the dashboard host in handshake
+   * crypto alone and corrupted idle stats. Storage stays on its own slower
+   * cadence; cadence overrides via POLL_INTERVAL_* env vars apply to the
+   * local path.
    */
-  _installSystemTimers() {
-    const ivs = [];
+  _armFastCollectors() {
     if (this.spark.isLocal) {
-      ivs.push(setInterval(() => this._pollDomain("gpu"), POLL_INTERVAL_GPU));
-      ivs.push(setInterval(() => this._pollDomain("cpu"), POLL_INTERVAL_CPU));
-      ivs.push(setInterval(() => this._pollDomain("network"), POLL_INTERVAL_NETWORK));
-      ivs.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
-      ivs.push(setInterval(() => this._pollDomain("ram"), POLL_INTERVAL_CPU));
-      ivs.push(setInterval(() => this._pollDomain("memory"), POLL_INTERVAL_BANDWIDTH));
+      for (const domain of FAST_TIMER_DOMAINS) {
+        this._domainTimers[domain] = this._armDomainTimer(domain);
+      }
     } else {
-      // gpu/cpu/ram/network/memory in one exec; storage separately (5s cadence).
-      ivs.push(setInterval(() => this._pollSystem(), POLL_INTERVAL_CPU));
-      ivs.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
+      this._domainTimers.system = this._armSystemTimer();
     }
-    return ivs;
+    this._intervals.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
   }
 
   /**
@@ -622,9 +677,8 @@ export class SparkMonitor {
     if (!this._paused || !this._running) return;
     this._paused = false;
     this._poll();
-    this._storeIntervals([...this._installSystemTimers(),
-      setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS),
-    ]);
+    this._storeIntervals([setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS)]);
+    this._armFastCollectors();
     // Restore opt-in domain timers (LLM / ComfyUI / Hermes) with the same
     // interval-ID tracking as start(), so later updateConfig() flips don't
     // double-poll or leak stale timers after a pause→resume cycle.
@@ -655,6 +709,7 @@ export class SparkMonitor {
       id: this.spark.id,
       name: this.spark.name,
       kind: this.spark.kind || "spark",
+      platform: this.spark.platform || "linux",
       online: this.online,
       /** Last liveness failure, or null. "offline" with no reason is a bug. */
       offlineReason: this.online ? null : this.offlineReason,
@@ -699,6 +754,7 @@ export class SparkMonitor {
         ram: this._metrics.ram,
         storage: this._metrics.storage,
         network: this._metrics.network,
+        roce: this._metrics.roce ?? null,
         unifiedMemory: this._metrics.unifiedMemory,
         llm: this._metrics.llm,
         comfy: comfyOn ? this._metrics.comfy : null,
@@ -710,6 +766,9 @@ export class SparkMonitor {
   // ─── Uptime helper ─────────────────────────────────────────
   /** Read system uptime from /proc/uptime (local or via SSH). */
   async _readUptime() {
+    if (this.spark.platform === "windows" && !this.spark.isLocal) {
+      return this.collector.readWindowsUptime();
+    }
     let content;
     if (this.spark.isLocal) {
       const mapped = path.join(HOST_PATHS.PROC, "uptime");
@@ -753,18 +812,24 @@ export class SparkMonitor {
           gpu: this._metrics.gpu,
           unifiedMemory: this._metrics.unifiedMemory,
           network: this._metrics.network,
+          roce: this._metrics.roce,
           llm: this._metrics.llm,
         },
         domain
       );
-      this._health = findings;
+      // A reading that hovers around a threshold (a GPU at 85 °C, memory near 3 GB) would
+      // raise and clear its finding every few seconds, and log an event each time. Keep a
+      // finding for HEALTH_CLEAR_HOLD_MS after the rule last raised it.
+      const now = this._healthNow();
+      const held = this._holdFindings(findings, now);
+      this._health = held;
       const name = this.spark.name || this.spark.id;
       for (const e of ev.pendingEvents) this._emit(e);
-      const ids = new Set(findings.map((f) => f.id));
+      const ids = new Set(held.map((f) => f.id));
       const prev = this._prevHealthIds;
       this._prevHealthIds = ids;
       if (prev == null) return;
-      for (const f of findings) {
+      for (const f of held) {
         if (prev.has(f.id) || f.id === "xid" || f.id === "oom") continue;
         this._emit({
           type: `health.${f.id}`,
@@ -779,6 +844,62 @@ export class SparkMonitor {
     } catch (err) {
       console.error(`[SparkMonitor] ${this.spark.id} health error:`, err?.message);
     }
+  }
+
+  /** Wall clock for the health hold; a method so tests can drive it. */
+  _healthNow() {
+    return Date.now();
+  }
+
+  /**
+   * Findings the rules raised now, plus those raised within the last HEALTH_CLEAR_HOLD_MS
+   * that no longer hold (shown with their last detail until the hold runs out).
+   */
+  _holdFindings(findings, now) {
+    this._healthSeen ??= new Map();
+    for (const f of findings) this._healthSeen.set(f.id, { finding: f, at: now });
+    const out = [...findings];
+    const present = new Set(findings.map((f) => f.id));
+    for (const [id, rec] of this._healthSeen) {
+      if (present.has(id)) continue;
+      // The kernel-error findings keep their own one-hour memory in the evaluator.
+      if (now - rec.at < HEALTH_CLEAR_HOLD_MS && id !== "xid" && id !== "oom") out.push(rec.finding);
+      else this._healthSeen.delete(id);
+    }
+    return out;
+  }
+
+  /**
+   * Did this poll return real data? Collectors catch their own errors and answer with
+   * zeroed defaults, so "the poll finished" says nothing about the data (a stuck
+   * nvidia-smi, an SSH session that logs in but cannot run the command).
+   */
+  _domainSucceeded(domain, result) {
+    switch (domain) {
+      case "gpu":
+      case "cpu":
+        return collectionWasSuccessful(result);
+      case "ram":
+      case "memory":
+        return Number(result?.total) > 0;
+      case "network":
+        return Array.isArray(result?.interfaces) && result.interfaces.length > 0;
+      case "storage":
+        return Array.isArray(result) && result.length > 0;
+      case "llm":
+        return Array.isArray(result); // an engine that is down is still a successful probe
+      default:
+        return false;
+    }
+  }
+
+  /** domain → epoch ms of the last poll that returned real data (for the Prometheus export). */
+  lastSuccess() {
+    const out = { ...this._lastSuccess };
+    // A domain that is no longer polled must not age forever and trip a "stuck" alert.
+    if (this.spark.storagePollDisabled) delete out.storage;
+    if (!this._llmMonitoringEnabled()) delete out.llm;
+    return out;
   }
 
   _noteThrottle(gpu) {
@@ -870,11 +991,14 @@ export class SparkMonitor {
   _invalidateSshMetrics() {
     if (this.spark.isLocal) return;
     const c = this.collector;
+    // Their data is gone; the series must restart from the first fresh poll after recovery.
+    for (const key of ["gpu", "cpu", "ram", "memory", "network", "storage", "roce"]) delete this._lastSuccess[key];
     this._metrics.gpu = c._defaultGpu();
     this._metrics.cpu = c._defaultCpu();
     this._metrics.ram = c._defaultRam();
     this._metrics.storage = [];
     this._metrics.network = c._defaultNetwork();
+    this._metrics.roce = null;
     this._metrics.unifiedMemory = c._defaultUnifiedMemory();
     this._metricCollectionSuccessful = { gpu: false, cpu: false };
   }
@@ -939,6 +1063,7 @@ export class SparkMonitor {
     this._inflight[domain] = pollToken;
     try {
       let result;
+      let roce;
       switch (domain) {
         case "gpu":
           result = await this.collector.collectGpu();
@@ -951,6 +1076,13 @@ export class SparkMonitor {
           break;
         case "network":
           result = await this.collector.collectNetwork();
+          // RoCE rides the network tick: it throttles itself, never fails the poll and never
+          // holds the network result for more than a moment (a wedged NIC can stall ethtool).
+          // `undefined` = could not read this time: keep the previous value.
+          roce = await Promise.race([
+            this.collector.collectRoce().catch(() => undefined),
+            new Promise((resolve) => setTimeout(() => resolve(undefined), 3000).unref?.()),
+          ]);
           break;
         case "storage":
           result = await this.collector.collectStorage();
@@ -996,6 +1128,7 @@ export class SparkMonitor {
           break;
         case "network":
           this._metrics.network = result;
+          if (roce !== undefined) this._metrics.roce = roce;
           this._updateHealth();
           if (result?.wolMac && this._onWolMac) {
             try {
@@ -1034,6 +1167,10 @@ export class SparkMonitor {
           break;
       }
       this._lastUpdate[domain] = Date.now();
+      if (this._domainSucceeded(domain, result)) this._lastSuccess[domain] = this._lastUpdate[domain];
+      // RoCE keeps its last good sample through a few failed reads: stamp it with when it was
+      // actually read, so a stalled RoCE read ages instead of looking fresh.
+      if (domain === "network" && roce?.sampledAt) this._lastSuccess.roce = roce.sampledAt;
     } catch (err) {
       if (
         this._running &&
@@ -1120,6 +1257,7 @@ export class SparkMonitor {
       if (!this._running || this._runGeneration !== runGeneration) return;
       this._metrics.storage = result;
       this._lastUpdate[domain] = Date.now();
+      if (this._domainSucceeded(domain, result)) this._lastSuccess[domain] = this._lastUpdate[domain];
     } catch (err) {
       console.error(`[SparkMonitor] ${this.spark.id} ${domain} refresh error:`, err.message);
     } finally {
@@ -1278,7 +1416,12 @@ export class SparkMonitor {
   _staticHardwareSummary(spark) {
     if (spark?.kind === "host") {
       return {
-        device: spark?.gpuMonitoring === false ? "Linux server" : "Linux GPU host",
+        device:
+          spark?.platform === "windows"
+            ? "Windows GPU host"
+            : spark?.gpuMonitoring === false
+              ? "Linux server"
+              : "Linux GPU host",
         cpuModel: null,
         cpuCores: null,
         totalMemoryGB: null,
