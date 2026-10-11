@@ -50,6 +50,8 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
     : [...rawList].sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9));
   const scheduler: SchedulerStatus | null = models?.scheduler ?? null;
   const activeJob = models?.activeJob ?? null;
+  const runningModels = list.filter((m) => m.status.running);
+  const runningName = runningModels[0]?.name;
 
   /**
    * Move one card a single slot up (-1) or down (1) and persist the new order
@@ -163,9 +165,19 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
       icon={
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
-            activeJob ? "animate-pulse bg-warning" : "bg-accent dot-glow-success"
+            activeJob
+              ? "animate-pulse bg-warning"
+              : runningModels.length > 0
+                ? "bg-success dot-glow-success"
+                : "bg-muted"
           }`}
-          title={activeJob ? `${activeJob.action} job running` : "Idle"}
+          title={
+            activeJob
+              ? `${activeJob.action} job running`
+              : runningName
+                ? `${runningName} is running`
+                : "Idle"
+          }
         />
       }
       accent
@@ -176,6 +188,10 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         summary: activeJob ? (
           <>
             <span className="text-warning">{activeJob.action}</span> {activeJob.model}
+          </>
+        ) : runningName ? (
+          <>
+            <span className="text-success">●</span> {runningName}
           </>
         ) : (
           <>

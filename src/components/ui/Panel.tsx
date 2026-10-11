@@ -89,7 +89,7 @@ export function Panel({
       style={{ padding: "var(--density-panel-pad)", ...style }}
     >
       <header
-        className="panel-head flex flex-wrap items-center justify-between gap-x-3 gap-y-2"
+        className={`panel-head flex flex-wrap items-center justify-between gap-x-3 gap-y-2 ${collapsible && isPhone ? "panel-head--stack" : ""}`}
         style={{ marginBottom: "var(--density-panel-title-mb)" }}
       >
         {collapsible && isPhone ? (
@@ -98,15 +98,17 @@ export function Panel({
             onClick={toggleCollapsed}
             aria-expanded={!isCollapsed}
             title={hint}
-            className="panel-title flex min-w-0 cursor-pointer items-center gap-2 text-left"
+            className="min-w-0 cursor-pointer text-left"
           >
-            {icon}
-            <span className="truncate">{title}</span>
-            <ChevronDownIcon
-              className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
-            />
+            <span className="panel-title flex items-center gap-2">
+              {icon}
+              {title}
+              <ChevronDownIcon
+                className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
+              />
+            </span>
             {isCollapsed && collapsible.summary != null ? (
-              <span className="min-w-0 truncate font-tabular text-[11px] font-normal text-muted">
+              <span className="mt-0.5 block truncate font-tabular text-[11px] font-normal text-muted">
                 {collapsible.summary}
               </span>
             ) : null}

@@ -404,6 +404,28 @@ body {
   .panel-collapsed .panel-head {
     margin-bottom: 0;
   }
+  /* Status summary under the title: the heading row keeps the right-hand
+     buttons on one line with it instead of wrapping the summary between. */
+  .panel-head--stack .panel-title {
+    font-size: 12px;
+  }
+  /* The summary lives on its own line under the title; the header must NOT
+     wrap (flex-wrap would push the actions box to a third line before the
+     button ever gets a chance to shrink). */
+  .panel-head--stack {
+    flex-wrap: nowrap;
+  }
+  .panel-head--stack button {
+    min-width: 0;
+  }
+  .panel-head--stack button > .panel-title {
+    min-width: 0;
+  }
+  .panel-head--stack .panel-actions {
+    flex: 0 1 auto;
+    align-self: flex-start;
+    margin-left: 0;
+  }
 }
 .tabbar {
   position: fixed;
