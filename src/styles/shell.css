@@ -382,6 +382,18 @@ body {
 }
 
 /* ─── Mobile tab bar ──────────────────────────────────── */
+/* Collapsible panels (Orchestrator / Auditor / Model Launcher) on phones:
+   a collapsed panel must not keep its desktop min-height nor stretch to
+   its grid-row partner's height. */
+@media (max-width: 900px) {
+  .panel-collapsed {
+    min-height: 0 !important;
+    align-self: start;
+  }
+  .panel-collapsed .panel-head {
+    margin-bottom: 0;
+  }
+}
 .tabbar {
   position: fixed;
   left: 0;

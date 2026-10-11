@@ -412,6 +412,7 @@ export function OrchestratorPanel({
   const slotPct = slotsTotal > 0 ? Math.round((slotsUsed / slotsTotal) * 100) : 0;
 
   return (
+    <>
     <Panel
       title="Orchestrator"
       icon={
@@ -425,6 +426,16 @@ export function OrchestratorPanel({
       accent
       className="flex flex-col"
       bodyClassName="flex flex-1 flex-col space-y-3"
+      collapsible={{
+        key: "orchestrator",
+        summary: online ? (
+          <>
+            {runningTasks.length} running · {activePlans.length} plans · {activeTickets.length} tickets
+          </>
+        ) : (
+          "unreachable"
+        ),
+      }}
       actions={
         <div className="flex items-center gap-1.5">
           <button
@@ -582,6 +593,7 @@ export function OrchestratorPanel({
           <span className="text-sm font-normal text-muted"> slots</span>
         </span>
       </div>
+    </Panel>
       <SlotSettingsDialog
         open={slotsOpen}
         onClose={() => setSlotsOpen(false)}
@@ -591,6 +603,6 @@ export function OrchestratorPanel({
           void fetchOrchestratorStatus().then((s) => setStatus(s)).catch(() => {});
         }}
       />
-    </Panel>
+    </>
   );
 }

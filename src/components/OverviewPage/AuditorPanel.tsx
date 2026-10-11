@@ -239,6 +239,7 @@ export function AuditorPanel() {
   };
 
   return (
+    <>
     <Panel
       title="Auditor"
       icon={
@@ -252,6 +253,16 @@ export function AuditorPanel() {
       accent
       className="flex min-h-[600px] flex-col"
       bodyClassName="flex flex-1 flex-col space-y-3"
+      collapsible={{
+        key: "auditor",
+        summary: online ? (
+          <>
+            {analyzingCount || (status?.analyzing ?? 0)} analyzing · {readyCount} ready
+          </>
+        ) : (
+          "unreachable"
+        ),
+      }}
       actions={
         <div className="flex items-center gap-1.5">
           <button
@@ -369,6 +380,7 @@ export function AuditorPanel() {
           <span className="text-sm font-normal text-muted"> slots</span>
         </span>
       </div>
+    </Panel>
       <AuditorSlotsDialog
         open={slotsOpen}
         onClose={() => setSlotsOpen(false)}
@@ -380,6 +392,6 @@ export function AuditorPanel() {
             .catch(() => {});
         }}
       />
-    </Panel>
+    </>
   );
 }

@@ -171,6 +171,18 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
       accent
       className="flex flex-col"
       bodyClassName="flex flex-1 flex-col space-y-3"
+      collapsible={{
+        key: "models",
+        summary: activeJob ? (
+          <>
+            <span className="text-warning">{activeJob.action}</span> {activeJob.model}
+          </>
+        ) : (
+          <>
+            {list.length} models · auto {scheduler?.enabled ? "on" : "off"}
+          </>
+        ),
+      }}
       actions={
         <div className="flex flex-wrap items-center justify-end gap-1.5">
           {activeJob && (
