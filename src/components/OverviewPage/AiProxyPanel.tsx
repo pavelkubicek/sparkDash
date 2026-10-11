@@ -421,17 +421,19 @@ export function AiProxyPanel({
               <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted" title="Total tokens today">tok</span>
             </div>
             <div className="border-l border-border text-center">
-              <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-bar">
-                {totals ? formatTokens(totals.cached_tokens ?? 0) : "—"}
-              </span>
               <span
-                className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted"
+                className="max-phone:block font-tabular text-[28px] font-bold leading-none text-info"
                 title={
                   totals && totals.input_tokens > 0
-                    ? `Cached tokens today — ${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}% of input served from the prompt cache`
+                    ? `Cached tokens today — ${formatTokens(totals.cached_tokens ?? 0)} of ${formatTokens(totals.input_tokens)} input tokens served from the prompt cache (${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}%)`
                     : "Cached tokens today — input tokens served from the prompt cache"
                 }
-              >cache</span>
+              >
+                {totals && totals.input_tokens > 0
+                  ? `${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}%`
+                  : "—"}
+              </span>
+              <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted">cache</span>
             </div>
           </div>
         </div>
