@@ -331,22 +331,28 @@ export function AiProxyPanel({
             <p className="text-xs text-warning">AI proxy unreachable</p>
             <p className="break-all text-[11px] text-muted">{error}</p>
           </div>
-        ) : allRunning.length > 0 ? (
-          <div className="min-h-[10rem] space-y-1">
-            <p className="text-xs uppercase tracking-wide text-muted">
-              Running requests ({allRunning.length})
-            </p>
-            {allRunning.map((item) => (
-              <RequestRow
-                key={item.id}
-                item={item}
-                onKill={(id) => void handleKill(id, item.kind)}
-                killing={killingId === item.id}
-              />
-            ))}
-          </div>
         ) : (
-          <p className="text-xs text-muted">No active requests.</p>
+          /* Same floor in both states — the panel must not resize when a
+             request appears or finishes between 2 s polls. */
+          <div className="min-h-[10rem] space-y-1">
+            {allRunning.length > 0 ? (
+              <>
+                <p className="text-xs uppercase tracking-wide text-muted">
+                  Running requests ({allRunning.length})
+                </p>
+                {allRunning.map((item) => (
+                  <RequestRow
+                    key={item.id}
+                    item={item}
+                    onKill={(id) => void handleKill(id, item.kind)}
+                    killing={killingId === item.id}
+                  />
+                ))}
+              </>
+            ) : (
+              <p className="text-xs text-muted">No active requests.</p>
+            )}
+          </div>
         )}
 
         {/* Bottom-anchored stat footers — LLM throughput (tok/s + prefill +
@@ -355,75 +361,75 @@ export function AiProxyPanel({
         <div className="mt-auto space-y-3">
           {tps.generationTps !== null && (
             <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
+              {/* Number on one line, unit on the next — a unit that only wraps
+                  when tight flips the cell's line count as values change and
+                  makes the panel height jump between polls. */}
               <div className="text-center">
-                <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.generationTps.toFixed(0)}
-                </span>
-                <span className="text-sm font-normal text-muted"> tok/s</span>
+                </div>
+                <div className="mt-1 text-sm font-normal leading-none text-muted">tok/s</div>
               </div>
               <div className="border-l border-border text-center">
-                {tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? (
-                  <div
-                    className="big-num ov-tps__num ov-tps__num--live"
-                    title="A prompt is being processed. The engine reports its speed only when the request finishes."
-                  >
+                <div
+                  className="font-tabular text-[28px] font-bold leading-none text-text-strong"
+                  title={tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? "A prompt is being processed. The engine reports its speed only when the request finishes." : undefined}
+                >
+                  {tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? (
                     <span className="ov-tps__dots" aria-hidden />
-                    <small>prefilling</small>
-                  </div>
-                ) : (
-                  <>
-                    <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
-                      {tps.prefillTps !== null ? Math.round(tps.prefillTps).toLocaleString() : "—"}
-                    </span>
-                    <span className="text-sm font-normal text-muted"> prefill</span>
-                  </>
-                )}
+                  ) : (
+                    <>{tps.prefillTps !== null ? Math.round(tps.prefillTps).toLocaleString() : "—"}</>
+                  )}
+                </div>
+                <div className="mt-1 text-sm font-normal leading-none text-muted">
+                  {tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? "prefilling" : "prefill"}
+                </div>
               </div>
               <div
                 className="border-l border-border text-center"
                 title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
               >
-                <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.requestsRunning ?? (tps.requestsWaiting !== null ? tps.requestsWaiting : "—")}
-                </span>
-                <span className="text-sm font-normal text-muted">
+                </div>
+                <div className="mt-1 text-sm font-normal leading-none text-muted">
                   {tps.requestsRunning === null && tps.requestsWaiting !== null
-                    ? " wait"
+                    ? "wait"
                     : tps.requestsWaiting !== null
-                      ? ` run / ${tps.requestsWaiting} wait`
+                      ? `run / ${tps.requestsWaiting} wait`
                       : tps.requestsRunning !== null
-                        ? " run"
-                        : " requests"}
-                </span>
+                        ? "run"
+                        : "requests"}
+                </div>
               </div>
             </div>
           )}
           {/* Spark-style footer: today's requests + total + cached tokens */}
           <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
             <div className="text-center">
-              <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+              <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                 {totals ? totals.request_count.toLocaleString() : "—"}
-              </span>
-              <span className="text-sm font-normal text-muted" title="Requests today"> reqs</span>
+              </div>
+              <div className="mt-1 text-sm font-normal leading-none text-muted" title="Requests today">reqs</div>
             </div>
             <div className="border-l border-border text-center">
-              <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+              <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                 {totals ? formatTokens(totals.total_tokens) : "—"}
-              </span>
-              <span className="text-sm font-normal text-muted" title="Total tokens today"> tok</span>
+              </div>
+              <div className="mt-1 text-sm font-normal leading-none text-muted" title="Total tokens today">tok</div>
             </div>
             <div className="border-l border-border text-center">
-              <span className="font-tabular text-[28px] font-bold leading-none text-bar">
+              <div className="font-tabular text-[28px] font-bold leading-none text-bar">
                 {totals ? formatTokens(totals.cached_tokens ?? 0) : "—"}
-              </span>
-              <span
-                className="text-sm font-normal text-muted"
+              </div>
+              <div
+                className="mt-1 text-sm font-normal leading-none text-muted"
                 title={
                   totals && totals.input_tokens > 0
                     ? `Cached tokens today — ${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}% of input served from the prompt cache`
                     : "Cached tokens today — input tokens served from the prompt cache"
                 }
-              > cache</span>
+              >cache</div>
             </div>
           </div>
         </div>
