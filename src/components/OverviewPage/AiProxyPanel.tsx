@@ -425,13 +425,11 @@ export function AiProxyPanel({
                 className="max-phone:block font-tabular text-[28px] font-bold leading-none text-info"
                 title={
                   totals && totals.input_tokens > 0
-                    ? `Cached tokens today — ${formatTokens(totals.cached_tokens ?? 0)} of ${formatTokens(totals.input_tokens)} input tokens served from the prompt cache (${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}%)`
+                    ? `Cached tokens today — ${formatTokens(totals.cached_tokens ?? 0)} of ${formatTokens(totals.input_tokens)} input tokens served from the prompt cache (${cachePct(totals).toFixed(2)}%)`
                     : "Cached tokens today — input tokens served from the prompt cache"
                 }
               >
-                {totals && totals.input_tokens > 0
-                  ? `${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}%`
-                  : "—"}
+                {totals && totals.input_tokens > 0 ? `${cachePct(totals).toFixed(2)}%` : "—"}
               </span>
               <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted">cache</span>
             </div>
@@ -441,6 +439,12 @@ export function AiProxyPanel({
       <AiProxyDetailDialog open={detailOpen} onClose={() => setDetailOpen(false)} />
     </>
   );
+}
+
+/** Prompt-cache hit rate, clamped to 0–100. */
+function cachePct(totals: { cached_tokens?: number; input_tokens: number }): number {
+  if (!totals.input_tokens || totals.input_tokens <= 0) return 0;
+  return Math.min(100, Math.max(0, ((totals.cached_tokens ?? 0) / totals.input_tokens) * 100));
 }
 
 function todayStr(): string {
