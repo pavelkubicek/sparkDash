@@ -286,14 +286,6 @@ export function AiProxyPanel({
   const totals = stats?.totals ?? null;
   const tps = llmThroughput(llmMetrics);
   const online = !error;
-  // One source of truth for "how many are running": the proxy's own list (the
-  // same entries rendered above). The engine gauges count a different lifecycle
-  // (engine-side streams, all sparks) and lag or exceed the list — a request
-  // the proxy is still forwarding counts on the engine after the list dropped
-  // it, and an engine not reached through the proxy never appears in it. When
-  // the proxy answers, the tile and the list cannot disagree; when it does not
-  // (proxyBusy null), the engine gauges are the only estimate left.
-  const proxyBusy = online ? allRunning.length : null;
 
   return (
     <>
@@ -396,25 +388,19 @@ export function AiProxyPanel({
               </div>
               <div
                 className="border-l border-border text-center"
-                title={
-                  proxyBusy != null
-                    ? "Requests the AI Proxy is streaming or holding right now — the same list shown above. Engines not reached through the proxy are not counted."
-                    : "Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
-                }
+                title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
               >
                 <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-text-strong">
-                  {proxyBusy ?? tps.requestsRunning ?? (tps.requestsWaiting !== null ? tps.requestsWaiting : "—")}
+                  {tps.requestsRunning ?? (tps.requestsWaiting !== null ? tps.requestsWaiting : "—")}
                 </span>
                 <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted">
-                  {proxyBusy != null
-                    ? `run${(tps.requestsWaiting ?? 0) > 0 ? ` · ${tps.requestsWaiting} wait (engines)` : ""}`
-                    : tps.requestsRunning === null && tps.requestsWaiting !== null
-                      ? "wait"
-                      : tps.requestsWaiting !== null
-                        ? `run / ${tps.requestsWaiting} wait`
-                        : tps.requestsRunning !== null
-                          ? "run"
-                          : "requests"}
+                  {tps.requestsRunning === null && tps.requestsWaiting !== null
+                    ? "wait"
+                    : tps.requestsWaiting !== null
+                      ? `run / ${tps.requestsWaiting} wait`
+                      : tps.requestsRunning !== null
+                        ? "run"
+                        : "requests"}
                 </span>
               </div>
             </div>
