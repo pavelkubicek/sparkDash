@@ -68,9 +68,41 @@ function dotClass(spark: SparkSnapshot): string {
   return "sdot";
 }
 
+/**
+ * A drag ends on pointer-up over the very link that was lifted, and the browser then fires a click on
+ * it. dnd-kit stops that click at the document (capture phase), so React's onClick never sees it and
+ * the browser follows the link's href on its own. A window-level capture listener runs before dnd-kit's
+ * and cancels the default action for a moment after a drop.
+ */
+const DROP_CLICK_GUARD_MS = 400;
+let lastDropAt = 0;
+let removeDropGuard: (() => void) | null = null;
+export function markRailDrop(now: number = Date.now()) {
+  lastDropAt = now;
+  removeDropGuard?.();
+  if (typeof window === "undefined") return;
+  const onClick = (e: Event) => {
+    e.preventDefault();
+  };
+  window.addEventListener("click", onClick, true);
+  const timer = window.setTimeout(() => removeDropGuard?.(), DROP_CLICK_GUARD_MS);
+  removeDropGuard = () => {
+    window.removeEventListener("click", onClick, true);
+    window.clearTimeout(timer);
+    removeDropGuard = null;
+  };
+}
+export function clickFollowsRailDrop(now: number = Date.now()): boolean {
+  return now - lastDropAt < DROP_CLICK_GUARD_MS;
+}
+
 /** Plain left-click navigates in-app; modified clicks and the context menu keep normal link behaviour. */
 function inApp(go: () => void) {
   return (e: MouseEvent<HTMLAnchorElement>) => {
+    if (clickFollowsRailDrop()) {
+      e.preventDefault();
+      return;
+    }
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     go();
@@ -163,6 +195,7 @@ export function AppSidebar({
   const canReorder = Boolean(onReorder) && sparks.length > 1;
 
   const handleDragEnd = (event: DragEndEvent) => {
+    markRailDrop();
     setDragging(false);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -224,7 +257,10 @@ export function AppSidebar({
             collisionDetection={closestCenter}
             onDragStart={() => setDragging(true)}
             onDragEnd={handleDragEnd}
-            onDragCancel={() => setDragging(false)}
+            onDragCancel={() => {
+              markRailDrop();
+              setDragging(false);
+            }}
           >
             <SortableContext items={items} strategy={verticalListSortingStrategy}>
               <nav className="rail-list" aria-label="Sparks">

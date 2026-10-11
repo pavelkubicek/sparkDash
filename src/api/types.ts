@@ -379,6 +379,8 @@ export interface UnifiedMemoryMetrics {
 export interface LlmMetrics {
   available: boolean;
   backend: "vllm" | "llama.cpp" | "sglang" | "ds4" | "exl3" | "q27" | "tensorfold" | "freetoken" | null;
+  /** How the monitor reaches the engine: its own address, or an SSH forward when only SSH gets there. */
+  via?: "direct" | "ssh-tunnel";
   modelId: string | null;
   modelPath: string | null;
   /** Exact served request IDs from /v1/models, in response order. */
@@ -879,6 +881,8 @@ export interface DecodeBenchProgress {
   completedLevels: number;
   totalLevels: number;
   message: string;
+  /** Generation tok/s measured from the streams of the running wave; null before the first token. */
+  liveTps?: number | null;
 }
 
 export interface DecodeBenchJob {

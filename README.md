@@ -63,6 +63,12 @@ Monitored units run **Linux**, **macOS**, or **Windows** (a Windows PC with an N
 
 ## Latest version changelog
 
+### Version 2.32.0
+- **LLM panel**: an engine that only SSH can reach (a remote unit behind a NAT that forwards just SSH) is now monitored through an SSH forward, with a **via SSH** chip; TensorFold prefill tok/s counts only computed tokens, so prefix-cache hits no longer read as 100k+.
+- **Decode benchmark**: live generation tok/s is measured from the run's own streams, so it no longer shows 0.
+- **Health**: a finding is held for 90 s, so a reading sitting on a threshold does not flap and spam Activity.
+- **iPhone app**: the header clears the status bar and the home-screen icon is the logo. Dropping a Spark after dragging it in the sidebar no longer opens it.
+
 ### Version 2.31.0
 - **RoCE / RDMA panel** for Sparks: link state and rate, traffic, drops, PFC and QoS settings and the RDMA counters per port, with two health findings (a link went down, packets being dropped). See [RoCE / RDMA monitoring](#roce--rdma-monitoring).
 - **Time zone setting** for the Tokens, Energy and Activity charts, so the 24 h charts line up with your local time.
@@ -476,7 +482,15 @@ A Windows PC with an NVIDIA GPU can be monitored with no agent. On the PC:
 
 1. Install the **OpenSSH Server** (Settings → Apps → Optional features → *OpenSSH Server*), then start it and set it to start automatically: `Start-Service sshd; Set-Service sshd -StartupType Automatic` in an elevated PowerShell. Windows Firewall opens port 22 for it.
 2. Make sure the NVIDIA driver is installed (`nvidia-smi` works in a terminal).
-3. In sparkDash choose **Add Spark / GPU host**, set **Unit type** to *Windows PC with an NVIDIA GPU*, enter the PC's LAN IP and your Windows user (a password works; a key for an administrator account has to go in `C:\ProgramData\ssh\administrators_authorized_keys`).
+3. In sparkDash choose **Add Spark / GPU host**, set **Unit type** to *Windows PC with an NVIDIA GPU*, enter the PC's LAN IP and your Windows user (a password works; for key login see the administrator-account note below).
+
+**Keys work everywhere but this PC?** For a Windows user in the *Administrators* group, `sshd` ignores `~\.ssh\authorized_keys` and reads `C:\ProgramData\ssh\administrators_authorized_keys` instead, and refuses it unless only Administrators and SYSTEM can write to it. Put the public key in that file, then fix its permissions in an elevated PowerShell:
+
+```powershell
+icacls.exe "$env:ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+```
+
+A refused key on a Windows unit also shows this hint in the connection error.
 
 sparkDash then runs two short PowerShell scripts over SSH per poll (no files are installed): GPU temperature, utilisation, power, VRAM and GPU processes from `nvidia-smi`, and RAM, uptime, CPU load, disks (fixed drives) and network adapters from Windows' CIM classes. Shutdown works (`shutdown.exe /s`). Not available on Windows: CPU temperature (Windows exposes no unprivileged sensor; CPU power is estimated from load), automatic Wake-on-LAN MAC detection (enter the MAC by hand), Hermes and Tailnet checks, model launchers, and the kernel Xid/OOM events. LLM servers on the PC (llama.cpp, Ollama, LM Studio, vLLM) are probed over HTTP as for any unit; if the server only listens on `127.0.0.1`, benchmarks fall back to an SSH tunnel.
 
@@ -898,7 +912,7 @@ Each configured LLM port gets its own `LlmProbe` instance running in parallel. P
 
 Rates are derived from per-probe cumulative counter diffs (or SGLang sticky throughput while it moves). Multiple ports can be added or removed at runtime without restarting the monitor.
 
-Live probes still use the LAN IP on remote units. **Decode, prefill and quality benches** try that same HTTP target first; if it is closed they open an SSH local-forward onto the remote’s `127.0.0.1` so loopback-bound servers (ds4 `start.sh` default) can still be measured. The tunnel is torn down when the job finishes or is cancelled.
+Live probes use the LAN IP on remote units, and fall back to an SSH forward to the unit's loopback after two failed direct probes (the LLM panel then shows a **via SSH** chip). **Decode, prefill and quality benches** try that same HTTP target first; if it is closed they open an SSH local-forward onto the remote’s `127.0.0.1` so loopback-bound servers (ds4 `start.sh` default) can still be measured. The tunnel is torn down when the job finishes or is cancelled.
 
 ---
 

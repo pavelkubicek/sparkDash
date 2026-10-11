@@ -7,8 +7,15 @@
 import { LLM_PROBE_TIMEOUT_MS } from "../config.js";
 import { classifyHostScope } from "../validate.js";
 import { llmProbeHost } from "./llmHost.js";
+import { openSshLlmTunnel } from "./llmTunnel.js";
 
 const FAIL_RESET_THRESHOLD = 3;
+/** Direct failures in a row before the probe tries an SSH tunnel to the unit's loopback. */
+const TUNNEL_AFTER_FAILURES = 2;
+/** Failures in a row through the tunnel before it is dropped and the direct path retried. */
+const TUNNEL_DROP_AFTER_FAILURES = 5;
+const TUNNEL_RETRY_MIN_MS = 60_000;
+const TUNNEL_RETRY_MAX_MS = 15 * 60_000;
 const REDETECT_INTERVAL_MS = 60_000;
 /** Current SGLang names first. Deprecated aliases still work but log a warning per hit. */
 const SGLANG_SERVER_INFO_PATHS = ["/server_info", "/get_server_info"];
@@ -63,7 +70,16 @@ export class LlmProbe {
   constructor(spark, port = 8888) {
     this.spark = spark;
     this.port = port;
-    this.baseUrl = `http://${llmProbeHost(spark)}:${port}`;
+    /** The unit's own address; baseUrl switches to a local forward when only SSH reaches the engine. */
+    this._directBase = `http://${llmProbeHost(spark)}:${port}`;
+    this.baseUrl = this._directBase;
+    /** @type {{ port: number, close: () => void } | null} */
+    this._tunnel = null;
+    this._tunnelRetryAt = 0;
+    this._tunnelBackoffMs = TUNNEL_RETRY_MIN_MS;
+    this._tunnelOpening = false;
+    /** Replaceable in tests. */
+    this._openTunnel = openSshLlmTunnel;
 
     // State
     this.backendType = null; // 'vllm' | 'llama.cpp' | 'sglang' | 'ds4' | 'exl3' | 'q27' | 'tensorfold' | 'freetoken' | null
@@ -93,6 +109,7 @@ export class LlmProbe {
     this._tensorfoldSeeded = false;
     /** Previous TensorFold `prefill_seconds_total`. null until a sample includes it. */
     this._tensorfoldPrefillSeconds = null;
+    this._tensorfoldPrevCached = null;
     this._tensorfoldLastPrefill = null;
     this.prefillActive = false;
     /** Previous prefill counters by kind; null until first labeled sample. */
@@ -208,12 +225,16 @@ export class LlmProbe {
   /** Update probe port (and host from spark). Resets detection when the target changes. */
   setPort(port) {
     const next = Number(port);
-    const prevUrl = this.baseUrl;
+    const prevUrl = this._directBase;
     if (Number.isInteger(next) && next >= 1 && next <= 65535) {
       this.port = next;
     }
-    this.baseUrl = `http://${llmProbeHost(this.spark)}:${this.port}`;
-    if (this.baseUrl !== prevUrl) {
+    this._directBase = `http://${llmProbeHost(this.spark)}:${this.port}`;
+    if (this._directBase !== prevUrl) {
+      this._closeTunnel();
+      this._tunnelRetryAt = 0;
+      this._tunnelBackoffMs = TUNNEL_RETRY_MIN_MS;
+      this.baseUrl = this._directBase;
       this._resetDetection();
       this._lastDetectAt = 0;
       this._consecutiveFailures = 0;
@@ -222,6 +243,15 @@ export class LlmProbe {
 
   /** Probe the LLM server and return a snapshot. */
   async probe() {
+    const snap = await this._probeOnce();
+    // Only SSH may reach the engine (its port is not exposed): after repeated direct
+    // failures, forward a local port through the unit's SSH login and probe that.
+    if (!snap.available && (await this._maybeOpenTunnel())) return this._probeOnce();
+    this._maybeDropTunnel();
+    return snap;
+  }
+
+  async _probeOnce() {
     try {
       const shouldDetect =
         this.serverIsOpenAI === null ||
@@ -250,8 +280,76 @@ export class LlmProbe {
     }
   }
 
+  /** True when this unit can be reached over SSH but the engine's own address may not be. */
+  _canTunnel() {
+    const spark = this.spark;
+    return Boolean(
+      spark &&
+        !spark.isLocal &&
+        !spark.llmHost && // a pinned llmHost is a different machine: never tunnel to the SSH host's loopback
+        spark.platform !== "windows" &&
+        spark.ssh?.host &&
+        !this._tunnel &&
+        !this._tunnelOpening
+    );
+  }
+
+  async _maybeOpenTunnel() {
+    if (this._consecutiveFailures < TUNNEL_AFTER_FAILURES) return false;
+    if (!this._canTunnel() || Date.now() < this._tunnelRetryAt) return false;
+    this._tunnelOpening = true;
+    try {
+      const tunnel = await this._openTunnel(this.spark, this.port);
+      this._tunnel = tunnel;
+      this.baseUrl = `http://127.0.0.1:${tunnel.port}`;
+      this._resetDetection();
+      this._lastDetectAt = 0;
+      this._consecutiveFailures = 0;
+      return true;
+    } catch {
+      this._scheduleTunnelRetry();
+      return false;
+    } finally {
+      this._tunnelOpening = false;
+    }
+  }
+
+  /** Through the tunnel and still failing (engine down, or the tunnel died): fall back to direct. */
+  _maybeDropTunnel() {
+    if (this._tunnel && this._consecutiveFailures >= TUNNEL_DROP_AFTER_FAILURES) {
+      this._closeTunnel();
+      this._scheduleTunnelRetry();
+      this.baseUrl = this._directBase;
+      this._resetDetection();
+      this._lastDetectAt = 0;
+      this._consecutiveFailures = 0;
+    }
+  }
+
+  _scheduleTunnelRetry() {
+    this._tunnelRetryAt = Date.now() + this._tunnelBackoffMs;
+    this._tunnelBackoffMs = Math.min(this._tunnelBackoffMs * 2, TUNNEL_RETRY_MAX_MS);
+  }
+
+  _closeTunnel() {
+    const tunnel = this._tunnel;
+    this._tunnel = null;
+    try {
+      tunnel?.close();
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /** Release the SSH forward (monitor stopped, port removed). */
+  dispose() {
+    this._closeTunnel();
+    this.baseUrl = this._directBase;
+  }
+
   _noteSuccess() {
     this._consecutiveFailures = 0;
+    if (this._tunnel) this._tunnelBackoffMs = TUNNEL_RETRY_MIN_MS;
     this.error = null;
   }
 
@@ -297,6 +395,7 @@ export class LlmProbe {
     this.lastTokenCounts = { input: 0, output: 0 };
     this._tensorfoldSeeded = false;
     this._tensorfoldPrefillSeconds = null;
+    this._tensorfoldPrevCached = null;
     this._tensorfoldLastPrefill = null;
     this.prefillActive = false;
     this.lastPrefillKinds = null;
@@ -1121,11 +1220,13 @@ export class LlmProbe {
     }
     const prevIn = this.lastTokenCounts.input;
     const prevPrefillSec = this._tensorfoldPrefillSeconds;
+    const prevCached = this._tensorfoldPrevCached ?? null;
     this._applyExl3Health(health, dtSec);
     // TensorFold 0.5.0 (cuda/health.py) publishes cumulative cached prompt tokens
     // alongside the EXL3-style counters; older builds omit it (stays null).
-    const cached = Number(health.cached_tokens_total);
+    const cached = health.cached_tokens_total == null ? NaN : Number(health.cached_tokens_total);
     if (Number.isFinite(cached) && cached >= 0) this.totalCachedTokens = cached;
+    this._tensorfoldPrevCached = Number.isFinite(cached) && cached >= 0 ? cached : null;
     const batch = Number(health.max_batch_size);
     if (Number.isFinite(batch) && batch > 0) this.slotsTotal = Math.round(batch);
     // TensorFold 0.6.0 CUDA serves several streams at once: `streams.max` is the
@@ -1197,8 +1298,18 @@ export class LlmProbe {
     const freshPoll = dtSec > 0 && dtSec < 10;
     const dSec = freshPoll ? prefillSec - prevPrefillSec : 0;
     const dIn = freshPoll ? prompt - prevIn : 0;
-    if (freshPoll && dSec > 0 && dIn > 0) {
-      this._tensorfoldLastPrefill = { tps: Math.max(0, Math.round((dIn / dSec) * 100) / 100), at: Date.now() };
+    // `prompt_tokens_total` counts every prompt token, including those served from the prefix
+    // cache (an agent re-sending a growing 50k-token conversation is ~95% cache hits), while
+    // `prefill_seconds_total` is only the time spent computing. Dividing one by the other gave
+    // 100k+ tok/s. Use computed (uncached) tokens when the build reports the cached total.
+    const dCached =
+      freshPoll && Number.isFinite(cached) && prevCached != null ? Math.max(0, cached - prevCached) : null;
+    const dComputed = dCached == null ? dIn : Math.max(0, dIn - dCached);
+    if (freshPoll && dSec > 0 && dComputed > 0) {
+      // A request just finished: its average prefill rate. TensorFold publishes token and time
+      // totals only for finished requests, so nothing is measurable while a long prefill runs;
+      // keep the last finished rate on screen for a while instead of flashing to 0.
+      this._tensorfoldLastPrefill = { tps: Math.max(0, Math.round((dComputed / dSec) * 100) / 100), at: Date.now() };
       if (!hasLivePrefill) this.prefillTps = this._tensorfoldLastPrefill.tps;
     }
     this._tensorfoldPrefillSeconds = prefillSec;
@@ -2267,6 +2378,7 @@ export class LlmProbe {
     const metricsLive = this.serverIsOpenAI !== null && this.authOpen !== false;
     return {
       available: metricsLive,
+      via: this._tunnel ? "ssh-tunnel" : "direct",
       backend: this.backendType,
       modelId: this.models.length > 1 ? this.models[0] : this.modelId || null,
       modelPath: this.modelPath || null,
