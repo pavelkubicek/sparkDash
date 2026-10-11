@@ -169,7 +169,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         />
       }
       accent
-      className="flex flex-col"
+      className="ov-models flex flex-col"
       bodyClassName="flex flex-1 flex-col space-y-3"
       collapsible={{
         key: "models",

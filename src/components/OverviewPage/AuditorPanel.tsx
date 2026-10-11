@@ -251,7 +251,7 @@ export function AuditorPanel() {
         />
       }
       accent
-      className="flex min-h-[600px] flex-col"
+      className="ov-auditor flex min-h-[600px] flex-col"
       bodyClassName="flex flex-1 flex-col space-y-3"
       collapsible={{
         key: "auditor",

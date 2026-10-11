@@ -382,6 +382,17 @@ body {
 }
 
 /* ─── Mobile tab bar ──────────────────────────────────── */
+/* Phone: Model Launcher reads after the Auditor (both are collapsed-by-default
+   rows); the desktop 2-col grid keeps its AiProxy+Orchestrator /
+   Models+Auditor pairing because ordering is scoped to this breakpoint. */
+@media (max-width: 900px) {
+  .ov-auditor {
+    order: 2;
+  }
+  .ov-models {
+    order: 3;
+  }
+}
 /* Collapsible panels (Orchestrator / Auditor / Model Launcher) on phones:
    a collapsed panel must not keep its desktop min-height nor stretch to
    its grid-row partner's height. */

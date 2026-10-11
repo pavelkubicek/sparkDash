@@ -355,13 +355,13 @@ export function AiProxyPanel({
         <div className="mt-auto space-y-3">
           {tps.generationTps !== null && (
             <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
-              <div className="text-center whitespace-nowrap">
+              <div className="text-center">
                 <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.generationTps.toFixed(0)}
                 </span>
                 <span className="text-sm font-normal text-muted"> tok/s</span>
               </div>
-              <div className="border-l border-border text-center whitespace-nowrap">
+              <div className="border-l border-border text-center">
                 {tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? (
                   <div
                     className="big-num ov-tps__num ov-tps__num--live"
@@ -380,7 +380,7 @@ export function AiProxyPanel({
                 )}
               </div>
               <div
-                className="border-l border-border text-center whitespace-nowrap"
+                className="border-l border-border text-center"
                 title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
               >
                 <span className="font-tabular text-[28px] font-bold leading-none text-text-strong">
