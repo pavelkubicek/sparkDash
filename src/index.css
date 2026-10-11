@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Phone breakpoint — mirrors shell.css's @media (max-width: 900px) mobile
+   layout. Used as max-phone:stack-units etc. */
+@custom-variant max-phone (@media (max-width: 900px));
+
 /* ─── Design tokens ─────────────────────────────────────── */
 /* Four themes share one token set. Dark is the default (set on <html>).
    Amber stays the brand accent. Semantic colors (success / warning / danger)

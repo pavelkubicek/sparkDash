@@ -752,14 +752,25 @@
   color: var(--color-text);
 }
 
-/* "prefilling" placeholder: three dots rippling where the number would be */
+/* "prefilling" placeholder: three dots rippling where the number would be.
+   'circle' alone = farthest-corner size, which in a tile 1/3 of the strip wide
+   renders a blob ~the tile width: the dots touch and the third one half-fades
+   into the clip edge. closest-side caps the gradient at the tile edge, so each
+   tile is one crisp round dot (with a 1px anti-aliasing margin). */
 .ov-tps__dots {
   display: inline-block;
   width: 1.5em;
   height: 0.35em;
   margin-right: 0.35rem;
   vertical-align: middle;
-  background: radial-gradient(circle, var(--color-info) 0 45%, transparent 50%) 0 50% / 33.3% 100% repeat-x;
+  background:
+    radial-gradient(
+      circle closest-side,
+      var(--color-info) 0 65%,
+      color-mix(in srgb, var(--color-info) 35%, transparent) 85%,
+      transparent 100%
+    )
+    0 50% / 33.3% 100% repeat-x;
   animation: ov-dots 1.2s steps(3, end) infinite;
 }
 @keyframes ov-dots {

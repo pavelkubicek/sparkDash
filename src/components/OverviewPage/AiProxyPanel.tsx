@@ -361,18 +361,19 @@ export function AiProxyPanel({
         <div className="mt-auto space-y-3">
           {tps.generationTps !== null && (
             <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
-              {/* Number on one line, unit on the next — a unit that only wraps
-                  when tight flips the cell's line count as values change and
-                  makes the panel height jump between polls. */}
+              {/* Phone: number on one line, unit on the next — a unit that only
+                  wraps when tight flips the cell's line count as values change
+                  and makes the panel height jump between polls. Desktop keeps
+                  the classic inline number+unit. */}
               <div className="text-center">
-                <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.generationTps.toFixed(0)}
-                </div>
-                <div className="mt-1 text-sm font-normal leading-none text-muted">tok/s</div>
+                </span>
+                <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted">tok/s</span>
               </div>
               <div className="border-l border-border text-center">
-                <div
-                  className="font-tabular text-[28px] font-bold leading-none text-text-strong"
+                <span
+                  className="max-phone:block font-tabular text-[28px] font-bold leading-none text-text-strong"
                   title={tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? "A prompt is being processed. The engine reports its speed only when the request finishes." : undefined}
                 >
                   {tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? (
@@ -380,19 +381,19 @@ export function AiProxyPanel({
                   ) : (
                     <>{tps.prefillTps !== null ? Math.round(tps.prefillTps).toLocaleString() : "—"}</>
                   )}
-                </div>
-                <div className="mt-1 text-sm font-normal leading-none text-muted">
+                </span>
+                <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted">
                   {tps.prefillActive && (tps.prefillTps ?? 0) <= 0 ? "prefilling" : "prefill"}
-                </div>
+                </span>
               </div>
               <div
                 className="border-l border-border text-center"
                 title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
               >
-                <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+                <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-text-strong">
                   {tps.requestsRunning ?? (tps.requestsWaiting !== null ? tps.requestsWaiting : "—")}
-                </div>
-                <div className="mt-1 text-sm font-normal leading-none text-muted">
+                </span>
+                <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted">
                   {tps.requestsRunning === null && tps.requestsWaiting !== null
                     ? "wait"
                     : tps.requestsWaiting !== null
@@ -400,36 +401,37 @@ export function AiProxyPanel({
                       : tps.requestsRunning !== null
                         ? "run"
                         : "requests"}
-                </div>
+                </span>
               </div>
             </div>
           )}
-          {/* Spark-style footer: today's requests + total + cached tokens */}
+          {/* Spark-style footer: today's requests + total + cached tokens.
+              Same phone-only stacking as the throughput row above. */}
           <div className="grid grid-cols-3 gap-2 border-t border-border pt-3">
             <div className="text-center">
-              <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+              <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-text-strong">
                 {totals ? totals.request_count.toLocaleString() : "—"}
-              </div>
-              <div className="mt-1 text-sm font-normal leading-none text-muted" title="Requests today">reqs</div>
+              </span>
+              <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted" title="Requests today">reqs</span>
             </div>
             <div className="border-l border-border text-center">
-              <div className="font-tabular text-[28px] font-bold leading-none text-text-strong">
+              <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-text-strong">
                 {totals ? formatTokens(totals.total_tokens) : "—"}
-              </div>
-              <div className="mt-1 text-sm font-normal leading-none text-muted" title="Total tokens today">tok</div>
+              </span>
+              <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted" title="Total tokens today">tok</span>
             </div>
             <div className="border-l border-border text-center">
-              <div className="font-tabular text-[28px] font-bold leading-none text-bar">
+              <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-bar">
                 {totals ? formatTokens(totals.cached_tokens ?? 0) : "—"}
-              </div>
-              <div
-                className="mt-1 text-sm font-normal leading-none text-muted"
+              </span>
+              <span
+                className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted"
                 title={
                   totals && totals.input_tokens > 0
                     ? `Cached tokens today — ${Math.min(100, Math.round(((totals.cached_tokens ?? 0) / totals.input_tokens) * 100))}% of input served from the prompt cache`
                     : "Cached tokens today — input tokens served from the prompt cache"
                 }
-              >cache</div>
+              >cache</span>
             </div>
           </div>
         </div>
