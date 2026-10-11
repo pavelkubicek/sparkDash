@@ -401,26 +401,32 @@ body {
     min-height: 0 !important;
     align-self: start;
   }
-  /* Status summary under the title: the heading row keeps the right-hand
-     buttons on one line with it instead of wrapping the summary between. */
-  .panel-head--stack .panel-title {
-    font-size: 12px;
-  }
-  /* The summary lives on its own line under the title; the header must NOT
-     wrap (flex-wrap would push the actions box to a third line before the
-     button ever gets a chance to shrink). */
+  /* Collapsible headers on phones: title + action buttons on line 1, the
+     status summary on line 2 spanning the FULL panel width — the summary
+     must not wrap just because the buttons squeeze the title's column.
+     The toggle stays ONE button (display: contents) so its children lay
+     out as grid items and both lines are clickable. */
   .panel-head--stack {
-    flex-wrap: nowrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
   .panel-head--stack button {
-    min-width: 0;
+    display: contents;
   }
   .panel-head--stack button > .panel-title {
+    grid-column: 1;
+    grid-row: 1;
     min-width: 0;
   }
+  .panel-head--stack .panel-summary {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: nowrap;
+  }
   .panel-head--stack .panel-actions {
-    flex: 0 1 auto;
-    align-self: flex-start;
+    grid-column: 2;
+    grid-row: 1;
     margin-left: 0;
   }
 }

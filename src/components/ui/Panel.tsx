@@ -108,7 +108,7 @@ export function Panel({
               />
             </span>
             {isCollapsed && collapsible.summary != null ? (
-              <span className="mt-0.5 block font-tabular text-[11px] font-normal text-muted">
+              <span className="panel-summary mt-0.5 font-tabular text-[11px] font-normal text-muted">
                 {collapsible.summary}
               </span>
             ) : null}
