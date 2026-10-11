@@ -401,9 +401,6 @@ body {
     min-height: 0 !important;
     align-self: start;
   }
-  .panel-collapsed .panel-head {
-    margin-bottom: 0;
-  }
   /* Status summary under the title: the heading row keeps the right-hand
      buttons on one line with it instead of wrapping the summary between. */
   .panel-head--stack .panel-title {

@@ -90,7 +90,7 @@ export function Panel({
     >
       <header
         className={`panel-head flex flex-wrap items-center justify-between gap-x-3 gap-y-2 ${collapsible && isPhone ? "panel-head--stack" : ""}`}
-        style={{ marginBottom: "var(--density-panel-title-mb)" }}
+        style={{ marginBottom: isCollapsed ? 0 : "var(--density-panel-title-mb)" }}
       >
         {collapsible && isPhone ? (
           <button
@@ -108,7 +108,7 @@ export function Panel({
               />
             </span>
             {isCollapsed && collapsible.summary != null ? (
-              <span className="mt-0.5 block truncate font-tabular text-[11px] font-normal text-muted">
+              <span className="mt-0.5 block font-tabular text-[11px] font-normal text-muted">
                 {collapsible.summary}
               </span>
             ) : null}
