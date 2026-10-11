@@ -80,6 +80,13 @@ function Stepper({ step }: { step: AddStep }) {
   );
 }
 
+/** One-click ports for common servers. They only fill a port number; nothing is installed. */
+const SERVER_PRESETS = [
+  { name: "LM Studio", port: 1234 },
+  { name: "Ollama", port: 11434 },
+  { name: "TensorFold", port: 8888 },
+] as const;
+
 export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }: AddSparkDialogProps) {
   const [config, setConfig] = useState(defaultConfig);
   const [step, setStep] = useState<AddStep>(0);
@@ -117,6 +124,15 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
 
   const update = (patch: Partial<Omit<SparkConfig, "id">>) => {
     setConfig((prev) => ({ ...prev, ...patch }));
+  };
+
+  /** Add a server's default port to the list (the untouched default port is replaced), keeping the text field in step. */
+  const addPresetPort = (port: number) => {
+    const current = parsePorts(portsText);
+    const untouched = current.length === 1 && current[0] === defaultLlmPort;
+    const next = untouched || current.length === 0 ? [port] : current.includes(port) ? current : [...current, port];
+    setPortsText(next.join(", "));
+    update({ llmPorts: next });
   };
 
   const updateSsh = (patch: Partial<SparkConfig["ssh"]>) => {
@@ -418,6 +434,20 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
                     placeholder={String(defaultLlmPort)}
                   />
                   <p className="field-hint">Default: {defaultLlmPort}</p>
+                  <div role="group" aria-label="Server presets" className="sp-btns">
+                    <span className="eyebrow">Presets:</span>
+                    {SERVER_PRESETS.map((preset) => (
+                      <button
+                        key={preset.port}
+                        type="button"
+                        className="btn btn--sm"
+                        title={`Add ${preset.name}'s default port (${preset.port})`}
+                        onClick={() => addPresetPort(preset.port)}
+                      >
+                        {preset.name} :{preset.port}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <p className="field-hint">Workers have no local LLM API, so no ports are probed.</p>

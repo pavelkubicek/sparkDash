@@ -7,7 +7,7 @@ import { ShutdownAll } from "../ShutdownAll";
 import { FleetEnergyCard } from "./FleetEnergyCard";
 import { FleetAlertStrip } from "./FleetAlertStrip";
 import { FleetTokenTotals } from "./FleetTokenTotals";
-import { FleetKpis } from "./FleetKpis";
+import { FleetKpis, type KpiVisibility } from "./FleetKpis";
 import { ACTIVITY_ID, ENERGY_ID, TOKENS_ID } from "../../constants";
 import { SparkCard } from "./SparkCard";
 import { ActivityFeed } from "./ActivityFeed";
@@ -31,6 +31,10 @@ interface OverviewPageProps {
   showOverviewSearch?: boolean;
   /** Overview LLM token totals card (cumulative tokens per model). */
   showLlmTokenTotals?: boolean;
+  /** Recent activity card. On by default. */
+  showActivityFeed?: boolean;
+  /** Which KPI tiles are shown; a missing key means shown. */
+  kpis?: KpiVisibility;
   /** VRAM bar split by engine / system / free, judged by headroom. On by default. */
   showVramBreakdown?: boolean;
   temperatureUnit?: "celsius" | "fahrenheit";
@@ -63,6 +67,8 @@ export function OverviewPage({
   showFleetExceptions = false,
   showOverviewSearch = false,
   showLlmTokenTotals = true,
+  showActivityFeed = true,
+  kpis,
   showVramBreakdown = true,
   temperatureUnit = "celsius",
   onSelectSpark,
@@ -244,7 +250,7 @@ export function OverviewPage({
 
   return (
     <div className="ov">
-      <FleetKpis sparks={visibleSparks} snapshotKey={sparks} />
+      <FleetKpis sparks={visibleSparks} snapshotKey={sparks} show={kpis} />
       {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
       <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 16 }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
@@ -371,13 +377,18 @@ export function OverviewPage({
             );
           })}
         </div>
+
+        {showFleetEnergy || showLlmTokenTotals || showActivityFeed ? (
         <div className="ov-side">
           {showFleetEnergy ? <FleetEnergyCard nodeCount={sparks.length} nodeNames={Object.fromEntries(sparks.map((s) => [s.id, s.name]))} onOpenDetails={onNavigate ? () => onNavigate(ENERGY_ID) : undefined} /> : null}
           {showLlmTokenTotals ? <FleetTokenTotals onOpenDetails={onNavigate ? () => onNavigate(TOKENS_ID) : undefined} /> : null}
-          <section className="panel ov-card" aria-label="Recent activity">
-            <ActivityFeed limit={6} onSelectSpark={onSelectSpark} onViewAll={onNavigate ? () => onNavigate(ACTIVITY_ID) : undefined} />
-          </section>
+          {showActivityFeed ? (
+            <section className="panel ov-card" aria-label="Recent activity">
+              <ActivityFeed limit={6} onSelectSpark={onSelectSpark} onViewAll={onNavigate ? () => onNavigate(ACTIVITY_ID) : undefined} />
+            </section>
+          ) : null}
         </div>
+        ) : null}
       </div>
     </div>
   );

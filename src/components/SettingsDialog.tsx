@@ -384,6 +384,36 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
                 onChange={(v) => update({ showLlmTokenTotals: v })}
               />
               <ToggleRow
+                title="Show Recent activity"
+                help="Overview card with the latest health and kernel events. The full Activity page is always available from the sidebar."
+                checked={settings.showActivityFeed ?? true}
+                onChange={(v) => update({ showActivityFeed: v })}
+              />
+              <ToggleRow
+                title="Show Fleet decode tile"
+                help="Overview tile with the fleet's total generation tok/s."
+                checked={settings.showKpiDecode ?? true}
+                onChange={(v) => update({ showKpiDecode: v })}
+              />
+              <ToggleRow
+                title="Show Fleet power tile"
+                help="Overview tile with the fleet's total power draw."
+                checked={settings.showKpiPower ?? true}
+                onChange={(v) => update({ showKpiPower: v })}
+              />
+              <ToggleRow
+                title="Show Memory in use tile"
+                help="Overview tile with the fleet's total memory in use."
+                checked={settings.showKpiMemory ?? true}
+                onChange={(v) => update({ showKpiMemory: v })}
+              />
+              <ToggleRow
+                title="Show Tokens today tile"
+                help="Overview tile with the tokens generated today (or the online unit count, when no tokens are tracked yet)."
+                checked={settings.showKpiTokens ?? true}
+                onChange={(v) => update({ showKpiTokens: v })}
+              />
+              <ToggleRow
                 title="Show active fleet exceptions"
                 help="Overview strip for offline hosts, GPU throttle, disk, LLM, and Tailnet alerts. Off by default."
                 checked={Boolean(settings.showFleetExceptions)}

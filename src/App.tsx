@@ -570,6 +570,13 @@ function DashboardApp() {
                   showFleetExceptions={settings?.showFleetExceptions ?? false}
                   showOverviewSearch={settings?.showOverviewSearch ?? false}
                   showLlmTokenTotals={settings?.showLlmTokenTotals ?? true}
+                  showActivityFeed={settings?.showActivityFeed ?? true}
+                  kpis={{
+                    decode: settings?.showKpiDecode ?? true,
+                    power: settings?.showKpiPower ?? true,
+                    memory: settings?.showKpiMemory ?? true,
+                    tokens: settings?.showKpiTokens ?? true,
+                  }}
                   showVramBreakdown={settings?.showVramBreakdown ?? true}
                   temperatureUnit={settings?.temperatureUnit ?? "celsius"}
                   onSelectSpark={navigate}

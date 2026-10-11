@@ -29,6 +29,14 @@ Format: version sections are listed newest first.
 - **Mobile: Stats tab.** The bottom bar's Search tab became **Stats**, which opens Token totals, Fleet energy and Activity (search stays one tap away in the top bar). Those pages left the Sparks menu, and Showcase now sits under Benchmarks, right after Prefill.
 - **Mobile navigation feels like iOS.** The active-tab highlight is one pill that slides between tabs on a spring curve, tabs shrink slightly under your finger and the active icon pops, and the Sparks / Stats sheets slide up from the bottom with a fading backdrop and slide back down when closed. All of it is off with reduced motion.
 - Health findings also write Activity events when they appear and when they clear (`health.*`).
+---
+
+## [2.40.0] — 2026-10-11
+
+### Added
+- **LM Studio and Ollama are detected by their own endpoints** (`/api/v0/models`, `/api/tags`), so a server that answers 200 + JSON on every path (LM Studio) is no longer labelled SGLang or vLLM, and an identified backend is never downgraded. `/metrics` is no longer fetched from engines that never serve it. LLM panels are matched to their port instead of their position in the list, and the Add wizard, the "+ Add LLM port" panel and each LLM panel's settings have **LM Studio :1234 / Ollama :11434 / TensorFold :8888** presets that only fill in a port. From a contribution by @HassanEmam (#191).
+- **Windows units with an AMD iGPU (Strix Halo)** show GPU utilisation and memory from Windows' GPU performance counters when `nvidia-smi` is not installed (an NVIDIA PC whose `nvidia-smi` fails still reports the failure). Model launchers now say plainly that they are not supported on Windows. From #191.
+- **Every Overview panel can be hidden.** Settings now has switches for Recent activity and for each of the four tiles (Fleet decode, Fleet power, Memory in use, Tokens today), next to the existing Fleet energy and LLM token totals ones. The remaining tiles share the row, and a column with nothing left in it disappears. Hidden panels stay available from the sidebar pages. Suggested by a user.
 
 ### Fixed
 - **Mobile renders the adaptive layout; the 1200px desktop floor applies only in "Desktop site" mode.** The whole-page `min-width: 1200px` used to force every phone into the desktop layout with a sideways scrollbar. It is now a pure CSS media query — wide layout viewport + touch pointer + a phone-sized device — so it engages only for a phone in the browser's "Desktop site" mode and never depends on script timing (a script above the viewport meta sees the 980px fallback viewport on real phones and misfires). Tablets, touch-desktops and normal mobile viewports adapt, and the Overview integration-card grid no longer stretches to its widest panel's text on narrow screens (`grid-cols-1` base, so a long unbroken title cannot blow the column out).

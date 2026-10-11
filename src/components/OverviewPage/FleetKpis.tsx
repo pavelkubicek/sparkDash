@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { SparkSnapshot } from "../../api/types";
 import { fetchFleetEnergy } from "../../api/client";
+import { fetchLlmTokenTotals } from "../../api/llmTokenClient";
+import { formatTokensCompact } from "../../shared/tokenFormat";
+import { aggregateModelTotals } from "./FleetTokenTotals";
 import { TrendLine } from "../ui/TrendLine";
 import { computeFleetTotals, pushRolling } from "./fleetStats";
 
@@ -50,10 +53,19 @@ function Kpi({
   );
 }
 
-/** Three fleet-wide KPI tiles computed from live snapshots. */
+/** Which tiles to show; a missing key means shown. The fourth slot is Tokens today (Online units when no tokens are tracked). */
+export interface KpiVisibility {
+  decode?: boolean;
+  power?: boolean;
+  memory?: boolean;
+  tokens?: boolean;
+}
+
+/** Up to four fleet-wide KPI tiles computed from live snapshots. */
 export function FleetKpis({
   sparks,
   snapshotKey = sparks,
+  show,
 }: {
   sparks: SparkSnapshot[];
   /**
@@ -61,11 +73,17 @@ export function FleetKpis({
    * (a snapshot arrived), not when `sparks` is merely re-filtered by the search box.
    */
   snapshotKey?: unknown;
+  show?: KpiVisibility;
 }) {
+  const showDecode = show?.decode ?? true;
+  const showPower = show?.power ?? true;
+  const showMemory = show?.memory ?? true;
+  const showTokens = show?.tokens ?? true;
   const totals = useMemo(() => computeFleetTotals(sparks), [sparks]);
   const totalsRef = useRef(totals);
   totalsRef.current = totals;
   const [trends, setTrends] = useState<Trends>(persisted);
+  const [tokens, setTokens] = useState<{ completion: number; prompt: number } | null>(null);
   // 24 h average draw from the persisted energy minute buckets. Distinct from
   // the Fleet energy card, which headlines the 24 h kWh total and the current
   // 30 s window; this tile headlines the average and keeps "now" as a chip.
@@ -104,47 +122,88 @@ export function FleetKpis({
     };
   }, []);
 
+  useEffect(() => {
+    if (!showTokens) return;
+    let cancelled = false;
+    const load = () =>
+      fetchLlmTokenTotals("today")
+        .then((res) => {
+          if (cancelled) return;
+          const agg = aggregateModelTotals(res.series || []);
+          setTokens(agg.totalCompletion + agg.totalPrompt > 0 ? { completion: agg.totalCompletion, prompt: agg.totalPrompt } : null);
+        })
+        .catch(() => {
+          if (!cancelled) setTokens(null);
+        });
+    void load();
+    const t = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [showTokens]);
+
   const memGb = totals.memUsedMb / 1024;
   const memPct = totals.memTotalMb > 0 ? Math.round((totals.memUsedMb / totals.memTotalMb) * 100) : null;
+  const tokensCompact = tokens ? formatTokensCompact(tokens.completion).match(/^([\d.,]+)\s*(.*)$/) : null;
+
+  const count = [showDecode, showPower, showMemory, showTokens].filter(Boolean).length;
+  if (count === 0) return null;
 
   return (
-    <div className="ov-kpis">
-      <Kpi
-        label="Fleet decode"
-        value={totals.decodeTps.toFixed(1)}
-        unit="tok/s"
-                trend={trends.decode}
-        color="var(--color-accent)"
-      />
-      <Kpi
-        label="Fleet power"
-        value={totals.powerW.toFixed(0)}
-        unit="W"
-        right={
-          avgW24h != null ? (
-            <span className="ov-delta mono" title="Average draw over the last 24 hours (persisted energy minute buckets)">
-              24h {avgW24h} W
-            </span>
-          ) : undefined
-        }
-        trend={trends.power}
-        color="var(--color-violet)"
-      />
-      <Kpi
-        label="Memory in use"
-        value={memGb.toFixed(0)}
-        unit="GB"
-        right={memPct != null ? <span className="ov-delta mono">{memPct}%</span> : undefined}
-        trend={trends.mem}
-        color="var(--color-info)"
-      />
-      <Kpi
-        label="Online"
-        value={String(totals.online)}
-        unit={`/ ${totals.total} units`}
-        foot={totals.online === totals.total ? "all units reachable" : `${totals.total - totals.online} offline`}
-        color="var(--color-success)"
-      />
+    <div className="ov-kpis" data-count={count}>
+      {showDecode ? (
+        <Kpi
+          label="Fleet decode"
+          value={totals.decodeTps.toFixed(1)}
+          unit="tok/s"
+          trend={trends.decode}
+          color="var(--color-accent)"
+        />
+      ) : null}
+      {showPower ? (
+        <Kpi
+          label="Fleet power"
+          value={totals.powerW.toFixed(0)}
+          unit="W"
+          right={
+            avgW24h != null ? (
+              <span className="ov-delta mono" title="Average draw over the last 24 hours (persisted energy minute buckets)">
+                24h {avgW24h} W
+              </span>
+            ) : undefined
+          }
+          trend={trends.power}
+          color="var(--color-violet)"
+        />
+      ) : null}
+      {showMemory ? (
+        <Kpi
+          label="Memory in use"
+          value={memGb.toFixed(0)}
+          unit="GB"
+          right={memPct != null ? <span className="ov-delta mono">{memPct}%</span> : undefined}
+          trend={trends.mem}
+          color="var(--color-info)"
+        />
+      ) : null}
+      {!showTokens ? null : tokens && tokensCompact ? (
+        <Kpi
+          label="Tokens today"
+          value={tokensCompact[1]}
+          unit={tokensCompact[2] || "tok"}
+          foot={`generated · ${formatTokensCompact(tokens.prompt)} prefill`}
+          color="var(--color-success)"
+        />
+      ) : (
+        <Kpi
+          label="Online"
+          value={String(totals.online)}
+          unit={`/ ${totals.total} units`}
+          foot={totals.online === totals.total ? "all units reachable" : `${totals.total - totals.online} offline`}
+          color="var(--color-success)"
+        />
+      )}
     </div>
   );
 }
