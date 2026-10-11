@@ -131,7 +131,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
   if (list.length === 0) {
     return (
       <Panel
-        title="Model Launcher"
+        title="Models"
         icon={<BoltIcon className="h-3.5 w-3.5 shrink-0 text-muted" />}
         accent
         actions={addButton}
@@ -161,7 +161,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
 
   return (
     <Panel
-      title="Model Launcher"
+      title="Models"
       icon={
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${

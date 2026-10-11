@@ -396,7 +396,7 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
                 onChange={(v) => update({ benchDebugTraces: v })}
               />
               <ToggleRow
-                title="Show Model Launcher on Overview"
+                title="Show Models on Overview"
                 help="Start/Stop the model repos under the configured repos base. Only changes visibility — the model scheduler keeps running either way."
                 checked={settings.showModelLauncher !== false}
                 onChange={(v) => update({ showModelLauncher: v })}
