@@ -866,6 +866,10 @@
 }
 
 /* ─── Models panel (start / stop scripts + live output) ─── */
+/* Card unused on this deployment: hidden, the pair row re-flows to two columns. */
+.sp .panel:has(> div > .sp-models) {
+  display: none;
+}
 .sp .sp-models {
   display: flex;
   flex-direction: column;

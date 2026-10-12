@@ -12,8 +12,15 @@
   "showFleetExceptions": false,
   "showOverviewSearch": false,
   "showLlmTokenTotals": false,
+  "showKpiDecode": true,
+  "showKpiPower": true,
+  "showKpiMemory": true,
+  "showKpiTokens": true,
+  "showActivityFeed": true,
   "benchShareImage": true,
+  "timeZone": "",
   "energyPricePerKwh": null,
   "energyCurrency": "$",
-  "showVramBreakdown": true
+  "showVramBreakdown": true,
+  "prometheusExport": false
 }
