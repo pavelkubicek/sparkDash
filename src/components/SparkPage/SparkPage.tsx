@@ -259,7 +259,7 @@ export function SparkPage({
       {spark.online ? <HealthList findings={spark.health} /> : null}
 
       {(
-        /* Two independent columns (xl+): hardware on the left, services + I/O on the
+        /* Two independent columns (xl+): hardware + I/O on the left, services on the
            right. Below xl everything stacks in the Item order (GPU, memory, LLM first). */
         <div className="sp-cols">
           <div className="sp-col">
@@ -283,27 +283,15 @@ export function SparkPage({
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                 />
-                {/* Dedicated hosts have system RAM instead of a unified pool: CPU and RAM side by side. */}
-                {spark.kind === "host" && <RamPanel ram={metrics.ram} sparkId={spark.id} />}
-                {/* Models is the third column of the row (Windows PCs have no launchers). */}
-                {spark.platform !== "windows" && modelsPanel}
-              </div>
+            {/* Dedicated hosts have system RAM instead of a unified pool: CPU and RAM side by side. */}
+            {spark.kind === "host" && <RamPanel ram={metrics.ram} sparkId={spark.id} />}
+            {/* Models is the third column of the row (Windows PCs have no launchers). */}
+            {spark.platform !== "windows" && modelsPanel}
+            </div>
             </Item>
-          </div>
-          <div className="sp-col">
-            {view === "all" && showSvc && llmOn && primaryPort != null && (
-              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
-            )}
-            {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
-            {view === "all" &&
-              showSvc &&
-              llmOn &&
-              extraPorts.map((port, j) => (
-                <Item key={port} order={10 + j}>
-                  {renderLlmPanel(port, j + 1)}
-                </Item>
-              ))}
-            {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
+            {/* I/O sits under the hardware on xl+ so both columns stay balanced
+                (the LLM panel alone is taller than the hardware stack); on mobile
+                the --o orders still place it after the LLM panel. */}
             <Item order={7}>
               <StoragePanel
                 storage={metrics.storage}
@@ -332,6 +320,21 @@ export function SparkPage({
                 <TailscalePanel tailscale={metrics.tailscale ?? null} />
               </Item>
             )}
+          </div>
+          <div className="sp-col">
+            {view === "all" && showSvc && llmOn && primaryPort != null && (
+              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
+            )}
+            {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
+            {view === "all" &&
+              showSvc &&
+              llmOn &&
+              extraPorts.map((port, j) => (
+                <Item key={port} order={10 + j}>
+                  {renderLlmPanel(port, j + 1)}
+                </Item>
+              ))}
+            {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
           </div>
         </div>
       )}
