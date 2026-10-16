@@ -429,7 +429,7 @@ export function LlmPanel({
   const uncachedPrefillTps = llm?.uncachedPrefillTps ?? 0;
   const available = llm?.available ?? false;
   // While nothing is flowing, say when the endpoint last served.
-  const idleNote = available && isLlmIdle({ generationTps, prefillTps })
+  const idleNote = available && isLlmIdle({ generationTps, prefillTps, prefillActive: llm?.prefillActive })
     ? idleLabel(llm?.lastActiveAt)
     : null;
 
@@ -846,7 +846,7 @@ export function LlmPanel({
             <div className="sp-tile">
               <b>
                 {(llm?.slotsTotal ?? 0) > 0
-                  ? `${llm?.slotsActive ?? 0} / ${llm?.slotsTotal ?? 0}`
+                  ? `${llm?.slotsActive ?? "?"} / ${llm?.slotsTotal ?? 0}`
                   : (llm?.slotsActive ?? 0) > 0
                     ? `${llm?.slotsActive} running`
                     : "—"}

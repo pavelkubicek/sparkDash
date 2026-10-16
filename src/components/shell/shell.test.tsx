@@ -6,6 +6,7 @@ import { CommandPalette, filterCommands, fuzzyScore, type PaletteCommand } from 
 import { railSubLabel, showcaseTarget } from "./sparkSummary";
 import { makeSpark } from "../../testing/fixtures";
 import { render } from "../../testing/render";
+import { toolId } from "../../constants";
 
 const cmd = (id: string, label: string, group = "Go to", run = () => {}): PaletteCommand => ({ id, group, label, run });
 
@@ -61,8 +62,64 @@ describe("AppSidebar", () => {
     expect(railSubLabel(sparks[1])).toBe("off");
   });
 
+  it("links the Temps page with a deep-linkable href", () => {
+    const { container } = render(
+      <AppSidebar sparks={[]} activeId={null} onSelect={() => {}} onAdd={() => {}} onOpenSettings={() => {}} onOpenSearch={() => {}} connected />
+    );
+    const link = container.querySelector<HTMLAnchorElement>('a[href="/temps"]')!;
+    expect(link.textContent).toContain("Temps");
+  });
+
   it("only offers the showcase when an online Spark has a reachable LLM", () => {
     expect(showcaseTarget([makeSpark("a", false)])).toBeNull();
+  });
+});
+
+describe("AppSidebar Tools section", () => {
+  const props = { sparks: [makeSpark("a")], activeId: null, onSelect: () => {}, onAdd: () => {}, onOpenSettings: () => {}, onOpenSearch: () => {}, connected: true };
+  const toggle = (c: HTMLElement) => [...c.querySelectorAll<HTMLButtonElement>("button.rail-label--toggle")].find((b) => b.textContent === "Tools")!;
+  beforeEach(() => localStorage.clear());
+
+  it("sits directly above Benchmarks and links to /tools/rea like a normal link", () => {
+    const onSelectTool = vi.fn();
+    const { container } = render(<AppSidebar {...props} onSelectBench={() => {}} onSelectTool={onSelectTool} />);
+    const labels = [...container.querySelectorAll("button.rail-label--toggle")].map((b) => b.textContent);
+    expect(labels).toEqual(["Tools", "Benchmarks"]);
+    const link = container.querySelector<HTMLAnchorElement>('nav[aria-label="Tools"] a')!;
+    expect(link.getAttribute("href")).toBe("/tools/rea");
+    // Ctrl-click and middle-click are left to the browser.
+    const ctrl = new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true });
+    act(() => void link.dispatchEvent(ctrl));
+    expect(ctrl.defaultPrevented).toBe(false);
+    const mid = new MouseEvent("click", { bubbles: true, cancelable: true, button: 1 });
+    act(() => void link.dispatchEvent(mid));
+    expect(mid.defaultPrevented).toBe(false);
+    expect(onSelectTool).not.toHaveBeenCalled();
+    act(() => link.click());
+    expect(onSelectTool).toHaveBeenCalledWith("rea");
+  });
+
+  it("is open by default, remembers a collapse, and the key is sparkdash.sidebar.toolsOpen", () => {
+    const { container } = render(<AppSidebar {...props} onSelectTool={() => {}} />);
+    expect(toggle(container).getAttribute("aria-expanded")).toBe("true");
+    act(() => toggle(container).click());
+    expect(localStorage.getItem("sparkdash.sidebar.toolsOpen")).toBe("0");
+    expect(toggle(container).getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector<HTMLElement>("#rail-tools")!.hidden).toBe(true);
+  });
+
+  it("stays open and marks the link current while a tool page is active, even if collapsed", () => {
+    localStorage.setItem("sparkdash.sidebar.toolsOpen", "0");
+    const { container } = render(<AppSidebar {...props} activeId={toolId("rea")} toolType="rea" onSelectTool={() => {}} />);
+    expect(toggle(container).getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector<HTMLElement>("#rail-tools")!.hidden).toBe(false);
+    expect(container.querySelector('nav[aria-label="Tools"] a')!.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("starts collapsed when stored closed and no tool is active", () => {
+    localStorage.setItem("sparkdash.sidebar.toolsOpen", "0");
+    const { container } = render(<AppSidebar {...props} onSelectTool={() => {}} />);
+    expect(toggle(container).getAttribute("aria-expanded")).toBe("false");
   });
 });
 
@@ -196,7 +253,7 @@ describe("MobileTabBar sheet", () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  it("Stats opens Token totals, Fleet energy and Activity; Sparks no longer lists them; Showcase follows Prefill", () => {
+  it("Stats opens Token totals, Fleet energy, Temps and Activity; VulnHunter sits under Benchmarks; Sparks no longer lists them; Showcase follows Prefill", () => {
     const { container } = render(
       <MobileTabBar sparks={[makeSpark("a")]} activeId={null} onSelect={() => {}} onAdd={() => {}} onOpenSettings={() => {}} />
     );
@@ -204,7 +261,7 @@ describe("MobileTabBar sheet", () => {
     expect(tab("Search")).toBeUndefined();
     act(() => tab("Stats").click());
     let names = [...document.querySelectorAll(".sheet .rail-item__name")].map((n) => n.textContent);
-    expect(names).toEqual(["Token totals", "Fleet energy", "Activity"]);
+    expect(names).toEqual(["Token totals", "Fleet energy", "Temps", "Activity"]);
     act(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
@@ -214,6 +271,23 @@ describe("MobileTabBar sheet", () => {
     expect(names).not.toContain("Token totals");
     expect(names).not.toContain("Fleet energy");
     expect(names).not.toContain("Activity");
+    expect(names).toContain("VulnHunter");
     expect(names.indexOf("Showcase")).toBe(names.indexOf("Prefill") + 1);
+  });
+
+  it("lists a Tools group with REA above Benchmarks and selects the tool id", () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <MobileTabBar sparks={[makeSpark("a")]} activeId={toolId("rea")} onSelect={onSelect} onAdd={() => {}} onOpenSettings={() => {}} />
+    );
+    const tab = [...container.querySelectorAll("button")].find((b) => b.textContent === "Sparks")!;
+    act(() => tab.click());
+    const labels = [...document.querySelectorAll(".sheet .rail-label span")].map((n) => n.textContent);
+    expect(labels.indexOf("Tools")).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf("Tools")).toBeLessThan(labels.indexOf("Benchmarks"));
+    const rea = [...document.querySelectorAll<HTMLButtonElement>(".sheet button")].find((b) => b.textContent === "REA")!;
+    expect(rea.getAttribute("aria-current")).toBe("page");
+    act(() => rea.click());
+    expect(onSelect).toHaveBeenCalledWith(toolId("rea"));
   });
 });

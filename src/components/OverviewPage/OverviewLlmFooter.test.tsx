@@ -37,6 +37,11 @@ describe("llm idle helpers", () => {
     expect(isLlmIdle({ generationTps: 0, prefillTps: 1 })).toBe(false);
   });
 
+  it("is not idle while a prompt is prefilling, even with both rates at 0 (#202)", () => {
+    expect(isLlmIdle({ generationTps: 0, prefillTps: 0, prefillActive: true })).toBe(false);
+    expect(isLlmIdle({ generationTps: 0, prefillTps: 0, prefillActive: false })).toBe(true);
+  });
+
   it("labels the idle state", () => {
     expect(idleLabel(NOW - 30_000, NOW)).toBe("Idle · last served 30s ago");
     expect(idleLabel(NOW - 3 * 3_600_000, NOW)).toBe("Idle · last served 3h ago");

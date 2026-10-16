@@ -100,7 +100,8 @@ function SparkCardImpl({
   const memUsed = gpu?.vram?.used ?? um?.used ?? 0;
   const memTotal = gpu?.vram?.total ?? um?.total ?? 0;
   const memAvail = gpu?.vram?.available ?? um?.available ?? 0;
-  const breakdown = gpu && vramContext ? computeVramBreakdown(gpu.vram, gpu.processes, vramContext) : null;
+  const vramAvailable = gpu?.metricAvailability?.vramUsed !== false && gpu?.metricAvailability?.vramTotal !== false;
+  const breakdown = gpu && vramAvailable && vramContext ? computeVramBreakdown(gpu.vram, gpu.processes, vramContext) : null;
   const throttle = gpu?.throttle;
   const slowed = !!(throttle?.thermal || throttle?.hwSlowdown);
   const hot = slowed || tempRaw >= 80;
@@ -175,9 +176,9 @@ function SparkCardImpl({
   const showTps = role !== "worker" && !!llm;
   const llmChip = llm
     ? llm.requestsRunning != null
-      ? `${llm.requestsRunning} running · ${llm.requestsWaiting ?? 0} queued`
+      ? `${llm.requestsRunning} running · ${llm.requestsWaiting == null ? "queue unknown" : `${llm.requestsWaiting} queued`}`
       : llm.slotsTotal > 0
-        ? `${llm.slotsActive}/${llm.slotsTotal} slots`
+        ? `${llm.slotsActive ?? "?"}/${llm.slotsTotal} slots`
         : null
     : null;
 
@@ -187,6 +188,11 @@ function SparkCardImpl({
         <Tag tone="warn" title={throttle.detail || "GPU clock throttled"}>
           {throttle.thermal ? "Thermal throttle" : "HW slowdown"}
           {throttle.smClockMHz ? ` · SM ${(throttle.smClockMHz / 1000).toFixed(1)} GHz` : ""}
+        </Tag>
+      ) : null}
+      {online && throttle?.clockCapMHz != null ? (
+        <Tag title="GPU clock locked with nvidia-smi -lgc">
+          Cap {(throttle.clockCapMHz / 1000).toFixed(1)} GHz
         </Tag>
       ) : null}
       {online && llmChip ? <Tag tone={(llm?.requestsRunning ?? llm?.slotsActive ?? 0) > 0 ? "good" : "neutral"}>{llmChip}</Tag> : null}
@@ -265,14 +271,14 @@ function SparkCardImpl({
                 ) : (
                   <Bar
                     label={gpu.vram?.total ? "VRAM" : "Unified memory"}
-                    caption={memTotal > 0 ? `${fmtStorage(memUsed, false)} / ${fmtStorage(memTotal, true)}` : "—"}
-                    pct={memPct}
+                    caption={vramAvailable && memTotal > 0 ? `${fmtStorage(memUsed, false)} / ${fmtStorage(memTotal, true)}` : "—"}
+                    pct={vramAvailable ? memPct : 0}
                     color={memColor}
                     sub={memTotal > 0 && memAvail > 0 ? { label: "Available", value: formatMb(memAvail) } : null}
                   />
                 )
               ) : null}
-              {gpu ? <Bar label="GPU" caption={`${Math.round(usage)}%`} pct={usage} color={ringColor} /> : null}
+              {gpu ? <Bar label="GPU" caption={gpu.metricAvailability?.usage === false ? "—" : `${Math.round(usage)}%`} pct={gpu.metricAvailability?.usage === false ? 0 : usage} color={ringColor} /> : null}
               {spark.kind === "host" && spark.metrics.ram?.total ? (
                 <Bar
                   label="RAM"
@@ -302,12 +308,12 @@ function SparkCardImpl({
                   color={cpuUsage >= 90 ? "var(--color-danger)" : "var(--color-bar-usage)"}
                 />
               ) : null}
-              {gpu ? <Bar label="GPU temp" caption={fmtTemp(tempRaw)} pct={(tempVal / tempMax) * 100} color={tempColor} /> : null}
+              {gpu ? <Bar label="GPU temp" caption={gpu.metricAvailability?.temperature === false ? "—" : fmtTemp(tempRaw)} pct={gpu.metricAvailability?.temperature === false ? 0 : (tempVal / tempMax) * 100} color={tempColor} /> : null}
               {gpu ? (
                 <Bar
                   label="GPU power"
-                  caption={`${power?.draw ?? 0} / ${power?.limit ?? 0} W`}
-                  pct={powerPct}
+                  caption={gpu.metricAvailability?.powerDraw === false ? "—" : `${power?.draw ?? 0} / ${gpu.metricAvailability?.powerLimit === false ? "—" : power?.limit ?? 0} W`}
+                  pct={gpu.metricAvailability?.powerDraw === false ? 0 : powerPct}
                   color="var(--color-violet)"
                 />
               ) : null}
@@ -389,6 +395,15 @@ function SparkCardImpl({
               <code>{"\u00a0"}</code>
             </div>
           )}
+          {online && role !== "worker" && [...new Set([
+            ...llmList.filter((entry) => entry.available).flatMap((entry) => entry.models?.length ? entry.models : entry.modelId ? [entry.modelId] : []),
+            ...(spark.metrics.residentModels ?? []).map((entry) => entry.modelId),
+          ])].filter((name) => name !== modelText).map((name) => (
+            <div className="ov-modelrow" key={name} title={`${name} · loaded model; throughput shown for the monitored endpoint above`}>
+              <code>{name}</code>
+              <span className="ov-modelrow__ctx">Loaded</span>
+            </div>
+          ))}
         </>
       )}
 

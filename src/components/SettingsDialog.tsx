@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isValidTimeZone, listTimeZones } from "../shared/timeZone";
 import { fetchSettings, updateSettings } from "../api/client";
 import { clearToken, getToken, onTokenChange, requestTokenPrompt } from "../api/authToken";
 import type { Settings } from "../api/types";
 import { useModalPresence } from "../hooks/useModalPresence";
+import { useOverlayClose } from "../hooks/useOverlayClose";
 import packageJson from "../../package.json";
 import { XIcon } from "./ui/icons";
+import { SettingRow, ToggleRow } from "./SettingRows";
+import { AlertsDialog } from "./AlertsDialog";
+import { BrowserAlertsSettings } from "./BrowserAlertsSettings";
 import "../styles/dialogs.css";
 
 interface SettingsDialogProps {
@@ -73,13 +77,19 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
   const [dirty, setDirty] = useState(false);
   const [theme, setTheme] = useState<ThemeId>(readTheme);
   const [tokenSet, setTokenSet] = useState(() => getToken() !== "");
+  const [showAlerts, setShowAlerts] = useState(false);
 
-  useEscape(onClose);
+  // While the Alerts dialog is open on top, Escape belongs to it alone.
+  const closeOnEscape = useCallback(() => {
+    if (!showAlerts) onClose();
+  }, [showAlerts, onClose]);
+  useEscape(closeOnEscape);
 
   useEffect(() => onTokenChange((token) => setTokenSet(token !== "")), []);
 
   useEffect(() => {
     if (!open) {
+      setShowAlerts(false);
       setSettings(null);
       setError(null);
       setDirty(false);
@@ -104,6 +114,7 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
   }, [open]);
 
   const { mounted, visible } = useModalPresence(open);
+  const overlayClose = useOverlayClose(onClose);
 
   const timeZones = useMemo(() => listTimeZones(), []);
   const [tzTouched, setTzTouched] = useState(false);
@@ -117,6 +128,13 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
   const update = (patch: Partial<Settings>) => {
     setSettings((prev) => (prev ? { ...prev, ...patch } : prev));
     setDirty(true);
+  };
+
+  // The Alerts dialog saves its switch itself; mirror it here without marking
+  // Settings dirty, so a later Save does not undo it.
+  const handleAlertsSettings = (saved: Settings) => {
+    setSettings((prev) => (prev ? { ...prev, alertsEnabled: saved.alertsEnabled } : prev));
+    onSaved(saved);
   };
 
   const handleSave = async () => {
@@ -151,9 +169,7 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
   return (
     <div
       className={`settings-overlay${visible ? " is-open" : ""}`}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      {...overlayClose}
     >
       <div className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div className="modal-sheet__header">
@@ -338,6 +354,30 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
                 onChange={(v) => update({ prometheusExport: v })}
               />
               <ToggleRow
+                title="Intel Arc VRAM via sudo"
+                help="Reads exact Intel Arc VRAM use from root-only debugfs with sudo -n on each host. Off by default: VRAM then shows the PCI BAR size and nothing runs with sudo."
+                checked={Boolean(settings.intelVramSudo)}
+                onChange={(v) => update({ intelVramSudo: v })}
+              />
+              <ToggleRow
+                title="VulnHunter scans"
+                help="Lets the VulnHunter page (Benchmarks) install VulnHunter on a unit, save your agent harness's command there and run scans. A scan starts an AI agent on the unit as its SSH user, so this is off by default; anyone who can reach this dashboard can use it once it is on, so set SPARKDASH_TOKEN if others can."
+                checked={Boolean(settings.vulnhuntEnabled)}
+                onChange={(v) => update({ vulnhuntEnabled: v })}
+              />
+              <ToggleRow
+                title="REA (reverse engineering)"
+                help="Lets the REA page (Tools) install REA on a unit, upload files to it and run analyses there as its SSH user. REA parses untrusted binaries and some workflows run the target; it is off by default, and anyone who can reach this dashboard can use it once it is on, so set SPARKDASH_TOKEN if others can."
+                checked={Boolean(settings.reaEnabled)}
+                onChange={(v) => update({ reaEnabled: v })}
+              />
+              <ToggleRow
+                title="Metrics history"
+                help="Keeps 48 hours of 1-minute and 30 days of 15-minute history per unit on the server (GPU, memory headroom, CPU, network, LLM tok/s and KV; at most about 1 MB per unit on disk) and charts it in a History panel on each unit's page. Off by default."
+                checked={Boolean(settings.metricsHistory)}
+                onChange={(v) => update({ metricsHistory: v })}
+              />
+              <ToggleRow
                 title="Show Fleet Energy"
                 help="Overview card with rolling fleet power estimates. The full Fleet energy page is always available from the sidebar."
                 checked={Boolean(settings.showFleetEnergy)}
@@ -408,8 +448,8 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
                 onChange={(v) => update({ showKpiMemory: v })}
               />
               <ToggleRow
-                title="Show Tokens today tile"
-                help="Overview tile with the tokens generated today (or the online unit count, when no tokens are tracked yet)."
+                title="Show Tokens in last 24 hours tile"
+                help="Overview tile with the tokens generated in the last 24 hours (or the online unit count, when no tokens are tracked yet)."
                 checked={settings.showKpiTokens ?? true}
                 onChange={(v) => update({ showKpiTokens: v })}
               />
@@ -419,6 +459,21 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
                 checked={Boolean(settings.showFleetExceptions)}
                 onChange={(v) => update({ showFleetExceptions: v })}
               />
+              <SettingRow
+                title="Alert notifications"
+                help="Send Health findings and Overview exceptions to ntfy, Discord, Slack or a webhook once they hold for a while, and when they clear. Off by default."
+              >
+                <div className="set-token">
+                  <span className={`set-token__state${settings.alertsEnabled ? " is-set" : ""}`} data-testid="alerts-state">
+                    <i aria-hidden />
+                    {settings.alertsEnabled ? "On" : "Off"}
+                  </span>
+                  <button type="button" className="btn btn--sm" onClick={() => setShowAlerts(true)}>
+                    Configure…
+                  </button>
+                </div>
+              </SettingRow>
+              <BrowserAlertsSettings />
               <ToggleRow
                 title="Save benchmark debug traces"
                 help="Stores prompts, HTTP/completion IDs, content previews, and GPU samples in bench history. Off by default; larger history files."
@@ -443,7 +498,7 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
           {/* Outside the settings block: a rejected token is exactly when settings fail to load. */}
           <SettingRow
             title="Access token"
-            help="Sent to servers that set SPARKDASH_TOKEN. Stored in this browser only."
+            help="This browser's copy of the server's token, sent to servers that already require one. It cannot turn protection on: set SPARKDASH_TOKEN in the host's .env and recreate the container. Stored in this browser only."
           >
             <div className="set-token">
               <span className={`set-token__state${tokenSet ? " is-set" : ""}`} data-testid="access-token-state">
@@ -496,64 +551,7 @@ export function SettingsDialog({ open, onClose, onSaved }: SettingsDialogProps) 
           </div>
         </div>
       </div>
+      <AlertsDialog open={showAlerts} onClose={() => setShowAlerts(false)} onSettingsSaved={handleAlertsSettings} />
     </div>
-  );
-}
-
-function SettingRow({
-  title,
-  help,
-  htmlFor,
-  stack = false,
-  children,
-}: {
-  title: string;
-  help?: string;
-  htmlFor?: string;
-  /** Text above, control below (for controls that need room or show messages). */
-  stack?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={`set-row${stack ? " set-row--stack" : ""}`}>
-      <div className="set-row__text">
-        {htmlFor ? <label htmlFor={htmlFor}>{title}</label> : <span className="set-row__title">{title}</span>}
-        {help && <small>{help}</small>}
-      </div>
-      <div className="set-row__control">{children}</div>
-    </div>
-  );
-}
-
-function ToggleRow({
-  title,
-  help,
-  checked,
-  onChange,
-}: {
-  title: string;
-  help?: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <SettingRow title={title} help={help}>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={title}
-        onClick={() => onChange(!checked)}
-        className={`toggle-track relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors${
-          checked ? " is-on" : ""
-        }`}
-      >
-        <span
-          className={`toggle-dot inline-block h-4 w-4 transform rounded-full shadow transition-transform ${
-            checked ? "translate-x-4" : "translate-x-0"
-          }`}
-        />
-      </button>
-    </SettingRow>
   );
 }

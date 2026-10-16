@@ -423,6 +423,16 @@ export function TokensIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/** Shield with a check: security scans. */
+export function ShieldIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...baseProps(className)}>
+      <path d="M12 3 4.5 6v5.5c0 4.4 3.1 8.1 7.5 9.5 4.4-1.4 7.5-5.1 7.5-9.5V6L12 3Z" />
+      <path d="m9 12 2.2 2.2L15.2 10" />
+    </svg>
+  );
+}
+
 export function ListIcon({ className = "" }: { className?: string }) {
   return (
     <svg {...baseProps(className)}>
@@ -439,6 +449,15 @@ export function GaugeIcon({ className = "" }: { className?: string }) {
       <path d="M4.9 19a9 9 0 1 1 14.2 0" />
       <path d="m12 14 4-5" />
       <circle cx="12" cy="14" r="1" />
+    </svg>
+  );
+}
+
+/** Thermometer: GPU temperatures (Temps page). */
+export function ThermometerIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...baseProps(className)}>
+      <path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0" />
     </svg>
   );
 }
@@ -469,6 +488,20 @@ export function WrenchIcon({ className = "" }: { className?: string }) {
   return (
     <svg {...baseProps(className)}>
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z" />
+    </svg>
+  );
+}
+
+/** Microscope: inspection tools (Tools > REA). */
+export function MicroscopeIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...baseProps(className)}>
+      <path d="M6 18h8" />
+      <path d="M3 22h18" />
+      <path d="M14 22a7 7 0 1 0 0-14h-1" />
+      <path d="M9 14h2" />
+      <path d="M9 12a2 2 0 0 1-2-2V6h6v4a2 2 0 0 1-2 2z" />
+      <path d="M12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3" />
     </svg>
   );
 }

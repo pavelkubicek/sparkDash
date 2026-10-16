@@ -132,6 +132,8 @@ export class LlmProbe {
     this._tensorfoldPrefillSeconds = null;
     this._tensorfoldPrevCached = null;
     this._tensorfoldLastPrefill = null;
+    /** Previous TensorFold /metrics `generation_tokens_total + generation_tokens_running`. */
+    this._tensorfoldPromProduced = null;
     this.prefillActive = false;
     /** Previous prefill counters by kind; null until first labeled sample. */
     this.lastPrefillKinds = null;
@@ -418,6 +420,7 @@ export class LlmProbe {
     this._tensorfoldPrefillSeconds = null;
     this._tensorfoldPrevCached = null;
     this._tensorfoldLastPrefill = null;
+    this._tensorfoldPromProduced = null;
     this.prefillActive = false;
     this.lastPrefillKinds = null;
     this.lastTtftSum = null;
@@ -789,7 +792,11 @@ export class LlmProbe {
       if (metricsRes && metricsRes.ok) {
         const metricsTxt = await metricsRes.text().catch(() => "");
         if (LlmProbe._metricsLookLikeTensorFold(metricsTxt)) {
-          this._applyTensorFoldMetrics(metricsTxt);
+          // A decode rate the server reports itself (/health `live`) wins over
+          // the /metrics counter diff: without dtSec the diff below stays inert.
+          const liveDecode = health?.live?.decode_tokens_per_second;
+          const hasLiveDecode = liveDecode != null && Number.isFinite(Number(liveDecode));
+          this._applyTensorFoldMetrics(metricsTxt, hasLiveDecode ? undefined : dtSec);
         }
       }
       return this._getSnapshot();
@@ -1299,8 +1306,9 @@ export class LlmProbe {
     const health = data && typeof data === "object" && !Array.isArray(data) ? data : {};
     // A prompt is being processed right now (no live rate exists for it, see below).
     // Builds without a streams block simply don't report it — leave the flag alone.
-    if (health.streams && health.streams.prefilling != null) {
-      this.prefillActive = Number(health.streams.prefilling) > 0;
+    // prefilling/filling describe the same lanes; a build may publish either name.
+    if (health.streams && (health.streams.prefilling != null || health.streams.filling != null)) {
+      this.prefillActive = Number(health.streams.prefilling ?? health.streams.filling) > 0;
     }
     // Number(null) is 0: a null counter means "absent", not "zero".
     const prompt = health.prompt_tokens_total == null ? NaN : Number(health.prompt_tokens_total);
@@ -1325,9 +1333,9 @@ export class LlmProbe {
     this._tensorfoldPrevCached = Number.isFinite(cached) && cached >= 0 ? cached : null;
     const batch = Number(health.max_batch_size);
     if (Number.isFinite(batch) && batch > 0) this.slotsTotal = Math.round(batch);
-    // TensorFold 0.6.0 CUDA serves several streams at once: `streams.max` is the
-    // slot count and `requests_running` the busy ones. The EXL3 path above only
-    // knows a single `busy` flag, which would pin the tile at 1/1.
+    // CUDA health.requests_running counts open generate calls, including waiting
+    // work. Prefer occupied streams over that legacy fallback; streams.max is
+    // capacity, not a cap to hide a request/slot semantic mismatch.
     const streams =
       health.streams && typeof health.streams === "object" && !Array.isArray(health.streams)
         ? health.streams
@@ -1339,29 +1347,36 @@ export class LlmProbe {
     // Newer TensorFold servers answer with a `live` block instead of the CUDA
     // 0.6.0 fields: `connections` are the requests being served right now and
     // `waiting` the ones accepted but queued for a free slot — the same pair
-    // vLLM exposes as num_requests_running / num_requests_waiting (observed on
-    // spark1: connections 1, waiting 0, max_batch_size 16 while decoding).
+    // vLLM exposes as num_requests_running / num_requests_waiting.
     // Free slots say nothing about a queue, so a server without `live` keeps
     // requestsWaiting null and the panels show the run count alone.
     const live =
       health.live && typeof health.live === "object" && !Array.isArray(health.live)
         ? health.live
         : {};
-    let running = count(health.requests_running);
-    if (!Number.isFinite(running)) {
-      const decoding = count(streams.decoding);
-      const prefilling = count(streams.prefilling);
-      if (Number.isFinite(decoding) || Number.isFinite(prefilling)) {
-        running =
-          (Number.isFinite(decoding) ? decoding : 0) +
-          (Number.isFinite(prefilling) ? prefilling : 0);
-      }
-    }
+    const decoding = count(streams.decoding);
+    // prefilling/filling describe the same lanes; never add both.
+    const prefilling = count(streams.prefilling ?? streams.filling);
+    const paused = count(streams.paused);
+    const laneCounts = [decoding, prefilling, paused];
+    const hasStreams = health.streams && typeof health.streams === "object" && !Array.isArray(health.streams);
+    // A streams block that reports lane fields at all owns the busy count:
+    // null lanes are "unknown", never a hint to fall back to requests_running
+    // (which counts queued work as open). A block without lane fields (0.5.0)
+    // falls back to that legacy gauge; older shapes without the block too.
+    const reportsLanes =
+      hasStreams && ["decoding", "prefilling", "filling", "paused"].some((k) => k in streams);
+    let running = hasStreams
+      ? laneCounts.some((n) => Number.isFinite(n) && n >= 0)
+        ? laneCounts.reduce((sum, n) => sum + (Number.isFinite(n) && n >= 0 ? n : 0), 0)
+        : reportsLanes
+          ? NaN
+          : count(health.requests_running)
+      : count(health.requests_running); // Older health shapes have no stream breakdown.
     if (!Number.isFinite(running)) running = count(live.connections);
-    if (Number.isFinite(running) && running >= 0) {
-      this.requestsRunning = Math.round(running);
-      this.slotsActive = Math.round(running);
-    }
+    // EXL3's busy flag is not a measurement of TensorFold's concurrency.
+    this.requestsRunning = Number.isFinite(running) && running >= 0 ? Math.round(running) : null;
+    this.slotsActive = this.requestsRunning;
     const waiting = count(live.waiting);
     if (Number.isFinite(waiting) && waiting >= 0) this.requestsWaiting = Math.round(waiting);
     // The `live` block also computes the instantaneous rates server-side. They
@@ -1410,7 +1425,9 @@ export class LlmProbe {
     }
     this._tensorfoldPrefillSeconds = prefillSec;
     if (hasLivePrefill) return;
-    const reportsPrefilling = health.streams != null && health.streams.prefilling != null;
+    // prefilling/filling describe the same lane; a build may publish either name.
+    const reportsPrefilling =
+      health.streams != null && (health.streams.prefilling != null || health.streams.filling != null);
     if (!reportsPrefilling) {
       // Build without a streams block: prefill activity is unknowable, keep the
       // finished-request hold (20 s) so the tile does not flicker to 0.
@@ -1455,7 +1472,7 @@ export class LlmProbe {
     const waiting = live.waiting == null ? NaN : Number(live.waiting);
     if (Number.isFinite(waiting) && waiting >= 0) this.requestsWaiting = Math.round(waiting);
     const conns = live.connections == null ? NaN : Number(live.connections);
-    if (Number.isFinite(conns) && conns >= 0 && !(this.requestsRunning > 0)) {
+    if (Number.isFinite(conns) && conns >= 0 && this.requestsRunning == null) {
       this.requestsRunning = Math.round(conns);
       this.slotsActive = Math.round(conns);
     }
@@ -1469,12 +1486,17 @@ export class LlmProbe {
   }
 
   /**
-   * Apply TensorFold Prometheus /metrics (`tensorfold:` series). The token
-   * counters cover FINISHED requests only, so they fill totals and never the
-   * live rates — those come from the /health `live` gauges upstream.
+   * Apply TensorFold Prometheus /metrics (`tensorfold:` series): cumulative token
+   * totals (finished requests only), running/waiting mirrors, latency histograms
+   * and the MTP draft acceptance rate. Live rates normally come from the /health
+   * `live` gauges upstream. Builds whose /health is only `{"status": "ok"}`
+   * (tensorfold-native) report counters here alone, so decode tok/s falls back to
+   * this poll-window diff — callers pass no `dtSec` when /health already gave a
+   * decode rate, because that server-measured value wins.
    * @param {string} txt
+   * @param {number} [dtSec]
    */
-  _applyTensorFoldMetrics(txt) {
+  _applyTensorFoldMetrics(txt, dtSec) {
     const tf = (name) => this._getPromMetric(txt, `tensorfold:${name}`);
     const prompt = tf("prompt_tokens_total");
     const gen = tf("generation_tokens_total");
@@ -1483,6 +1505,20 @@ export class LlmProbe {
     if (this.totalCachedTokens == null) {
       const cached = tf("cached_tokens_total");
       if (cached != null) this.totalCachedTokens = cached;
+    }
+
+    // The total moves only when a request finishes; `generation_tokens_running` counts the
+    // tokens of requests still decoding. Their sum grows steadily while tokens are produced
+    // (a finishing request moves its tokens from one to the other), so its diff is the live rate.
+    // Prefill stays as is: prompt_tokens_total includes cached prefix tokens.
+    if (Number.isFinite(gen) && gen >= 0) {
+      const inFlight = tf("generation_tokens_running");
+      const produced = gen + (Number.isFinite(inFlight) && inFlight >= 0 ? inFlight : 0);
+      const prev = this._tensorfoldPromProduced;
+      this._tensorfoldPromProduced = produced;
+      if (prev != null && Number.isFinite(dtSec) && dtSec > 0) {
+        this.generationTps = Math.max(0, Math.round(((produced - prev) / dtSec) * 100) / 100);
+      }
     }
 
     // Gauges mirror the /health `live` block; the engine's own counters also

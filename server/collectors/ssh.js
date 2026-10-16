@@ -318,6 +318,12 @@ export async function sshExec(spark, cmd, options = {}) {
       });
       // Windows PowerShell can wait for stdin to close; nothing is ever sent on it.
       if (isWindows) child.stdin?.end();
+      // `options.input` travels on stdin only (never argv, never the environment), e.g. a
+      // sudo password for one action. Ignored for the multiplex readiness probe.
+      else if (typeof options.input === "string" && execArgs === args) {
+        child.stdin?.on("error", () => {});
+        child.stdin?.end(options.input);
+      }
     });
 
   if (multiplex) {

@@ -5,13 +5,13 @@ export interface SparkConfig {
   /**
    * Unit type:
    * - spark: NVIDIA DGX Spark (default) — DGX Spark specs shown in the header.
-   * - host: any Linux box with an NVIDIA GPU (still monitored via nvidia-smi,
-   *   just not a Spark). Real hardware is auto-detected once online.
+   * - host: any Linux box with supported NVIDIA or AMD GPUs, just not a Spark.
+   *   Real hardware is auto-detected once online.
    */
   kind?: "spark" | "host";
   /**
    * Optional OS platform override for SSH-collected units. "linux" (default)
-   * uses /proc + nvidia-smi, "darwin" macOS hosts, "windows" Windows hosts
+   * uses /proc + vendor GPU tooling, "darwin" macOS hosts, "windows" Windows hosts
    * (PowerShell collectors; NVIDIA via nvidia-smi, AMD iGPUs via GPU
    * performance counters).
    */
@@ -203,9 +203,34 @@ export interface GpuThrottle {
   smClockMaxMHz: number | null;
   /** Current SM clock as % of max (0–100). null when clocks unavailable. */
   smClockPct: number | null;
+  /** Max graphics clock locked with `nvidia-smi -lgc` (MHz), from the sparkdash
+   *  gpu-clock-cap marker on the host. null/absent when no lock is recorded. */
+  clockCapMHz?: number | null;
   /** Human-readable active reasons (tooltip). */
   detail: string;
 }
+
+/** GET /api/sparks/:id/gpu-clock: the GPU clock cap (`nvidia-smi -lgc`) and its boot service. */
+export type GpuClockStatus =
+  | { supported: false; reason?: string }
+  | {
+      supported: true;
+      /** GPU maximum graphics clock (MHz). */
+      hwMaxMHz: number | null;
+      /** Cap in effect right now (MHz), null when none is recorded. */
+      capMHz: number | null;
+      /** The server accepts a typed sudo password on this connection (https or the machine itself). */
+      passwordAllowed?: boolean;
+      /** "root" runs directly, "yes" = passwordless sudo works, "no" = it does not. */
+      sudo: "root" | "yes" | "no";
+      service: {
+        installed: boolean;
+        /** "min,max" the service applies at boot. */
+        clocks: string | null;
+        enabled: string | null;
+        active: string | null;
+      };
+    };
 
 /** One health finding for a Spark (server rules in server/health/HealthEvaluator.js). */
 export interface HealthFinding {
@@ -216,7 +241,18 @@ export interface HealthFinding {
   hint: string;
 }
 
+export interface GpuMetricAvailability {
+  temperature: boolean;
+  usage: boolean;
+  powerDraw: boolean;
+  powerLimit: boolean;
+  vramUsed: boolean;
+  vramTotal: boolean;
+}
+
 export interface GpuMetrics {
+  vendors?: Array<"amd" | "nvidia" | "intel">;
+  metricAvailability?: GpuMetricAvailability;
   temperature: number;
   usage: number;
   power: {
@@ -248,10 +284,17 @@ export interface GpuMetrics {
   gpus?: GpuDevice[];
 }
 
-/** One physical GPU as reported by nvidia-smi (`index,name,uuid`). */
+/** One physical GPU; `index` is a stable dashboard identity and `physicalIndex` is the vendor's index (nvidia-smi, amd-smi, or Intel sysfs). */
 export interface GpuDevice {
+  /** Stable dashboard identity; AMD indices use a separate internal range. */
   index: number;
+  /** Physical index reported by the vendor tool. */
+  physicalIndex?: number;
+  /** Absent on payloads from servers older than vendor tagging; treat as "nvidia". */
+  vendor?: "amd" | "nvidia" | "apple" | "intel";
+  metricAvailability?: GpuMetricAvailability;
   name: string | null;
+  /** NVIDIA GPU uuid; null for other vendors. */
   uuid: string | null;
   temperature: number;
   usage: number;
@@ -260,6 +303,10 @@ export interface GpuDevice {
   throttle?: GpuThrottle | null;
   /** Processes holding memory on this card only. */
   processes?: Array<{ pid: number; name: string; vramMB: number }>;
+  /** Intel only: fan speed in rpm, null when the card has no fan sensor. */
+  fanRpm?: number | null;
+  /** Intel only: "debugfs" = measured VRAM use; "pci-bar" = total only, used is unknown (shown as 0). */
+  vramSource?: "debugfs" | "pci-bar";
 }
 
 // ─── CPU metrics ─────────────────────────────────────────
@@ -395,7 +442,8 @@ export interface LlmMetrics {
   contextLength: number | null;
   /** GPU memory utilization for the LLM engine (0–1), e.g. 0.9. Only from vLLM internal info. */
   gpuMemoryUtilization: number | null;
-  slotsActive: number;
+  /** Occupied slots; null when the backend does not report occupancy. */
+  slotsActive: number | null;
   slotsTotal: number;
   generationTps: number;
   prefillTps: number;
@@ -593,6 +641,8 @@ export interface SparkMetrics {
   unifiedMemory: UnifiedMemoryMetrics | null;
   /** Array of LLM metrics, one per configured port. Empty array when no ports. */
   llm: LlmMetrics[];
+  /** Loaded models discovered in private vLLM containers over SSH; no throughput claim. */
+  residentModels?: Array<{ modelId: string; container: string }>;
   /** ComfyUI probe result when monitoring is enabled; null when off or not yet polled. */
   comfy?: ComfyMetrics | null;
   /** Tailnet probe result when monitoring is enabled; null when off or not yet polled. */
@@ -668,6 +718,107 @@ export interface WsSnapshot {
    * launcher still satisfies the type; every consumer must null-check it.
    */
   models?: import("./modelTypes").ModelsSnapshot | null;
+  /** Alert notifications' firing set — present only while `alertsEnabled` is on. */
+  alerts?: { active: AlertInstance[] };
+}
+
+// ─── Alert notifications (server/alerts) ──────────────────
+export type AlertSeverity = "warning" | "critical";
+
+/**
+ * One pending or firing alert (GET /api/alerts, WS `alerts.active`). The
+ * condition is a Health finding or an Overview strip exception; `ruleId` is the
+ * finding id (thermal, memory, …) or the strip's (offline, throttle, disk, llm, tailnet).
+ */
+export interface AlertInstance {
+  /** `${unitId}:${ruleId}` — the same key the Overview strip uses. */
+  key: string;
+  ruleId: string;
+  ruleName: string;
+  unitId: string;
+  unitName: string;
+  severity: AlertSeverity;
+  /** Highest severity reached while firing (a resolved alert is routed by it). */
+  peakSeverity?: AlertSeverity;
+  state: "pending" | "firing";
+  /** Short predicate after the unit name ("GPU is running hot"). */
+  label: string;
+  summary: string;
+  /** Epoch ms the condition first held — survives a server restart. */
+  startsAt: number;
+  firingAt: number | null;
+}
+
+/** One firing / resolved transition (newest first in `recent`). */
+export interface AlertEvent {
+  id: number;
+  at: number;
+  status: "firing" | "resolved";
+  key: string;
+  ruleId: string;
+  ruleName: string;
+  unitId: string;
+  unitName: string;
+  severity: AlertSeverity;
+  label: string;
+  summary: string;
+  startsAt: number;
+  endsAt: number | null;
+}
+
+export interface AlertsResponse {
+  enabled: boolean;
+  active: AlertInstance[];
+  pending: AlertInstance[];
+  recent: AlertEvent[];
+}
+
+/** A rule as GET /api/alerts/config describes it: where it comes from, on/off and `for`. */
+export interface AlertRule {
+  id: string;
+  name: string;
+  description: string;
+  source: "health" | "strip";
+  defaults: { enabled: boolean; forSec: number };
+  /** Only the values the user changed. */
+  overrides: { enabled?: boolean; forSec?: number };
+}
+
+export type AlertChannelType = "ntfy" | "discord" | "slack" | "webhook";
+
+export interface AlertChannel {
+  /** Absent on a channel added in the dialog and not yet saved. */
+  id?: string;
+  name: string;
+  type: AlertChannelType;
+  /** Masked by the server (`https://ntfy.sh…ab12`); send it back unchanged to keep it. */
+  url: string;
+  /** The server has a URL for this channel (in its encrypted secrets store). */
+  hasUrl?: boolean;
+  enabled: boolean;
+  minSeverity: AlertSeverity;
+  /** `lastError` is a status code or a fixed reason, never a server's answer. */
+  status?: { lastSentAt: number | null; lastError: string | null; lastErrorAt: number | null };
+}
+
+export interface AlertsConfig {
+  enabled: boolean;
+  /** 0 = no reminders while an alert keeps firing. */
+  repeatIntervalMin: number;
+  rules: AlertRule[];
+  channels: AlertChannel[];
+}
+
+export interface AlertsConfigUpdate {
+  repeatIntervalMin?: number;
+  rules?: Record<string, { enabled?: boolean; forSec?: number }>;
+  channels?: AlertChannel[];
+}
+
+export interface AlertTestResult {
+  ok: boolean;
+  status?: number;
+  error?: string;
 }
 
 export interface FleetEnergy {
@@ -712,7 +863,33 @@ export interface HealthResponse {
   warnings: string[];
 }
 
+export interface InferenceActivity {
+  enabled: boolean;
+  available: boolean;
+  /** Approved non-secret display labels, never API keys. */
+  labels: string[];
+  generatedAt: string | null;
+  error: string | null;
+  active: Array<{
+    principal: string;
+    model: string;
+    count: number;
+    oldestAgeMs: number;
+    newestAgeMs: number;
+  }>;
+  recent: Array<{
+    principal: string;
+    model: string;
+    durationMs: number;
+    status: number | null;
+    observedAt: string;
+  }>;
+  overflowed: boolean;
+}
+
 export interface Settings {
+  /** Read-only server capability; configured through environment variables. */
+  inferenceActivityEnabled?: boolean;
   pollIntervalMs: number;
   defaultLlmPort: number;
   autoHideOffline: boolean;
@@ -755,7 +932,64 @@ export interface Settings {
   showVramBreakdown: boolean;
   /** Serve GET /metrics in Prometheus text format. Off by default (404 when off). */
   prometheusExport: boolean;
+  /** Let the Intel (xe) probe read debugfs VRAM through sudo -n. Off by default. */
+  intelVramSudo: boolean;
+  /** VulnHunter scans, installs and harness-command changes are opt-in (off by default). */
+  vulnhuntEnabled: boolean;
+  /** REA (Tools): install, uploads and analysis runs on a unit are opt-in (off by default). */
+  reaEnabled: boolean;
+  /**
+   * Keep 48 h / 30 days of per-unit history on the server and chart it in a History
+   * panel on the unit page. Off by default.
+   */
+  metricsHistory?: boolean;
+  /** Alert notifications (Settings → Alerts). Off by default; while off nothing is evaluated or sent. */
+  alertsEnabled?: boolean;
 }
+
+// ─── Unit history (GET /api/sparks/:id/history) ──────────
+export type MetricsHistoryRange = "1h" | "6h" | "24h" | "7d" | "30d";
+
+/** One series in one bucket. `min` only on memFreeMB (headroom's low point). */
+export interface HistoryStat {
+  avg: number;
+  max: number;
+  min?: number;
+}
+
+/** Unit-level series: %, °C, W, MB, bytes/s. */
+export type HistoryUnitSeries =
+  | "gpuUtil"
+  | "gpuTemp"
+  | "gpuPower"
+  | "memUsedMB"
+  | "memFreeMB"
+  | "cpuUtil"
+  | "cpuTemp"
+  | "ramUsedMB"
+  | "netRx"
+  | "netTx";
+
+/** Per LLM endpoint: tok/s, and the KV pool fill as 0–1. */
+export type HistoryLlmSeries = "genTps" | "prefillTps" | "kvUsage";
+
+/** A bucket; a series the unit did not report in it is absent (a gap). */
+export type HistoryPoint = { t: number } & Partial<Record<HistoryUnitSeries, HistoryStat>>;
+export type HistoryLlmPoint = { t: number } & Partial<Record<HistoryLlmSeries, HistoryStat>>;
+
+export interface MetricsHistoryData {
+  enabled: true;
+  range: MetricsHistoryRange;
+  /** Bucket width of the points; a jump larger than this is a gap. */
+  stepMs: number;
+  /** Window the range covers (epoch ms); the x-axis spans exactly this. */
+  from: number;
+  to: number;
+  points: HistoryPoint[];
+  llm: Array<{ port: number; points: HistoryLlmPoint[] }>;
+}
+
+export type MetricsHistoryResponse = MetricsHistoryData | { enabled: false };
 
 export interface SparksListResponse {
   sparks: SparkConfig[];
@@ -1961,5 +2195,496 @@ export class ToolEvalApiError extends Error {
     this.status = status;
     this.errors = errors;
     this.active = active;
+  }
+}
+
+// ─── Security scans (VulnHunter on a unit) ────────────────
+
+export type VulnHuntSeverity = "High+" | "High" | "Medium" | "Low" | "Informational";
+export type VulnHuntRunStatus = "running" | "completed" | "failed" | "stopped" | "detached" | "gone";
+
+export interface VulnHuntSetup {
+  repository: string;
+  /** The VulnHunter revision the dashboard installs. */
+  pinnedRev: string;
+  /** Where the unit's user keeps the harness command (a path, never its contents). */
+  hostCommandFile: string;
+  steps: string[];
+  limits: { defaultTimeoutMinutes: number; minTimeoutMinutes: number; maxTimeoutMinutes: number };
+  /** The VulnHunter opt-in setting (Settings); off by default. */
+  enabled: boolean;
+  /** Same as `enabled`: scans, installs and harness-command changes are refused until it is on. */
+  startAllowed: boolean;
+  startBlockedReason: string | null;
+  /** VULNHUNT_ALLOWED_HOSTS: when not empty, scans may only clone from these hosts. */
+  allowedHosts: string[];
+}
+
+export interface VulnHuntStatus {
+  reachable: boolean;
+  installed: boolean;
+  path: string | null;
+  git: boolean;
+  setsid: boolean;
+  hostCommand: {
+    source: "env" | "file" | "none" | "unsafe";
+    program: string | null;
+    found: boolean;
+    file: string | null;
+    configured: boolean;
+  };
+  ready: boolean;
+  runRoot: string | null;
+  error: string | null;
+  /** What the dashboard's installer knows about the unit. */
+  install: VulnHuntInstallInfo;
+}
+
+export interface VulnHuntInstallInfo {
+  pinnedRev: string;
+  installedRev: string | null;
+  upToDate: boolean;
+  skillsDir: string | null;
+  agentsDir: string | null;
+  /** Version of the Python 3.11+ found on the unit (for example "3.12"); null when there is none. */
+  python311: string | null;
+  /** Absolute paths of harness skills directories that exist on the unit. */
+  skillsDirCandidates: string[];
+  /** The agent harnesses the one-click setup knows, and what the unit has of each. */
+  harnesses: VulnHuntHarness[];
+}
+
+export type VulnHuntHarnessId = "claude" | "codex" | "opencode";
+
+export interface VulnHuntHarness {
+  id: VulnHuntHarnessId;
+  label: string;
+  /** Its CLI exists on the unit. */
+  found: boolean;
+  /** The dashboard's wrapper script for this harness is installed on the unit. */
+  wrapperInstalled: boolean;
+  skillsDir: string;
+  /** The preset starts the agent with tool restrictions that enforce a read-only scan. */
+  roEnforced: boolean;
+  note: string;
+}
+
+/** Either the one-click variant (a harness id) or the manual one (explicit directories). */
+export type VulnHuntInstallRequest = { harness: VulnHuntHarnessId } | { skillsDir: string; agentsDir?: string };
+
+export interface VulnHuntInstallJob {
+  id: string;
+  sparkId: string;
+  kind: "install";
+  status: "running" | "completed" | "failed" | "detached" | "cancelled";
+  exitCode: number | null;
+  error: string | null;
+  startedAt: number;
+  finishedAt: number | null;
+}
+
+export interface VulnHuntInstallStream {
+  job: VulnHuntInstallJob;
+  lines: VulnHuntLine[];
+  partial: string;
+  nextLine: number;
+}
+
+export interface VulnHuntInstallStarted {
+  job: VulnHuntInstallJob;
+  revision: string;
+  repository: string;
+}
+
+export interface VulnHuntJob {
+  id: string;
+  sparkId: string;
+  kind: "run" | "attach";
+  type: string;
+  status: "running" | "completed" | "failed" | "stopped" | "detached" | "cancelled";
+  exitCode: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+  error: string | null;
+  stage: string | null;
+}
+
+export interface VulnHuntReportHeader {
+  runId: string | null;
+  repository: string | null;
+  auditDate: string | null;
+  branch: string | null;
+  model: string | null;
+  findingsSummary: string | null;
+}
+
+export interface VulnHuntManifest {
+  scanId: string | null;
+  agentExitCode: number | null;
+  costUsd: number | null;
+}
+
+export interface VulnHuntCounts {
+  "High+": number;
+  High: number;
+  Medium: number;
+  Low: number;
+  Informational: number;
+  unrated: number;
+}
+
+export interface VulnHuntRun {
+  id: string;
+  sparkId: string;
+  status: VulnHuntRunStatus;
+  startedAt: number;
+  finishedAt: number | null;
+  exitCode: number | null;
+  note: string | null;
+  label: string;
+  source: { type: "url" | "path"; value: string };
+  readOnly: boolean;
+  timeoutMinutes: number;
+  command: string;
+  runDir: string;
+  /** When the authorization was given and by whom (the dashboard's name for the requester). */
+  authorization?: { at: number; by: string } | null;
+  resultCached: boolean;
+  summary: null | {
+    hasReport: boolean;
+    header: VulnHuntReportHeader | null;
+    manifest: VulnHuntManifest | null;
+    total: number;
+    counts: VulnHuntCounts;
+    exploitPass: number;
+    artifactCount: number;
+    resultsDir: string | null;
+  };
+}
+
+export interface VulnHuntFinding {
+  id: string;
+  title: string;
+  cwe: string | null;
+  severity: VulnHuntSeverity | null;
+  runtime: string | null;
+  exploitTest: string | null;
+  measuredImpact: string | null;
+  status: string | null;
+}
+
+export interface VulnHuntReportBundle {
+  dir: string;
+  /** Markdown written by the scanning agent: untrusted, show as plain text only. */
+  report: string;
+  findings: VulnHuntFinding[];
+  artifacts: string[];
+  header: VulnHuntReportHeader;
+  manifest: VulnHuntManifest | null;
+}
+
+export interface VulnHuntLine {
+  seq: number;
+  text: string;
+  stream: "out" | "err";
+}
+
+export interface VulnHuntStreamRead {
+  run: VulnHuntRun | null;
+  live: null | {
+    job: VulnHuntJob;
+    lines: VulnHuntLine[];
+    events: unknown[];
+    partial: string;
+    progress: { stage: "starting" | "clone" | "hunt" | "collect" | "done" };
+    nextLine: number;
+    nextEvent: number;
+  };
+}
+
+export interface VulnHuntScanRequest {
+  source: { type: "url" | "path"; value: string };
+  readOnly: boolean;
+  /** Only sent when the scan may execute code on the unit. */
+  confirmExecute?: boolean;
+  authorized: true;
+  timeoutMinutes?: number;
+  label?: string;
+}
+
+/** Error of the security-scan client: keeps the status, the busy job (409) and the delete `canForce` flag. */
+export class VulnHuntApiError extends Error {
+  status: number;
+  active: Partial<VulnHuntJob> | null;
+  canForce: boolean;
+  constructor(message: string, status: number, active: Partial<VulnHuntJob> | null = null, canForce = false) {
+    super(message);
+    this.name = "VulnHuntApiError";
+    this.status = status;
+    this.active = active;
+    this.canForce = canForce;
+  }
+}
+
+// ─── REA (Reverse Engineer Anything) tool ────────────────
+// Appended section: types of the /api/rea and /api/sparks/:id/rea endpoints.
+
+export type ReaExecClass = "static" | "native-provider" | "executes-target" | "device" | "network";
+export type ReaProviderId = "auto" | "ghidra" | "hopper" | "ida";
+
+export interface ReaSetup {
+  repository: string;
+  pinnedVersion: string;
+  node: { min: string };
+  limits: { defaultTimeoutMinutes: number; maxTimeoutMinutes: number; uploadMaxBytes: number; uploadMaxFiles: number };
+  enabled: boolean;
+  startAllowed: boolean;
+  startBlockedReason: string | null;
+  deviceWritesEnabled: boolean;
+}
+
+export interface ReaEffects {
+  launchesProcess: boolean;
+  network: boolean;
+  writesFs: boolean;
+  mutatesDevice: boolean;
+  usesProvider: boolean;
+}
+
+export type ReaArgKind = "bool" | "int" | "string" | "choice" | "list" | "intlist" | "path" | "json";
+
+export interface ReaArgSpec {
+  name: string;
+  flag: string | null;
+  kind: ReaArgKind;
+  help: string;
+  positional?: boolean;
+  required?: boolean;
+  choices?: string[];
+  min?: number;
+  max?: number;
+  default?: string | number | boolean;
+  pattern?: string;
+  maxLength?: number;
+  maxItems?: number;
+  jsonType?: "object" | "array";
+  allowEmpty?: boolean;
+  /** The value (or each list entry) must not contain . or .. path segments. Absent on older servers. */
+  noDotDot?: boolean;
+  secret?: boolean;
+  /** This option is only accepted together with the option of that name. */
+  with?: string;
+}
+
+export type ReaResultShape = "javascript-app" | "layout" | "native-function" | "generic";
+
+export interface ReaWorkflowSpec {
+  id: string;
+  label: string;
+  group: string;
+  blurb: string;
+  command: string;
+  execClass: ReaExecClass;
+  effects: ReaEffects;
+  targetKinds: Array<"path" | "upload">;
+  targets: 0 | 1 | 2;
+  targetLabel: string | null;
+  target2Label: string | null;
+  needsProvider: boolean;
+  prerequisites: string[];
+  args: ReaArgSpec[];
+  positionals: string[];
+  requireOneOf: string[] | null;
+  resultShape: ReaResultShape;
+  defaultTimeoutMinutes: number;
+  viewable: boolean;
+}
+
+export interface ReaSpec {
+  groups: Array<{ id: string; label: string; help?: string }>;
+  workflows: ReaWorkflowSpec[];
+  execClasses: Array<{ id: ReaExecClass; label: string; help: string; needsConfirm: boolean }>;
+}
+
+export interface ReaDoctorCheck {
+  name: string;
+  ok: boolean;
+  classification?: string;
+  detail?: string;
+  remediation?: string;
+}
+
+/** Ghidra on the unit and whether the dashboard can install it (the optional native-analysis engine). */
+export interface ReaGhidraStatus {
+  /** `uname -m` of the unit (aarch64 units build Ghidra's decompiler on the unit). */
+  arch: string | null;
+  /** The Ghidra directory REA would use, from GHIDRA_INSTALL_DIR, the dashboard's install or the PATH. */
+  dir: string | null;
+  version: string | null;
+  /** The native decompiler for this CPU exists in that directory. */
+  nativeOk: boolean;
+  /** Major version of the 64-bit full JDK REA would use; null when there is none. */
+  javaMajor: number | null;
+  /** Installed by this dashboard (and exported to REA by it). */
+  managed: boolean;
+  pinnedVersion: string;
+  installable: boolean;
+  installReason: string | null;
+  freeKib: number | null;
+}
+
+export interface ReaStatus {
+  reachable: boolean;
+  node: {
+    path: string | null;
+    version: string | null;
+    ok: boolean;
+    /** The install can fetch the pinned official Node.js into the user's home when none is usable. */
+    installable?: boolean;
+    installReason?: string | null;
+    installVersion?: string | null;
+  };
+  npm: boolean;
+  /** python3 is on the unit (needed only to unpack archive uploads). */
+  python3?: boolean;
+  ghidra?: ReaGhidraStatus;
+  installed: boolean;
+  version: string | null;
+  pinnedVersion: string;
+  upToDate: boolean;
+  launcher: string | null;
+  doctor: { healthy: boolean; checks: ReaDoctorCheck[] } | null;
+  providers: Array<{ id: string; label: string; available: boolean; reason?: string }>;
+  engines: Array<{ id: string; label: string; found: boolean; path?: string; unlocks: string }>;
+  error: string | null;
+}
+
+export interface ReaLine {
+  seq: number;
+  text: string;
+}
+
+export type ReaJobStatus = "running" | "completed" | "failed" | "stopped" | "detached" | "cancelled";
+
+export interface ReaJob {
+  id: string;
+  sparkId: string;
+  kind?: string;
+  type?: string;
+  status: ReaJobStatus;
+  exitCode: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+  error: string | null;
+  stage?: string | null;
+}
+
+export interface ReaInstallStream {
+  job: ReaJob;
+  lines: ReaLine[];
+  partial: string;
+  nextLine: number;
+}
+
+export type ReaRunStatus = "running" | "completed" | "failed" | "stopped" | "detached" | "gone";
+
+export interface ReaRun {
+  id: string;
+  sparkId: string;
+  status: ReaRunStatus;
+  startedAt: number;
+  finishedAt: number | null;
+  exitCode: number | null;
+  note: string | null;
+  label: string;
+  workflowId: string;
+  workflowLabel: string;
+  command: string;
+  target: { kind: "path" | "upload"; display: string } | null;
+  target2?: { kind: "path" | "upload"; display: string } | null;
+  provider: string | null;
+  execClass: ReaExecClass;
+  effects: ReaEffects;
+  authorization?: { at: number; by: string } | null;
+  confirmedExecute: boolean;
+  timeoutMinutes: number;
+  resultBytes: number | null;
+  resultCached: boolean;
+  summary: ReaResultSummary | null;
+}
+
+export interface ReaResultSummary {
+  kind: string;
+  headline: Record<string, unknown>;
+  tables: Array<{ id: string; label: string; total: number; columns: string[] }>;
+  findings: Array<{ severity?: string; title: string; detail: string }>;
+  limitations: string[];
+  unknowns: string[];
+  identity: { sha256?: string; format?: string; arch?: string; [key: string]: unknown };
+  truncated: boolean;
+}
+
+export interface ReaStreamRead {
+  run: ReaRun | null;
+  live: null | {
+    job: ReaJob;
+    lines: ReaLine[];
+    partial: string;
+    progress?: { stage?: string | null } | null;
+    nextLine: number;
+  };
+}
+
+export type ReaTarget =
+  | { kind: "path"; value: string }
+  | { kind: "upload"; uploadId: string; relPath?: string };
+
+export interface ReaRunRequest {
+  workflowId: string;
+  target?: ReaTarget;
+  target2?: ReaTarget;
+  provider?: ReaProviderId;
+  options?: Record<string, string | number | boolean | string[] | number[]>;
+  timeoutMinutes?: number;
+  authorized: true;
+  confirmExecute?: true;
+  label?: string;
+}
+
+export interface ReaViewQuery {
+  /** A named collection (modules, sections, symbols). */
+  collection?: string;
+  /** A native-function or layout facet (pseudocode, mitigations, ...). */
+  facet?: string;
+  offset?: number;
+  limit?: number;
+  kind?: "summary";
+}
+
+export interface ReaUploadCreated {
+  uploadId: string;
+  maxBytes: number;
+  maxFiles: number;
+}
+
+export interface ReaUploadCommitted {
+  uploadId: string;
+  root: string;
+  files: number;
+  bytes: number;
+  extracted: boolean;
+}
+
+/** Error of the REA client: keeps the status, the busy job (409) and the delete `canForce` flag. */
+export class ReaApiError extends Error {
+  status: number;
+  active: Partial<ReaJob> | null;
+  canForce: boolean;
+  constructor(message: string, status: number, active: Partial<ReaJob> | null = null, canForce = false) {
+    super(message);
+    this.name = "ReaApiError";
+    this.status = status;
+    this.active = active;
+    this.canForce = canForce;
   }
 }

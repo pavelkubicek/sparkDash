@@ -17,6 +17,7 @@ import { useSparkPinned } from "../../hooks/sparkVisibility";
 import { LlmModelsPanel } from "./LlmModelsPanel";
 import { RocePanel } from "./RocePanel";
 import { UnifiedMemoryPanel } from "./UnifiedMemoryPanel";
+import { HistoryPanel } from "./HistoryPanel";
 import "../../styles/spark.css";
 import { vramContextFor } from "../../shared/vramBreakdown";
 
@@ -29,7 +30,11 @@ interface SparkPageProps {
   benchShareImage?: boolean;
   /** GPU panel VRAM bar split by engine / system / free (Settings, on by default). */
   showVramBreakdown?: boolean;
+  /** 48 h / 30 d History panel under the columns (Settings → Metrics history, off by default). */
+  metricsHistory?: boolean;
   onEdit?: () => void;
+  /** Navigate to a spark id (header back-to-overview link). */
+  onNavigate?: (sparkId: string) => void;
 }
 
 type SparkView = "all" | "resources" | "services";
@@ -49,7 +54,9 @@ export function SparkPage({
   temperatureUnit,
   benchShareImage = false,
   showVramBreakdown = true,
+  metricsHistory = false,
   onEdit,
+  onNavigate,
 }: SparkPageProps) {
   const { metrics } = spark;
   // Every panel on this page renders this spark's data — keep it polling.
@@ -253,7 +260,7 @@ export function SparkPage({
 
   return (
     <div className="sp">
-      <SparkHeader spark={spark} onEdit={onEdit} />
+      <SparkHeader spark={spark} onEdit={onEdit} onNavigate={onNavigate} />
       {/* Mobile-only action row (Update Hermes / Edit / Power) — desktop keeps them in the header. */}
       <SparkActions spark={spark} onEdit={onEdit} className="sp-mobile-actions flex sm:hidden" />
       {spark.online ? <HealthList findings={spark.health} /> : null}
@@ -337,6 +344,11 @@ export function SparkPage({
             {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
           </div>
         </div>
+      )}
+
+      {/* Full width under both columns: the small multiples need the room. */}
+      {metricsHistory && (
+        <HistoryPanel key={spark.id} sparkId={spark.id} kind={spark.kind} temperatureUnit={temperatureUnit} />
       )}
     </div>
   );

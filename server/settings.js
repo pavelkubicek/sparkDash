@@ -37,7 +37,7 @@ const DEFAULTS = Object.freeze({
   showOverviewSearch: false,
   /** Overview LLM token totals card (cumulative tokens per model). On by default. */
   showLlmTokenTotals: true,
-  /** Overview KPI tiles (Fleet decode, Fleet power, Memory in use, Tokens today) and the Recent activity card. On by default. */
+  /** Overview KPI tiles (Fleet decode, Fleet power, Memory in use, Tokens in last 24 hours) and the Recent activity card. On by default. */
   showKpiDecode: true,
   showKpiPower: true,
   showKpiMemory: true,
@@ -70,6 +70,28 @@ const DEFAULTS = Object.freeze({
    * Off by default: when off the path answers 404.
    */
   prometheusExport: false,
+  /**
+   * Let the Intel (xe) probe read root-only debugfs VRAM through `sudo -n`.
+   * Off by default: without it VRAM falls back to the PCI BAR size and no sudo runs.
+   */
+  intelVramSudo: false,
+  /** VulnHunter scans, installs and harness-command changes (they run an agent on a unit). Opt-in, off by default. */
+  vulnhuntEnabled: false,
+  /** REA (Tools): install, uploads and analysis runs on a unit. Opt-in, off by default. */
+  reaEnabled: false,
+  /**
+   * Keep 48 h of 1-minute and 30 days of 15-minute history per unit (GPU, memory
+   * headroom, CPU, RAM, network, LLM tok/s and KV) for the unit page. Off by
+   * default: nothing is recorded and config/metrics-history.json is never written.
+   * The GPU chart (8 h) and Temps (7 d) histories are separate and always on.
+   */
+  metricsHistory: false,
+
+  /**
+   * Alert notifications (Settings → Alerts). Off by default: while off nothing
+   * is evaluated or sent, and the alert config / test routes refuse.
+   */
+  alertsEnabled: false,
 });
 
 const POLL_INTERVAL_MIN_MS = 500;
@@ -137,6 +159,11 @@ function _clampSettings(settings) {
   s.timeZone = isValidTimeZone(s.timeZone) ? String(s.timeZone).trim() : "";
   s.showVramBreakdown = Boolean(s.showVramBreakdown);
   s.prometheusExport = Boolean(s.prometheusExport);
+  s.intelVramSudo = Boolean(s.intelVramSudo);
+  s.vulnhuntEnabled = Boolean(s.vulnhuntEnabled);
+  s.reaEnabled = Boolean(s.reaEnabled);
+  s.metricsHistory = Boolean(s.metricsHistory);
+  s.alertsEnabled = Boolean(s.alertsEnabled);
   // Ensure temperatureUnit is valid
   if (s.temperatureUnit !== "celsius" && s.temperatureUnit !== "fahrenheit") {
     s.temperatureUnit = DEFAULTS.temperatureUnit;

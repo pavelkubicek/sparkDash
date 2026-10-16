@@ -11,6 +11,10 @@ import { TailscaleProbe } from "../collectors/TailscaleProbe.js";
 import { llmDaily } from "../collectors/LlmDaily.js";
 import { HealthEvaluator } from "../health/HealthEvaluator.js";
 import { sshExec } from "../collectors/ssh.js";
+
+/** macOS uptime in seconds from `kern.boottime` (`{ sec = 1791857261, usec = ... } ...`). */
+export const DARWIN_UPTIME_CMD =
+  "b=$(sysctl -n kern.boottime | sed -E 's/^[{] sec = ([0-9]+),.*/\\1/'); echo $(( $(date +%s) - b ))";
 import {
   POLL_INTERVAL_STORAGE,
   POLL_INTERVAL_LIVENESS,
@@ -37,6 +41,15 @@ const FAST_TIMER_DOMAINS = ["gpu", "cpu", "network", "ram", "memory"];
  * opening five round-trips per tick.
  */
 const BUNDLE_DOMAINS = ["gpu", "cpu", "ram", "network", "memory"];
+
+/**
+ * How often the resident-model helper (one read-only SSH round trip that asks
+ * the unit's docker for vLLM containers) runs. Slow on purpose: loaded models
+ * change rarely, and it is an SSH exec rather than an HTTP probe.
+ */
+const RESIDENT_MODELS_POLL_MS = 30_000;
+/** A failed discovery keeps the last list this long (three polls) before it is cleared. */
+const RESIDENT_MODELS_GRACE_MS = 3 * RESIDENT_MODELS_POLL_MS;
 
 /**
  * Liveness retry schedule. Network failures widen gradually — a rebooting host
@@ -198,6 +211,7 @@ export class SparkMonitor {
       roce: null,
       unifiedMemory: this.collector._defaultUnifiedMemory(),
       llm: [],
+      residentModels: [],
       comfy: null,
       tailscale: null,
     };
@@ -284,6 +298,10 @@ export class SparkMonitor {
     if (!this._llmMonitoringEnabled()) {
       this._metrics.llm = [];
     }
+    if (!this._residentModelsEnabled()) {
+      this._metrics.residentModels = [];
+      delete this._lastSuccess.residentModels;
+    }
 
     // ComfyUI probe — create / update / clear
     if (this._comfyMonitoringEnabled()) {
@@ -356,6 +374,13 @@ export class SparkMonitor {
     if (role === "worker") return false;
     if (role === "head") return true;
     return spark?.llmMonitoring !== false;
+  }
+
+  /** Resident-model discovery: LLM monitoring on, remote, and a Linux host. */
+  _residentModelsEnabled(spark = this.spark) {
+    if (!this._llmMonitoringEnabled(spark)) return false;
+    if (spark?.isLocal) return false;
+    return spark?.platform !== "windows" && spark?.platform !== "darwin";
   }
 
   /**
@@ -661,6 +686,7 @@ export class SparkMonitor {
       this._domainTimers[domain] = this._armDomainTimer(domain);
     }
     this._intervals.push(setInterval(() => this._pollDomain("storage"), POLL_INTERVAL_STORAGE));
+    this._intervals.push(setInterval(() => this._pollDomain("residentModels"), RESIDENT_MODELS_POLL_MS));
   }
 
   /**
@@ -762,6 +788,7 @@ export class SparkMonitor {
         roce: this._metrics.roce ?? null,
         unifiedMemory: this._metrics.unifiedMemory,
         llm: this._metrics.llm,
+        residentModels: this._metrics.residentModels,
         comfy: comfyOn ? this._metrics.comfy : null,
         tailscale: tailscaleOn ? this._metrics.tailscale : null,
       },
@@ -778,6 +805,9 @@ export class SparkMonitor {
     if (this.spark.isLocal) {
       const mapped = path.join(HOST_PATHS.PROC, "uptime");
       content = fs.readFileSync(mapped, "utf8");
+    } else if (this.spark.platform === "darwin") {
+      // macOS has no /proc/uptime; without this every Mac unit stays offline.
+      content = await sshExec(this.spark, DARWIN_UPTIME_CMD);
     } else {
       content = await sshExec(this.spark, "cat /proc/uptime");
     }
@@ -891,6 +921,8 @@ export class SparkMonitor {
         return Array.isArray(result?.interfaces) && result.interfaces.length > 0;
       case "storage":
         return Array.isArray(result) && result.length > 0;
+      case "residentModels":
+        return Array.isArray(result);
       case "llm":
         return Array.isArray(result); // an engine that is down is still a successful probe
       default:
@@ -905,6 +937,28 @@ export class SparkMonitor {
     if (this.spark.storagePollDisabled) delete out.storage;
     if (!this._llmMonitoringEnabled()) delete out.llm;
     return out;
+  }
+
+  /** Epoch ms of the last poll of `domain` that returned real data, or null (never, or not polled). */
+  lastCollectedAt(domain) {
+    const at = this._lastSuccess[domain];
+    return Number.isFinite(at) ? at : null;
+  }
+
+  /**
+   * Whether the latest completed poll of `domain` returned real data. A failed GPU/CPU read is
+   * zero-filled and every other domain keeps its previous value, so "the poll ran" is not enough.
+   */
+  collectionOk(domain) {
+    if (domain === "gpu" || domain === "cpu") return this._metricCollectionSuccessful[domain] === true;
+    const at = this._lastSuccess[domain];
+    return Number.isFinite(at) && at === this._lastUpdate[domain];
+  }
+
+  /** Current cadence (ms) of a collector that follows Settings → Poll interval, or null for other domains. */
+  pollIntervalMs(domain) {
+    const ms = this._fastIntervals[domain];
+    return Number.isFinite(ms) && ms > 0 ? ms : null;
   }
 
   _noteThrottle(gpu) {
@@ -1027,6 +1081,7 @@ export class SparkMonitor {
       this._pollDomain("comfy"),
       this._pollDomain("hermes"),
       this._pollDomain("tailscale"),
+      this._pollDomain("residentModels"),
     ].flat());
   }
 
@@ -1059,6 +1114,9 @@ export class SparkMonitor {
     if (domain === "storage" && this.spark.storagePollDisabled) return;
     // Worker nodes: no local LLM API
     if (domain === "llm" && !this._llmMonitoringEnabled()) return;
+    // Resident models are discovered over SSH, so only for units whose LLM
+    // monitoring is on (never workers) and that are remote Linux hosts.
+    if (domain === "residentModels" && !this._residentModelsEnabled()) return;
     if (domain === "comfy" && !this._comfyMonitoringEnabled()) return;
     if (domain === "hermes" && !this._hermesMonitoringEnabled()) return;
     if (domain === "gpu" && !this._gpuMonitoringEnabled()) return;
@@ -1085,6 +1143,9 @@ export class SparkMonitor {
       let result;
       let roce;
       switch (domain) {
+        case "residentModels":
+          result = await this.collector.probeResidentModels(); // null = could not tell
+          break;
         case "gpu":
           result = await this.collector.collectGpu();
           break;
@@ -1129,6 +1190,15 @@ export class SparkMonitor {
       // otherwise race the tail-end await onto the wrong object.
       if (!this._running || this._runGeneration !== runGeneration) return;
       switch (domain) {
+        case "residentModels":
+          // A failed discovery (result null) must neither look like "no models" nor
+          // flap the card: keep the previous list until it is a few polls old.
+          if (result !== null) {
+            this._metrics.residentModels = result;
+          } else if (Date.now() - (this._lastSuccess.residentModels ?? 0) > RESIDENT_MODELS_GRACE_MS) {
+            this._metrics.residentModels = [];
+          }
+          break;
         case "gpu":
           this._metrics.gpu = result;
           this._metricCollectionSuccessful.gpu = collectionWasSuccessful(result);

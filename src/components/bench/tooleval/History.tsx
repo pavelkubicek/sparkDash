@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ToolEvalRun } from "../../../api/types";
 import { Tag } from "../../ui/Tag";
+import { buildToolEvalCompareShareCard } from "../../SparkPage/benchShareCard";
+import { ShowCardButton } from "./ShowCardButton";
 import { compareGeneric, configCaveats, normalizeForCompare } from "./compare";
 import { SideBySide } from "./SideBySide";
 import { fmtDate, fmtDuration, fmtNum } from "./format";
@@ -58,7 +60,7 @@ export function History({ sparkId, sparkName, runs, error, followedId, viewedId,
   return (
     <div className="te-history">
       <p className="te-note">
-        Tick two runs to compare them. Results are only comparable when model, endpoint and options match closely; differences are listed when you compare.
+        Tick two runs to compare them, then use Show comparison card to get an image of the result. Results are only comparable when model, endpoint and options match closely; differences are listed when you compare.
       </p>
       <ul className="te-runs">
         {runs.map((r) => {
@@ -138,13 +140,13 @@ export function History({ sparkId, sparkName, runs, error, followedId, viewedId,
         })}
       </ul>
       {picked.length === 1 ? <p className="te-faint">Select one more run to compare.</p> : null}
-      {pair ? <ComparePanel key={`${pair[0].id}:${pair[1].id}`} sparkId={sparkId} a={pair[0]} b={pair[1]} /> : null}
+      {pair ? <ComparePanel key={`${pair[0].id}:${pair[1].id}`} sparkId={sparkId} sparkName={sparkName} a={pair[0]} b={pair[1]} /> : null}
     </div>
   );
 }
 
 /** Two runs side by side: deltas, categories and changed scenarios (or changed metrics for other result types). */
-function ComparePanel({ sparkId, a, b }: { sparkId: string; a: ToolEvalRun; b: ToolEvalRun }) {
+function ComparePanel({ sparkId, sparkName, a, b }: { sparkId: string; sparkName: string; a: ToolEvalRun; b: ToolEvalRun }) {
   const [swapped, setSwapped] = useState(false);
   const ref = useRef<HTMLElement>(null);
   // Picking the second run opens the comparison: bring it into view.
@@ -165,6 +167,16 @@ function ComparePanel({ sparkId, a, b }: { sparkId: string; a: ToolEvalRun; b: T
     <section ref={ref} className="panel te-card te-compare" aria-label="Run comparison">
       <div className="te-card__head">
         <h2>Compare</h2>
+        {tool ? (
+          <ShowCardButton
+            kind="tool-eval-compare"
+            label="Show comparison card"
+            build={() => buildToolEvalCompareShareCard(tool.a, tool.b, swapped ? b : a, swapped ? a : b, { sparkName })}
+            dialogLabel="Tool Eval comparison card"
+            imgAlt="Tool Eval Bench comparison card of two runs"
+            title="Render this comparison as an image you can copy or save"
+          />
+        ) : null}
       </div>
       {caveats.length ? (
         <Notice tone="warn" title="These runs are not directly comparable">

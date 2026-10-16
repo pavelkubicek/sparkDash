@@ -16,6 +16,8 @@ export const CONFIG_PATH_VARS = [
   "LLM_TOKEN_JSON_PATH",
   "LLM_LAUNCHERS_JSON_PATH",
   "TOOL_EVAL_RUNS_PATH",
+  "VULNHUNT_RUNS_PATH",
+  "REA_RUNS_PATH",
   "SHOWCASE_HISTORY_PATH",
   "BENCH_HISTORY_PATH",
   "BENCH_ACTIVE_PATH",
@@ -25,6 +27,8 @@ export const CONFIG_PATH_VARS = [
   "QUALITY_BENCH_ACTIVE_PATH",
   "GPU_MEMORY_JSON_PATH",
   "GPU_HISTORY_JSON_PATH",
+  "GPU_HISTORY_LONG_JSON_PATH",
+  "METRICS_HISTORY_JSON_PATH",
   "FLEET_ENERGY_JSON_PATH",
   "FLEET_ENERGY_MONTHLY_JSON_PATH",
   "EVENTS_JSON_PATH",
@@ -35,14 +39,18 @@ export const CONFIG_PATH_VARS = [
   "AUTOPOWER_STATE_PATH",
   "MODEL_ACTIVE_PATH",
   "MODEL_SCHEDULER_STATE_PATH",
+  "ALERTS_JSON_PATH",
 ];
 
 /** Variables that point at a directory the server writes into. */
-export const CONFIG_DIR_VARS = ["TOOL_EVAL_RESULTS_DIR"];
+export const CONFIG_DIR_VARS = ["TOOL_EVAL_RESULTS_DIR", "VULNHUNT_RESULTS_DIR", "REA_RESULTS_DIR"];
 
 /** Env entries mapping each config path variable to a file (or directory) inside `dir`. */
 export function isolatedConfigEnv(dir) {
   return {
+    // Tests must not contact an operator's opt-in inference activity source.
+    SPARKDASH_INFERENCE_ACTIVITY_URL: "",
+    SPARKDASH_INFERENCE_ACTIVITY_LABELS: "",
     ...Object.fromEntries(
       CONFIG_PATH_VARS.map((name) => [
         name,
