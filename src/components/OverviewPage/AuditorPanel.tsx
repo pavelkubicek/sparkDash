@@ -161,7 +161,10 @@ export function AuditorPanel() {
   const [analyzing, setAnalyzing] = useState<AuditorReview[]>([]);
   const [analyzingCount, setAnalyzingCount] = useState(0);
   const [finished, setFinished] = useState<AuditorReview[]>([]);
-  const [readyCount, setReadyCount] = useState(0);
+  // Count of ready reports WITH findings (has_findings filter, same query as
+  // the list below). Null until the first successful fetch; the pipeline strip
+  // then falls back to the raw engine counter.
+  const [readyCount, setReadyCount] = useState<number | null>(null);
   const [slots, setSlots] = useState<AuditorSlotsConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [webuiUrl, setWebuiUrl] = useState<string | null>(null);
@@ -257,7 +260,7 @@ export function AuditorPanel() {
         key: "auditor",
         summary: online ? (
           <>
-            {analyzingCount || (status?.analyzing ?? 0)} analyzing · {readyCount} ready
+            {analyzingCount || (status?.analyzing ?? 0)} analyzing · {readyCount ?? 0} ready
           </>
         ) : (
           "unreachable"
@@ -325,7 +328,7 @@ export function AuditorPanel() {
                   className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
                 >
                   <ExternalLinkIcon className="h-3 w-3" />
-                  Show all {readyCount} ready reports
+                  Show all {readyCount ?? 0} ready reports
                 </a>
               )}
             </div>
@@ -346,10 +349,20 @@ export function AuditorPanel() {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted">
               {(["queued", "analyzing", "findings_ready", "duplicate", "failed", "cancelled"] as const).map(
                 (key) => {
-                  const n = stats?.by_status?.[key] ?? (key === "analyzing" ? status?.analyzing : undefined);
+                  // Ready carries the list's filter: an empty ready report is
+                  // not a finding, so the strip counts the same set as the
+                  // "Finished — Ready" section and the pill.
+                  const n =
+                    key === "findings_ready"
+                      ? readyCount ?? stats?.by_status?.[key]
+                      : stats?.by_status?.[key] ?? (key === "analyzing" ? status?.analyzing : undefined);
                   if (n == null) return null;
                   return (
-                    <span key={key} className="inline-flex items-center gap-1">
+                    <span
+                      key={key}
+                      title={key === "findings_ready" ? "Ready reports with findings" : undefined}
+                      className="inline-flex items-center gap-1"
+                    >
                       <span
                         className={`inline-block h-1.5 w-1.5 rounded-full ${
                           key === "analyzing" ? "animate-pulse" : ""

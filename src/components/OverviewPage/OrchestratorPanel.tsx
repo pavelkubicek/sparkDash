@@ -21,6 +21,9 @@ import { SlotSettingsDialog } from "./SlotSettingsDialog";
 
 const POLL_MS = 5000;
 
+/** Max pending-PR rows on the card; the rest collapses into a "…" row. */
+const PENDING_PR_LIMIT = 12;
+
 /** Ticket statuses that count as "active" for the panel. */
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set([
   "in_progress",
@@ -404,9 +407,13 @@ export function OrchestratorPanel({
   const online = !error;
   const activeTickets = (tickets ?? []).filter((t) => ACTIVE_STATUSES.has(t.status));
   const activePlans = (plans ?? []).filter((p) => ACTIVE_PLAN_STATUSES.has(p.status));
-  const withPendingPrs = (tickets ?? []).filter(
-    (t) => t.pr_url && (t.pr_state === "open" || t.pr_state === "unknown")
-  );
+  // Newest first: the card shows the last PENDING_PR_LIMIT open PRs and
+  // collapses whatever is older into one "…" row (created_at is ISO).
+  const withPendingPrs = (tickets ?? [])
+    .filter((t) => t.pr_url && (t.pr_state === "open" || t.pr_state === "unknown"))
+    .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+  const shownPrs = withPendingPrs.slice(0, PENDING_PR_LIMIT);
+  const morePrs = withPendingPrs.length - shownPrs.length;
   const slotsUsed = status?.slots_used ?? slots?.effective_concurrency ?? 0;
   const slotsTotal = status?.slots_total ?? slots?.effective_concurrency ?? 0;
   const slotPct = slotsTotal > 0 ? Math.round((slotsUsed / slotsTotal) * 100) : 0;
@@ -551,24 +558,39 @@ export function OrchestratorPanel({
               Pending PRs ({withPendingPrs.length})
             </p>
             {withPendingPrs.length > 0 ? (
-              withPendingPrs.map((ticket) => (
-                <div key={`pr-${ticket.ticket_id}`} className="flex items-center gap-2">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400" />
-                  <span className="min-w-0 flex-1 truncate text-xs text-text">
-                    {ticket.name}
-                  </span>
+              <>
+                {shownPrs.map((ticket) => (
+                  <div key={`pr-${ticket.ticket_id}`} className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400" />
+                    <span className="min-w-0 flex-1 truncate text-xs text-text">
+                      {ticket.name}
+                    </span>
+                    <a
+                      href={ticket.pr_url ?? undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="shrink-0 inline-flex items-center gap-1 rounded border border-indigo-500/40 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400 transition-colors hover:border-indigo-500"
+                      title={ticket.pr_url ?? ""}
+                    >
+                      PR
+                      <ExternalLinkIcon className="h-2.5 w-2.5" />
+                    </a>
+                  </div>
+                ))}
+                {morePrs > 0 ? (
                   <a
-                    href={ticket.pr_url ?? undefined}
+                    href={webuiUrl ?? undefined}
                     target="_blank"
                     rel="noreferrer"
-                    className="shrink-0 inline-flex items-center gap-1 rounded border border-indigo-500/40 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400 transition-colors hover:border-indigo-500"
-                    title={ticket.pr_url ?? ""}
+                    title={`${morePrs} older pending pull ${morePrs === 1 ? "request" : "requests"} — open the orchestrator`}
+                    className="flex items-center gap-2 text-xs text-muted transition-colors hover:text-indigo-400"
                   >
-                    PR
-                    <ExternalLinkIcon className="h-2.5 w-2.5" />
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400/40" />
+                    <span className="min-w-0 flex-1 truncate">… and {morePrs} more</span>
+                    <ExternalLinkIcon className="h-2.5 w-2.5 shrink-0" />
                   </a>
-                </div>
-              ))
+                ) : null}
+              </>
             ) : (
               <p className="text-xs text-muted">No pending pull requests.</p>
             )}
