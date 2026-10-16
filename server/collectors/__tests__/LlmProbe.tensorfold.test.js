@@ -604,3 +604,31 @@ test("_applyTensorFoldMetrics: /metrics-only builds get decode tok/s from total 
   probe._applyTensorFoldMetrics(sample(1150, 0), 2);
   assert.equal(probe.generationTps, 0);
 });
+
+test("_applyTensorFoldMetrics: without generation_tokens_running a frozen total never erases the /health rate", () => {
+  // 0.6.0 CUDA shape (glm-5.3-flash on spark1): completion_tokens_total in
+  // /health advances per generated token, but /metrics has no running series
+  // and generation_tokens_total is finished-only (frozen mid-decode).
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888);
+  const health = (completion) => ({
+    ok: true, busy: true, prompt_tokens_total: 1000, completion_tokens_total: completion,
+  });
+  probe._applyTensorFoldHealth(health(500), 2); // seeds the counter baseline
+  probe._applyTensorFoldHealth(health(670), 2);
+  assert.equal(probe.generationTps, 85); // (670 - 500) / 2 s
+
+  // The frozen finished-only total must not stamp a 0 diff over that rate.
+  probe._applyTensorFoldMetrics(
+    "tensorfold:generation_tokens_total 400\ntensorfold:prompt_tokens_total 900", 2
+  );
+  assert.equal(probe.generationTps, 85);
+
+  // Builds that DO publish the running series still get the produced-diff rate.
+  probe._applyTensorFoldMetrics(
+    "tensorfold:generation_tokens_total 400\ntensorfold:generation_tokens_running 100\ntensorfold:prompt_tokens_total 900", 2
+  ); // seeds the produced baseline
+  probe._applyTensorFoldMetrics(
+    "tensorfold:generation_tokens_total 600\ntensorfold:generation_tokens_running 100\ntensorfold:prompt_tokens_total 900", 2
+  );
+  assert.equal(probe.generationTps, 100); // (700 - 500) / 2 s
+});

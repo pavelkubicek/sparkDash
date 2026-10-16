@@ -1509,10 +1509,13 @@ export class LlmProbe {
 
     // The total moves only when a request finishes; `generation_tokens_running` counts the
     // tokens of requests still decoding. Their sum grows steadily while tokens are produced
-    // (a finishing request moves its tokens from one to the other), so its diff is the live rate.
+    // (a finishing request moves its tokens from one to the other), so its diff is the live
+    // rate on builds that publish the running series (tensorfold-native). Builds without it
+    // (0.6.0 CUDA) freeze `generation_tokens_total` mid-decode — a total-only diff would
+    // stamp 0 over the /health completion-token rate — so there generationTps is left alone.
     // Prefill stays as is: prompt_tokens_total includes cached prefix tokens.
-    if (Number.isFinite(gen) && gen >= 0) {
-      const inFlight = tf("generation_tokens_running");
+    const inFlight = tf("generation_tokens_running");
+    if (Number.isFinite(gen) && gen >= 0 && inFlight != null) {
       const produced = gen + (Number.isFinite(inFlight) && inFlight >= 0 ? inFlight : 0);
       const prev = this._tensorfoldPromProduced;
       this._tensorfoldPromProduced = produced;
