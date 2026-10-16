@@ -2031,7 +2031,7 @@ export class SystemCollector {
     const gpuDevices = [...cliDevices, ...otherDevices];
     const gpu = this._aggregateGpuDevices(gpuDevices);
     if (!gpuDevices.length) return this._defaultGpu();
-    const { used: cliUsed, total: cliTotal } = this._sumVram(perDeviceVram);
+    let { used: cliUsed, total: cliTotal } = this._sumVram(perDeviceVram);
     this.nvidiaComputeAppsCache.clear();
     let computeSum = 0;
     for (const app of apps) {
