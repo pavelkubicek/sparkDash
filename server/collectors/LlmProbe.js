@@ -103,7 +103,7 @@ export class LlmProbe {
     this._openTunnel = openSshLlmTunnel;
 
     // State
-    this.backendType = null; // 'vllm' | 'llama.cpp' | 'sglang' | 'lmstudio' | 'ollama' | 'ds4' | 'exl3' | 'q27' | 'tensorfold' | 'freetoken' | null
+    this.backendType = null; // 'vllm' | 'llama.cpp' | 'sglang' | 'lmstudio' | 'ollama' | 'ds4' | 'exl3' | 'q27' | 'tensorfold' | 'freetoken' | 'radiance' | 'strata' | null
     this.serverIsOpenAI = null; // true = OpenAI-compatible
     /** Whether /v1/models (or /slots) answered without credentials. null = unknown. */
     this.authOpen = null;
@@ -117,6 +117,8 @@ export class LlmProbe {
     this.slotsTotal = 0;
     this.generationTps = 0;
     this.prefillTps = 0;
+    this.decodeActive = false;
+    this.generationTpsSource = null;
     /** Live cached-prefill tok/s when the backend splits kinds (ds4 / llama.cpp / sglang). null otherwise. */
     this.cachedPrefillTps = null;
     /** Live uncached/computed prefill tok/s when split is available. null otherwise. */
@@ -143,6 +145,7 @@ export class LlmProbe {
     this.lastTtftCount = null;
     /** Previous `vllm:iteration_tokens_total_sum` (engine-step tokens). */
     this.lastIterSum = null;
+    this.lastRadianceSteps = null;
     this.lastProbeTime = 0;
 
     // Cumulative total output tokens (generation) as reported by the LLM server
@@ -275,6 +278,10 @@ export class LlmProbe {
   }
 
   async _probeOnce() {
+    this.decodeActive = false;
+    this.generationTpsSource = null;
+    this.prefillActive = false;
+    if (this.backendType === "strata") this._clearStrataRates();
     try {
       const shouldDetect =
         this.serverIsOpenAI === null ||
@@ -394,6 +401,8 @@ export class LlmProbe {
     this.models = [];
     this.generationTps = 0;
     this.prefillTps = 0;
+    this.decodeActive = false;
+    this.generationTpsSource = null;
     this.cachedPrefillTps = null;
     this.uncachedPrefillTps = null;
     this.contextLength = null;
@@ -416,6 +425,11 @@ export class LlmProbe {
     this.mtpAcceptanceRate = null;
     this.slotState.clear();
     this.lastTokenCounts = { input: 0, output: 0 };
+    // The counters restart from zero, so the next poll may only seed them. The
+    // per-backend `dtSec < 10` guards do that when the probe clock is zero too;
+    // failed polls keep advancing it, which is how lifetime totals used to be
+    // reported as one interval's worth of tokens.
+    this.lastProbeTime = 0;
     this._tensorfoldSeeded = false;
     this._tensorfoldPrefillSeconds = null;
     this._tensorfoldPrevCached = null;
@@ -426,6 +440,7 @@ export class LlmProbe {
     this.lastTtftSum = null;
     this.lastTtftCount = null;
     this.lastIterSum = null;
+    this.lastRadianceSteps = null;
     this._sglangStickyTps = null;
     this._sglangLoadGenTps = null;
   }
@@ -445,6 +460,30 @@ export class LlmProbe {
 
   // ─── Server type detection ───────────────────────────────
   async _detectServerType() {
+    // Strata deliberately provides llama.cpp-shaped /slots, but those slots
+    // omit its live decode counters. Check the explicit fingerprint first.
+    if (this.backendType == null || this.backendType === "llama.cpp" || this.backendType === "strata") {
+      let otherServer = false;
+      try {
+        const healthRes = await this._fetch(`${this.baseUrl}/health`);
+        if (healthRes.ok) {
+          const health = await healthRes.json();
+          if (health?.service === "strata") {
+            this.serverIsOpenAI = true;
+            this.backendType = "strata";
+            return;
+          }
+          // A JSON object that is not Strata's means another server took the port.
+          otherServer = health != null && typeof health === "object" && !Array.isArray(health);
+        }
+      } catch { /* continue with the other backend signatures */ }
+      // A transient health failure must not demote a known Strata to its
+      // compatibility shim. Repeated actual probe failures reset detection.
+      if (this.backendType === "strata") {
+        if (!otherServer) return;
+        this.backendType = null;
+      }
+    }
     // Skip the llama.cpp /slots probe once we've positively identified an
     // OpenAI-compatible backend. vLLM / sglang / ds4-server have no /slots,
     // so re-probing it on every re-detect cycle just spams 404s in the
@@ -459,7 +498,8 @@ export class LlmProbe {
       this.backendType !== "exl3" &&
       this.backendType !== "q27" &&
       this.backendType !== "tensorfold" &&
-      this.backendType !== "freetoken"
+      this.backendType !== "freetoken" &&
+      this.backendType !== "radiance"
     ) {
       const slotUrl = `${this.baseUrl}/slots`;
       try {
@@ -510,7 +550,7 @@ export class LlmProbe {
    * Classify an OpenAI-compatible server: LM Studio, Ollama, ds4, SGLang,
    * EXL3, q27, TensorFold, FreeToken, or vLLM (default).
    * @param {unknown} ownedBy
-   * @returns {Promise<"lmstudio" | "ollama" | "ds4" | "sglang" | "exl3" | "q27" | "tensorfold" | "freetoken" | "vllm">}
+   * @returns {Promise<"lmstudio" | "ollama" | "ds4" | "sglang" | "exl3" | "q27" | "tensorfold" | "freetoken" | "radiance" | "vllm">}
    */
   async _classifyOpenAIBackend(ownedBy) {
     // LM Studio first: it answers 200 + JSON on every path, so the heuristic
@@ -528,6 +568,8 @@ export class LlmProbe {
       if (/tensorfold/i.test(ownedBy)) return "tensorfold";
       // FreeToken reports owned_by: "FreeToken".
       if (/freetoken/i.test(ownedBy)) return "freetoken";
+      // Radiance (native RDNA engine) reports owned_by: "radiance" and serves vLLM-format /metrics.
+      if (/radiance/i.test(ownedBy)) return "radiance";
       // Ollama's OpenAI-compat /v1/models may report its own name.
       if (/^ollama$/i.test(ownedBy)) return "ollama";
     }
@@ -751,7 +793,22 @@ export class LlmProbe {
         this.backendType = "tensorfold";
       } else if (/freetoken/i.test(owned) && this.backendType !== "ds4") {
         this.backendType = "freetoken";
+      } else if (/radiance/i.test(owned) && this.backendType !== "ds4") {
+        this.backendType = "radiance";
       }
+    }
+
+    if (this.backendType === "strata") {
+      const res = await this._fetch(`${this.baseUrl}/metrics`, LLM_PROBE_TIMEOUT_MS, {
+        headers: { Accept: "application/json" },
+      });
+      const auth = this._noteAuthStatus(res.status);
+      if (auth === "auth") return this._getSnapshot();
+      if (!res.ok) throw new Error("Strata /metrics unreachable");
+      const data = await res.json();
+      this._applyStrataMetrics(data);
+      if (data.live.state === "unloaded") return this._defaultLlm();
+      return this._getSnapshot();
     }
 
     if (this.backendType === "freetoken") {
@@ -782,22 +839,41 @@ export class LlmProbe {
     // counters under the `tensorfold:` prefix (older CUDA/MLX builds have
     // neither, and rates stay 0 rather than a guessed number).
     if (this.backendType === "tensorfold") {
-      const [healthRes, metricsRes] = await Promise.all([
-        this._fetch(`${this.baseUrl}/health`).catch(() => null),
-        this._fetch(`${this.baseUrl}/metrics`).catch(() => null),
-      ]);
-      let health = null;
-      if (healthRes && healthRes.ok) health = await healthRes.json().catch(() => null);
-      this._applyTensorFoldHealth(health, dtSec);
-      if (metricsRes && metricsRes.ok) {
-        const metricsTxt = await metricsRes.text().catch(() => "");
-        if (LlmProbe._metricsLookLikeTensorFold(metricsTxt)) {
-          // A decode rate the server reports itself (/health `live`) wins over
-          // the /metrics counter diff: without dtSec the diff below stays inert.
-          const liveDecode = health?.live?.decode_tokens_per_second;
-          const hasLiveDecode = liveDecode != null && Number.isFinite(Number(liveDecode));
-          this._applyTensorFoldMetrics(metricsTxt, hasLiveDecode ? undefined : dtSec);
+      try {
+        const healthRes = await this._fetch(`${this.baseUrl}/health`);
+        if (healthRes.ok) {
+          const health = await healthRes.json().catch(() => null);
+          this._applyTensorFoldHealth(health, dtSec);
+          this._applyTensorFoldLive(health);
+          // Newer builds report live rates in /health but cumulative totals only on Prometheus /metrics.
+          const totalRaw = health?.completion_tokens_total;
+          const needsTotals = totalRaw == null || !Number.isFinite(Number(totalRaw));
+          // A /health with token totals but no waiting count (TensorFold's Python engine) keeps
+          // its queue gauge in /metrics alone: poll it queue-only, so /health stays the authority
+          // for totals, rates, drafts and slots, and only the waiting gauge refreshes. A
+          // `live.waiting` the server reports itself is not overwritten.
+          const needsQueue = !needsTotals && this.requestsWaiting == null;
+          if (needsTotals || needsQueue) {
+            const metricsRes = await this._fetch(`${this.baseUrl}/metrics`).catch(() => null);
+            const metricsTxt =
+              metricsRes && metricsRes.ok ? await metricsRes.text().catch(() => "") : "";
+            if (LlmProbe._metricsLookLikeTensorFold(metricsTxt)) {
+              // A decode rate the server reports itself (/health `live`) wins over
+              // the /metrics counter diff: without dtSec the diff below stays inert.
+              const liveDecode = health?.live?.decode_tokens_per_second;
+              const hasLiveDecode = liveDecode != null && Number.isFinite(Number(liveDecode));
+              this._applyTensorFoldMetrics(
+                metricsTxt,
+                needsQueue || hasLiveDecode ? undefined : dtSec,
+                needsQueue
+              );
+            }
+          }
+        } else {
+          this._applyTensorFoldHealth(null, dtSec);
         }
+      } catch {
+        this._applyTensorFoldHealth(null, dtSec);
       }
       return this._getSnapshot();
     }
@@ -871,6 +947,7 @@ export class LlmProbe {
     const wantsPrometheus =
       this.backendType == null ||
       this.backendType === "vllm" ||
+      this.backendType === "radiance" ||
       this.backendType === "ds4" ||
       this.backendType === "q27" ||
       this.backendType === "sglang";
@@ -896,7 +973,11 @@ export class LlmProbe {
             // positively-identified backend (LM Studio, tensorfold, …) must not
             // be downgraded just because its /metrics body isn't Prometheus text
             // (LM Studio answers 200 + JSON on every path).
-            if (this.backendType == null || this.backendType === "vllm") {
+            if (this.backendType === "radiance") {
+              // Radiance exports the vLLM series names (prompt/generation totals, TTFT histogram).
+              this._applyVllmMetrics(txt, dtSec);
+              this._applyRadianceLiveRates(txt);
+            } else if (this.backendType == null || this.backendType === "vllm") {
               this.backendType = "vllm";
               this._applyVllmMetrics(txt, dtSec);
             }
@@ -1298,6 +1379,101 @@ export class LlmProbe {
     if (stats.model?.id) applyModelRef(this, stats.model.id);
   }
 
+  _clearStrataRates() {
+    this.generationTps = 0;
+    this.prefillTps = 0;
+    this.decodeActive = false;
+    this.prefillActive = false;
+    this.generationTpsSource = null;
+    this.slotsActive = 0;
+    this.requestsRunning = null;
+    this.requestsWaiting = null;
+  }
+
+  /**
+   * Strata v0.1.45 JSON /metrics. Totals advance only at completion, so never
+   * difference them for live TPS. Slot states can differ from live.state,
+   * which describes only the newest active request in batch mode.
+   */
+  _applyStrataMetrics(data) {
+    this._clearStrataRates();
+    const live = data?.live;
+    if (!data?.engine || typeof data.engine !== "object" || Array.isArray(data.engine) ||
+      !live || !["idle", "unloaded", "reading", "generating"].includes(live.state)) {
+      throw new Error("Invalid Strata /metrics payload");
+    }
+    const nonnegative = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+    const rate = (value) => Math.round(value * 100) / 100;
+    // Solo mode omits slots. A malformed/missing batch list must not be
+    // mistaken for solo mode and authorize a rate from the selected request.
+    if ((Object.hasOwn(live, "slots") && !Array.isArray(live.slots)) ||
+      (nonnegative(live.parallel) > 0 && !Array.isArray(live.slots))) {
+      throw new Error("Invalid Strata slot metrics");
+    }
+    const slots = Array.isArray(live.slots) ? live.slots : [];
+    const reading = slots.filter((s) => s?.state === "reading");
+    const decoding = slots.filter((s) => s?.state === "decoding");
+    const occupied = reading.length + decoding.length;
+    const capacity = nonnegative(live.parallel);
+    this.slotsTotal = capacity > 0 ? capacity : slots.length || 1;
+    this.slotsActive = slots.length > 0 ? occupied : (live.state === "reading" || live.state === "generating" ? 1 : 0);
+    this.requestsRunning = nonnegative(live.running) ?? this.slotsActive;
+    // FIFO queued, engine waiting and admitting are different/overlapping
+    // populations; adding them would double-count waiting requests.
+    this.requestsWaiting = nonnegative(live.queued);
+    if (live.state !== "unloaded") {
+      this.decodeActive = decoding.length > 0 || live.state === "generating";
+      this.prefillActive = reading.length > 0 || live.state === "reading";
+    }
+
+    const windowRate = nonnegative(live.tok_s);
+    if (this.decodeActive && live.state === "generating" && windowRate != null) {
+      this.generationTps = rate(windowRate);
+      this.generationTpsSource = "window";
+    } else if (this.decodeActive && decoding.length > 0 &&
+      (!Object.hasOwn(live, "outside_slots") || nonnegative(live.outside_slots) === 0) &&
+      decoding.every((s) => nonnegative(s.tok_s) != null)) {
+      // The newest request may be reading, hiding the aggregate window rate.
+      // Slot TPS is generated/(now-first_token), so label this decode mean
+      // explicitly. Never publish a partial sum when any slot rate is missing.
+      this.generationTps = rate(decoding.reduce((sum, s) => sum + s.tok_s, 0));
+      this.generationTpsSource = "slot-mean";
+    }
+    // PP progress is engine-global and can survive an earlier batch request.
+    // The UI labels this as the last reported mean, never aggregate prefill.
+    // Oversized prompts can take Strata's solo path even with batch enabled.
+    // Confirm unfinished engine progress before showing its mean while every
+    // batch slot is idle; queued requests alone are not prefill evidence.
+    const promptRead = nonnegative(live.prompt_read);
+    const promptTotal = nonnegative(live.prompt_total);
+    const outsidePrefill = nonnegative(live.outside_slots) > 0 &&
+      promptRead > 0 && promptTotal > promptRead;
+    if (this.prefillActive && live.state === "reading" &&
+      (slots.length === 0 || reading.length > 0 || outsidePrefill)) {
+      this.prefillTps = rate(nonnegative(live.prefill_tok_s_mean) ?? 0);
+    }
+
+    const totals = data.totals ?? {};
+    this.totalPromptTokens = nonnegative(totals.prompt_tokens);
+    this.totalOutputTokens = nonnegative(totals.output_tokens) ?? 0;
+    this.totalCachedTokens = nonnegative(totals.reused);
+    // Keep the /v1/models value when this payload carries no usable limit.
+    const maxContext = nonnegative(data.engine.max_context);
+    if (maxContext > 0) this.contextLength = maxContext;
+    this.gpuMemoryUtilization = null;
+    this.kvCacheUsage = null;
+    this._clearEngineMemory();
+    this.cachedPrefillTps = null;
+    this.uncachedPrefillTps = null;
+    this.ttftSeconds = null;
+    this.ttftP95Seconds = null;
+    this.e2eP95Seconds = null;
+    this.itlP95Seconds = null;
+    this.preemptionsTotal = null;
+    this.prefixCacheHitRate = null;
+    this.mtpAcceptanceRate = null;
+  }
+
   /**
    * @param {Record<string, unknown> | null} data
    * @param {number} dtSec
@@ -1495,14 +1671,16 @@ export class LlmProbe {
    * decode rate, because that server-measured value wins.
    * @param {string} txt
    * @param {number} [dtSec]
+   * @param {boolean} [queueOnly=false] apply only the waiting gauge: for builds whose /health
+   * carries the totals but no waiting count, /metrics is still the queue's only source.
    */
-  _applyTensorFoldMetrics(txt, dtSec) {
+  _applyTensorFoldMetrics(txt, dtSec, queueOnly = false) {
     const tf = (name) => this._getPromMetric(txt, `tensorfold:${name}`);
-    const prompt = tf("prompt_tokens_total");
-    const gen = tf("generation_tokens_total");
+    const prompt = queueOnly ? null : tf("prompt_tokens_total");
+    const gen = queueOnly ? null : tf("generation_tokens_total");
     if (prompt != null) this.totalPromptTokens = prompt;
     if (gen != null) this.totalOutputTokens = gen;
-    if (this.totalCachedTokens == null) {
+    if (!queueOnly && this.totalCachedTokens == null) {
       const cached = tf("cached_tokens_total");
       if (cached != null) this.totalCachedTokens = cached;
     }
@@ -1526,13 +1704,14 @@ export class LlmProbe {
 
     // Gauges mirror the /health `live` block; the engine's own counters also
     // cover the case where /health failed this poll.
-    const running = tf("requests_running");
+    const running = queueOnly ? null : tf("requests_running");
     if (running != null) {
       this.requestsRunning = Math.round(running);
       this.slotsActive = Math.round(running);
     }
     const waiting = tf("requests_waiting");
     if (waiting != null) this.requestsWaiting = Math.round(waiting);
+    if (queueOnly) return;
     // KV fill is reported per pool/stream; the most pressured pool is the one
     // that preempts, so max is the honest headline.
     const kv =
@@ -1579,6 +1758,36 @@ export class LlmProbe {
   }
 
   /**
+   * Radiance only advances vllm:{prompt,generation}_tokens_total when a request
+   * finishes, so counter deltas read 0 during a request and then spike on the
+   * poll it completes in. It also exports live engine-rate gauges; use them
+   * while the matching engine-step counters advance (the gauges decay slowly
+   * after the engine goes idle, so the step counters gate them).
+   * Older builds without the gauges keep the counter-derived rates.
+   * @param {string} txt
+   */
+  _applyRadianceLiveRates(txt) {
+    const decodeRate = this._getPromMetric(txt, "radiance:decode_tokens_per_second");
+    const prefillRate = this._getPromMetric(txt, "radiance:prefill_tokens_per_second");
+    const prefillSteps = this._getPromMetric(txt, "radiance:engine_steps_prefill_total");
+    const decodeSteps = this._getPromMetric(txt, "radiance:engine_steps_decode_total");
+    const mixedSteps = this._getPromMetric(txt, "radiance:engine_steps_mixed_total") ?? 0;
+    if (decodeRate == null || prefillRate == null || prefillSteps == null || decodeSteps == null) {
+      this.lastRadianceSteps = null;
+      return;
+    }
+    const steps = { prefill: prefillSteps + mixedSteps, decode: decodeSteps + mixedSteps };
+    const last = this.lastRadianceSteps;
+    this.lastRadianceSteps = steps;
+    if (last == null) return;
+    const round2 = (v) => Math.max(0, Math.round(v * 100) / 100);
+    const prefilling = steps.prefill > last.prefill;
+    this.generationTps = steps.decode > last.decode ? round2(decodeRate) : 0;
+    this.prefillTps = prefilling ? round2(prefillRate) : 0;
+    this.prefillActive = prefilling && (this.requestsRunning ?? 0) > 0;
+  }
+
+  /**
    * Apply stock vLLM Prometheus /metrics (tok/s + inference tiles).
    * @param {string} txt
    * @param {number} dtSec
@@ -1598,8 +1807,22 @@ export class LlmProbe {
       // vLLM prefix-cache counters are token-granular (queries += prompt
       // tokens/request, hits += tokens served from cache), so cached_tokens
       // is directly the cumulative cached share of the prompt.
-      const cachedTok = this._getVllmMetric(txt, "prefix_cache_hits_total");
+      const cachedTok =
+        this._getVllmMetric(txt, "prompt_tokens_cached_total") ??
+        this._getVllmMetric(txt, "prefix_cache_hits_total");
       if (cachedTok != null) this.totalCachedTokens = cachedTok;
+      // prompt_tokens_total counts prefix-cache hits too; a 97%-cached agent
+      // prompt would otherwise read as 100k+ tok/s "prefill". Only the
+      // computed share is real prefill work.
+      const prevCached = this.lastPrefillKinds?.cached;
+      const deltaCached =
+        cachedTok != null && prevCached != null ? Math.max(0, cachedTok - prevCached) : 0;
+      const deltaComputedIn = Math.max(0, deltaIn - deltaCached);
+      this._setPrefillSplitRates(
+        cachedTok,
+        cachedTok != null ? Math.max(0, promptTokens - cachedTok) : null,
+        dtSec
+      );
       const ttftSum = this._getVllmMetric(txt, "time_to_first_token_seconds_sum");
       const deltaIter =
         iterSum != null && this.lastIterSum != null ? iterSum - this.lastIterSum : 0;
@@ -1615,10 +1838,10 @@ export class LlmProbe {
         const livePrefill =
           prefillIter > 0 && !specNoise ? prefillIter / dtSec : 0;
         const finishedPrefill =
-          deltaIn > 0 && deltaTtft > 0
-            ? deltaIn / deltaTtft
-            : deltaIn > 0 && livePrefill <= 0
-              ? deltaIn / dtSec
+          deltaComputedIn > 0 && deltaTtft > 0
+            ? deltaComputedIn / deltaTtft
+            : deltaComputedIn > 0 && livePrefill <= 0
+              ? deltaComputedIn / dtSec
               : 0;
         this.prefillTps = Math.max(
           0,
@@ -2182,8 +2405,10 @@ export class LlmProbe {
             const dPrompted = prompted - lastState.prompted;
             this.slotState.set(slotId, { decoded, prompted });
             if (dtSec > 0 && dtSec < 10) {
-              totalGen += dDecoded / dtSec;
-              totalPrefill += dPrompted / dtSec;
+              // Clamp per slot: a slot that begins a new request counts down
+              // (its counters restart) and must not cancel another slot's progress.
+              totalGen += Math.max(0, dDecoded) / dtSec;
+              totalPrefill += Math.max(0, dPrompted) / dtSec;
             }
           }
 
@@ -2345,8 +2570,13 @@ export class LlmProbe {
    * @param {string} txt
    */
   _applyVllmKvPool(txt) {
-    const tokens = this._sumPromLabel(txt, "vllm:cache_config_info", "kv_cache_size_tokens");
-    const bytes = this._sumPromLabel(txt, "vllm:cache_config_info", "kv_cache_memory_bytes");
+    // Radiance has no cache_config_info; it reports the pool as radiance:kv_cache_max_{tokens,bytes} gauges.
+    const tokens =
+      this._sumPromLabel(txt, "vllm:cache_config_info", "kv_cache_size_tokens") ??
+      this._getPromMetric(txt, "radiance:kv_cache_max_tokens");
+    const bytes =
+      this._sumPromLabel(txt, "vllm:cache_config_info", "kv_cache_memory_bytes") ??
+      this._getPromMetric(txt, "radiance:kv_cache_max_bytes");
     this.kvCacheTokens = tokens;
     this.kvCacheMemoryBytes = bytes;
     if (tokens != null && this.kvCacheUsage != null && Number.isFinite(this.kvCacheUsage)) {
@@ -2519,13 +2749,16 @@ export class LlmProbe {
       modelId: this.models.length > 1 ? this.models[0] : this.modelId || null,
       modelPath: this.modelPath || null,
       models: metricsLive ? [...this.models] : [],
-      // Native enrichment may set a context limit; routers have no shared limit.
-      contextLength: this.models.length > 1 ? null : this.contextLength,
+      // Strata advertises aliases for one loaded engine, sharing its native
+      // context limit. Genuine multi-model routers still have no shared limit.
+      contextLength: this.models.length > 1 && this.backendType !== "strata" ? null : this.contextLength,
       gpuMemoryUtilization: this.gpuMemoryUtilization,
       slotsActive: this.slotsActive,
       slotsTotal: this.slotsTotal,
       generationTps: this.generationTps,
       prefillTps: this.prefillTps,
+      decodeActive: this.decodeActive === true,
+      generationTpsSource: this.generationTpsSource,
       prefillActive: this.prefillActive === true,
       cachedPrefillTps: this.cachedPrefillTps,
       uncachedPrefillTps: this.uncachedPrefillTps,
@@ -2566,6 +2799,8 @@ export class LlmProbe {
       slotsTotal: 0,
       generationTps: 0,
       prefillTps: 0,
+      decodeActive: false,
+      generationTpsSource: null,
       prefillActive: false,
       cachedPrefillTps: null,
       uncachedPrefillTps: null,

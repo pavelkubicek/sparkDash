@@ -89,4 +89,5 @@ services:
       # Operator local timezone — scheduler windows must not drift with UTC.
       - TZ=Europe/Prague
       - SSH_CONTROL_PERSIST_SECONDS=${SSH_CONTROL_PERSIST_SECONDS:-60}
+      - MAX_ACTIVE_BENCH_JOBS=${MAX_ACTIVE_BENCH_JOBS:-2}
       - SSH_IDENTITY_FILE=${SSH_IDENTITY_FILE:-}

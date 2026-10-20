@@ -18,10 +18,11 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { AuthMode, SparkSnapshot } from "../../api/types";
-import { ACTIVITY_ID, ENERGY_ID, OVERVIEW_ID, SHOWCASE_ID, TEMPS_ID, TOKENS_ID, benchId, idToPath, toolId } from "../../constants";
+import { isWorkerSpark } from "../../api/sparkRole";
+import { ACTIVITY_ID, COST_ID, ENERGY_ID, OVERVIEW_ID, SHOWCASE_ID, TEMPS_ID, TOKENS_ID, benchId, idToPath, toolId } from "../../constants";
 import { BENCH_TYPES } from "../bench/benchCatalog";
 import { TOOL_TYPES } from "../tools/toolsCatalog";
-import { BoltIcon, ChevronDownIcon, GearIcon, GithubIcon, GlobeIcon, GridIcon, ListIcon, MicroscopeIcon, PanelLeftIcon, PlusIcon, SearchIcon, TerminalIcon, ThermometerIcon, TokensIcon, XLogoIcon } from "../ui/icons";
+import { BoltIcon, ChevronDownIcon, CoinsIcon, GearIcon, GithubIcon, GlobeIcon, GridIcon, ListIcon, MicroscopeIcon, PanelLeftIcon, PlusIcon, SearchIcon, TerminalIcon, ThermometerIcon, TokensIcon, XLogoIcon } from "../ui/icons";
 import { OpenAccessChip } from "../OpenAccessChip";
 import { ThemeSwitch } from "../ThemeSwitch";
 import { isThrottling, railSubLabel } from "./sparkSummary";
@@ -70,6 +71,22 @@ function dotClass(spark: SparkSnapshot): string {
   if (!spark.online) return "sdot sdot--off";
   if (isThrottling(spark)) return "sdot sdot--warn";
   return "sdot";
+}
+
+/**
+ * Strata exposes explicit activity flags when it has no current decode window.
+ * A zero decode rate during either state is not an idle throughput reading, so
+ * keep the rail from presenting it as a measured 0.0 tok/s.
+ */
+function sidebarSubLabel(spark: SparkSnapshot): string {
+  if (!spark.online) return railSubLabel(spark);
+  if (isWorkerSpark(spark)) return "worker";
+  const llm = Array.isArray(spark.metrics.llm) ? spark.metrics.llm.find((entry) => entry.available) : null;
+  if (llm?.backend === "strata" && !(Number.isFinite(llm.generationTps) && llm.generationTps > 0)) {
+    if (llm.prefillActive) return "prefilling";
+    if (llm.decodeActive) return "decoding";
+  }
+  return railSubLabel(spark);
 }
 
 /**
@@ -145,7 +162,7 @@ function RailSpark({
         <i className={dotClass(spark)} aria-hidden />
         <span className="rail-item__name">{spark.name}</span>
       </a>
-      <span className="rail-item__sub">{railSubLabel(spark)}</span>
+      <span className="rail-item__sub">{sidebarSubLabel(spark)}</span>
     </div>
   );
 }
@@ -306,7 +323,7 @@ export function AppSidebar({
                   <i className={dotClass(s)} aria-hidden />
                   <span className="rail-item__name">{s.name}</span>
                 </a>
-                <span className="rail-item__sub">{railSubLabel(s)}</span>
+                <span className="rail-item__sub">{sidebarSubLabel(s)}</span>
               </div>
             ))}
           </nav>
@@ -336,6 +353,15 @@ export function AppSidebar({
           >
             <TokensIcon className="h-4 w-4" />
             <span className="rail-item__name">Token totals</span>
+          </a>
+          <a
+            href={idToPath(COST_ID)}
+            className={`rail-item ${activeId === COST_ID ? "is-active" : ""}`}
+            onClick={inApp(() => onSelect(COST_ID))}
+            aria-current={activeId === COST_ID ? "page" : undefined}
+          >
+            <CoinsIcon className="h-4 w-4" />
+            <span className="rail-item__name">Cost compare</span>
           </a>
           <a
             href={idToPath(ENERGY_ID)}

@@ -370,6 +370,33 @@ test("probe: a decode rate reported in /health is not replaced by the /metrics c
   assert.equal(snap.generationTps, 33.5);
 });
 
+test("probe: TensorFold with cumulative counters in /health reads only the queue from /metrics", async () => {
+  const probe = new LlmProbe({ lanIp: "10.0.0.1" }, 8888);
+  const seen = [];
+  probe._fetch = async (url) => {
+    const u = String(url);
+    seen.push(u);
+    if (u.endsWith("/slots")) return notFound();
+    if (u.endsWith("/v1/models")) return jsonRes(CUDA_MODELS);
+    if (u.endsWith("/health")) return jsonRes({ prompt_tokens_total: 10, completion_tokens_total: 20, busy: false });
+    if (u.endsWith("/metrics")) {
+      const txt = [
+        "tensorfold:requests_running 9",
+        "tensorfold:requests_waiting 2",
+        "tensorfold:generation_tokens_total 999",
+        "tensorfold:mtp_drafted_total 9",
+        "tensorfold:mtp_accepted_total 9",
+        "",
+      ].join("\n");
+      return { ok: true, status: 200, text: async () => txt, json: async () => ({}) };
+    }
+    return notFound();
+  };
+  const snap = await probe.probe();
+  assert.equal(seen.some((u) => u.endsWith("/metrics")), true); // the queue needs this poll
+  assert.equal(snap.requestsWaiting, 2); // the queue is /metrics-only for this /health shape
+  assert.equal(snap.totalOutputTokens, 20); // /health totals stay authoritative (999 not applied)
+});
 test("_applyTensorFoldHealth: CUDA 0.6.0 KV pool tokens give the KV fill", () => {
   const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888);
   // spark-1, TensorFold 0.6.0 CUDA, idle with 32 kept prompts.
