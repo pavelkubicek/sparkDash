@@ -22,5 +22,10 @@
   "energyPricePerKwh": null,
   "energyCurrency": "$",
   "showVramBreakdown": true,
-  "prometheusExport": false
+  "prometheusExport": false,
+  "intelVramSudo": false,
+  "vulnhuntEnabled": true,
+  "reaEnabled": false,
+  "metricsHistory": false,
+  "alertsEnabled": false
 }
