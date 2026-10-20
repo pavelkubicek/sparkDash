@@ -24,7 +24,7 @@
   "showVramBreakdown": true,
   "prometheusExport": false,
   "intelVramSudo": false,
-  "vulnhuntEnabled": true,
+  "vulnhuntEnabled": false,
   "reaEnabled": false,
   "metricsHistory": false,
   "alertsEnabled": false
