@@ -7,7 +7,7 @@
   "benchDebugTraces": false,
   "density": "comfortable",
   "showModelLauncher": true,
-  "showFleetEnergy": true,
+  "showFleetEnergy": false,
   "energyAlwaysSampling": false,
   "showFleetExceptions": false,
   "showOverviewSearch": false,

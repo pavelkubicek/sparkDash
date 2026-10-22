@@ -274,6 +274,7 @@ wrapper_alive() { kill -0 "$INNER" 2>/dev/null && tr '\\0' ' ' 2>/dev/null < "/p
   echo "[sparkdash] the run hit its time limit"
   kill -TERM -- "-$INNER" 2>/dev/null
 ) &
+WD=$!
 
 export NO_COLOR=1
 ${ENGINE_ENV}
@@ -330,9 +331,16 @@ fi
 [ "$RC" = 124 ] && echo "[sparkdash] the run was ended at its time limit"
 echo "[sparkdash] stage: done"
 # Whatever rea left in this session (the watchdog and its sleep, orphaned helpers) ends now.
+# A bare \`wait\` racing with a group kill aimed at this shell itself can spin at 100% CPU forever
+# (observed with bash 5.3.9 on the stop path); the wedged wrapper ignores TERM by then and burns
+# the unit until init. Poll the watchdog, force what survives, and drop every job inside a
+# silenced block (no job-control noise); init reaps the strays at exit.
 trap "" TERM INT
-kill -TERM -- "-$$" 2>/dev/null
-wait 2>/dev/null
+{ kill -TERM -- "-$$" 2>/dev/null
+  i=0; while [ "$i" -lt 25 ] && kill -0 "$WD" 2>/dev/null; do sleep 0.2; i=$(( i + 1 )); done
+  kill_rest KILL
+  disown -a
+} 2>/dev/null
 exit "$RC"
 `;
 
