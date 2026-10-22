@@ -535,8 +535,6 @@ const alertsRuntime = createAlertsRuntime({
 const app = express();
 const server = createServer(app);
 
-// REA uploads stream raw bytes, so they are mounted before the JSON body parser. They apply the same auth
-// middleware (host guard + token) per route; registering them without it throws at boot.
 const reaDeps = {
   registry,
   manager: reaManager,
@@ -1794,6 +1792,8 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
       concurrencies: req.body?.concurrencies,
       maxTokens: req.body?.maxTokens,
       promptType: req.body?.promptType,
+      temperature: req.body?.temperature,
+      thinking: req.body?.thinking,
       debug: benchDebug,
       apiKey: target.apiKey,
       host: target.host,

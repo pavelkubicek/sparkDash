@@ -161,7 +161,7 @@ describe("share card model", () => {
     expect(card.host).toBe("spark-38bd");
     expect(card.subtitle).toBe("Port 8888 · DeepSeek-v4.1-Flash-EXL3");
     expect(card.status).toEqual({ label: "COMPLETED", tone: "ok" });
-    expect(card.meta).toBe("Prose · 400 tok · 1, 2 conc · 27.8 s");
+    expect(card.meta).toBe("Prose · 400 tok · temp 0 · thinking off · 1, 2 conc · 27.8 s");
     expect(card.columns).toEqual({ load: "Load", primary: "Aggregate", secondary: "Stream" });
     expect(card.rows).toHaveLength(1);
     expect(card.rows[0]).toMatchObject({
@@ -721,6 +721,16 @@ describe("tool eval comparison card", () => {
       ["B", 80, 75, "−5.0 pts", "bad"],
     ]);
     expect(shareCardFileName(m, "tool-eval-compare")).toMatch(/^sparkdash-tool-eval-compare-spark-1-/);
+  });
+
+  it("names both Sparks when the runs come from different ones", () => {
+    const m = buildToolEvalCompareShareCard(a(), b(), run, run, { sparkName: "spark-1", sparkNameA: "spark1", sparkNameB: "spark3" }, 0);
+    expect(m.host).toBe("spark1 vs spark3");
+    expect([m.toolEvalCompare!.a.heading, m.toolEvalCompare!.b.heading]).toEqual(["RUN A · spark1 · 2026-09-10", "RUN B · spark3 · 2026-09-10"]);
+    // Same Spark on both sides: no per-Spark naming.
+    const same = buildToolEvalCompareShareCard(a(), b(), run, run, { sparkName: "spark-1", sparkNameA: "spark1", sparkNameB: "spark1" }, 0);
+    expect(same.host).toBe("spark-1");
+    expect(same.toolEvalCompare!.a.heading).toBe("RUN A · 2026-09-10");
   });
 
   it("says when the setups differ and keeps failures off the card", () => {

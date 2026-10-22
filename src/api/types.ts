@@ -432,7 +432,7 @@ export interface LlmMetrics {
   /** The LLM port this snapshot came from — lets the UI match panels to probes by port, not array position. */
   port?: number;
   available: boolean;
-  backend: "vllm" | "llama.cpp" | "sglang" | "lmstudio" | "ollama" | "ds4" | "exl3" | "q27" | "tensorfold" | "freetoken" | "radiance" | "strata" | null;
+  backend: "vllm" | "llama.cpp" | "sglang" | "lmstudio" | "ollama" | "ds4" | "exl3" | "q27" | "tensorfold" | "freetoken" | "radiance" | "strata" | "flare" | null;
   /** How the monitor reaches the engine: its own address, or an SSH forward when only SSH gets there. */
   via?: "direct" | "ssh-tunnel";
   modelId: string | null;
@@ -1037,6 +1037,10 @@ export interface DecodeBenchConfig {
   maxTokens: number;
   /** Output-shape label only — not guided decoding / JSON schema. */
   promptType?: DecodeBenchPromptType;
+  /** Sampling temperature (default 0.7). Older runs have none: they ran at 0. */
+  temperature?: number;
+  /** Thinking on (default). Older runs have none: they ran with it off. */
+  thinking?: boolean;
   /** On-demand remote host (Tailscale HTTPS, etc.). */
   host?: string;
   tls?: boolean;
@@ -1156,6 +1160,8 @@ export interface DecodeBenchDefaults {
   maxMaxTokens: number;
   promptTypes: DecodeBenchPromptType[];
   defaultPromptType: DecodeBenchPromptType;
+  defaultTemperature?: number;
+  defaultThinking?: boolean;
 }
 
 export interface DecodeBenchListResponse {
@@ -1173,6 +1179,10 @@ export interface StartDecodeBenchRequest {
   modelId?: string | null;
   /** Output type: structured (default), prose, code, json. Prompt only. */
   promptType?: DecodeBenchPromptType;
+  /** 0–2, default 0.7. */
+  temperature?: number;
+  /** Default true. */
+  thinking?: boolean;
   /** On-demand remote LLM host (hostname or URL). Skips this Spark's LAN/SSH path. */
   host?: string;
   tls?: boolean;
@@ -1922,6 +1932,12 @@ export interface TokenHistoryRow {
   completionTokens: number;
   /** Prompt tokens served from the prefix cache (always <= promptTokens). */
   cachedTokens: number;
+  /**
+   * Whether the backend measured the cache split for this bucket. `false` means the
+   * engine publishes no prefix-cache counter, so `cachedTokens` is not a miss count.
+   * Absent on data recorded before the flag existed (treated as reported).
+   */
+  cacheReported?: boolean;
 }
 
 export interface TokenHistory {
