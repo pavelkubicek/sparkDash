@@ -10,6 +10,7 @@ vi.mock("../../api/client", () => ({
 import { SparkCard } from "./SparkCard";
 import { makeSpark } from "../../testing/fixtures";
 import { render } from "../../testing/render";
+import { getVisibleSparkIds } from "../../hooks/sparkVisibility";
 import type { SparkSnapshot } from "../../api/types";
 
 function worker(): SparkSnapshot {
@@ -119,5 +120,39 @@ describe("SparkCard", () => {
     expect(container.textContent).not.toContain("big-model");
     expect(container.textContent).toContain("cfg-label");
     expect(container.textContent).toContain("Head is offline");
+  });
+
+  it("registers the card with the viewport observer so its unit keeps polling", () => {
+    // The server pauses HW polling for units no visible client reports; a card
+    // that fails to register reports an empty set and its temps freeze forever.
+    let notify: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void = () => {};
+    const observed = new Set<Element>();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(cb: typeof notify) {
+          notify = cb;
+        }
+        observe(el: Element) {
+          observed.add(el);
+          notify([{ target: el, isIntersecting: true }]);
+        }
+        unobserve(el: Element) {
+          observed.delete(el);
+          notify([{ target: el, isIntersecting: false }]);
+        }
+        disconnect() {}
+      }
+    );
+    try {
+      const { container, root } = render(<SparkCard spark={makeSpark("a")} temperatureUnit="celsius" />);
+      const card = container.querySelector(".ov-sc")!;
+      expect(observed.has(card)).toBe(true);
+      expect(getVisibleSparkIds()).toContain("a");
+      act(() => root.unmount());
+      expect(getVisibleSparkIds()).not.toContain("a");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

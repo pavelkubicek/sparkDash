@@ -14,6 +14,7 @@ import { computeVramBreakdown, type VramBreakdownContext } from "../../shared/vr
 import { ImageIcon, PowerOnIcon } from "../ui/icons";
 import { formatCtx } from "./fleetStats";
 import { ModelLauncher } from "./ModelLauncher";
+import { useSparkGraphRef } from "../../hooks/sparkVisibility";
 
 type Unit = "celsius" | "fahrenheit";
 
@@ -88,6 +89,12 @@ function SparkCardImpl({
   const llm = llmIdx >= 0 ? llmList[llmIdx] : null;
   const [wakeMsg, setWakeMsg] = useState<string | null>(null);
   const [waking, setWaking] = useState(false);
+
+  // Registers this card with the shared IntersectionObserver (hooks/sparkVisibility):
+  // the visible id set is reported over the WS and the server pauses HW polling for
+  // units no client sees. Without this ref every Overview-only client reports an
+  // empty set, which froze CPU/GPU/power temps on all cards.
+  const cardRef = useSparkGraphRef(spark.id);
 
   const cpuUsage = spark.metrics.cpu?.usage ?? 0;
   const usage = gpu?.usage ?? 0;
@@ -237,7 +244,7 @@ function SparkCardImpl({
   );
 
   return (
-    <div className={`overview-card ov-sc ${online ? "" : "is-off"} ${hot && online ? "is-hot" : ""} ${online && worstSeverity(spark.health) ? `is-health-${worstSeverity(spark.health)}` : ""} ${onSelect ? "is-link" : ""}`}>
+    <div ref={cardRef} className={`overview-card ov-sc ${online ? "" : "is-off"} ${hot && online ? "is-hot" : ""} ${online && worstSeverity(spark.health) ? `is-health-${worstSeverity(spark.health)}` : ""} ${onSelect ? "is-link" : ""}`}>
       <div className="ov-sc__head">
         <i className={`sdot ${!online ? "sdot--off" : hot || worstSeverity(spark.health) ? "sdot--warn" : ""}`} aria-label={online ? "online" : "offline"} />
         <h3 className="ov-sc__name">
