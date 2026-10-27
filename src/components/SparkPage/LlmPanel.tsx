@@ -1,7 +1,7 @@
 import { benchId } from "../../constants";
 import { BenchIcon } from "../bench/BenchIcon";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import type { LlmMetrics, LlmBenchTarget } from "../../api/types";
+import type { ConversationRow, LlmMetrics, LlmBenchTarget } from "../../api/types";
 import { setLlmApiKey, updateLlmPort, updateLlmPorts } from "../../api/client";
 import { TrendLine } from "../ui/TrendLine";
 import { Panel } from "../ui/Panel";
@@ -24,6 +24,8 @@ import { LlmTrendChart } from "./LlmTrendChart";
 import type { BenchKind } from "./BenchSwitcher";
 import { engineStateLabel } from "./llmEngineState";
 import { idleLabel, isLlmIdle } from "../../shared/llmIdle";
+import { measuredGenerationTps } from "../../shared/llmRate";
+import { ConversationList } from "./ConversationList";
 
 interface LlmPanelProps {
   llm: LlmMetrics | null;
@@ -37,6 +39,8 @@ interface LlmPanelProps {
   shareImage?: boolean;
   onRemovePort?: (port: number) => void;
   className?: string;
+  conversations?: ConversationRow[];
+  onAddHarness?: () => void;
 }
 
 const VLLM_METRIC_INFO = {
@@ -373,6 +377,8 @@ export function LlmPanel({
   shareImage = false,
   onRemovePort,
   className,
+  conversations = [],
+  onAddHarness,
 }: LlmPanelProps) {
   // Tail keyed by port so multi-port LLM sparklines stay distinct (8b).
   const genHistory = useMetricsHistoryTail(sparkId, `llm:${llmPort}.tps`);
@@ -429,8 +435,10 @@ export function LlmPanel({
   const cachedPrefillTps = llm?.cachedPrefillTps ?? 0;
   const uncachedPrefillTps = llm?.uncachedPrefillTps ?? 0;
   const available = llm?.available ?? false;
+  // The endpoint answered but its stats could not be read: show no rate rather than 0.
+  const measured = llm?.measurementValid !== false;
   // While nothing is flowing, say when the endpoint last served.
-  const idleNote = available && isLlmIdle({ generationTps, prefillTps, prefillActive: llm?.prefillActive, decodeActive: llm?.decodeActive })
+  const idleNote = available && measured && isLlmIdle({ generationTps, prefillTps, prefillActive: llm?.prefillActive, decodeActive: llm?.decodeActive })
     ? idleLabel(llm?.lastActiveAt)
     : null;
 
@@ -500,7 +508,7 @@ export function LlmPanel({
 
   const fmtTps = (n: number) => (n >= 1000 ? Math.round(n).toLocaleString() : n.toFixed(1));
   const fmtAvg = (n: number) => (n >= 100 ? n.toFixed(0) : n.toFixed(1));
-  const isVllm = llm != null && (llm.backend === "vllm" || llm.backend === "q27" || llm.backend === "radiance" || llm.backend === "flare");
+  const isVllm = llm != null && (llm.backend === "vllm" || llm.backend === "q27" || llm.backend === "radiance" || llm.backend === "flare" || llm.backend === "locals" || llm.backend === "splash");
   // FreeToken reports KV use, active requests and a TTFT mean in /v1/stats; the tiles below are null-gated.
   const isFreeToken = llm?.backend === "freetoken";
   const showEngineTiles = isVllm || isFreeToken || isStrata;
@@ -766,7 +774,9 @@ export function LlmPanel({
             >
               <span className="eyebrow">Decode</span>
               <div className="big-num sp-big-lg">
-                {isStrata && llm?.decodeActive && generationTps <= 0 ? (
+                {!measured ? (
+                  <span title={llm?.measurementError ?? undefined}>—</span>
+                ) : isStrata && llm?.decodeActive && generationTps <= 0 ? (
                   <>
                     <span className="ov-tps__dots" aria-hidden />
                     <small>decoding</small>
@@ -781,6 +791,19 @@ export function LlmPanel({
               <TrendLine data={genHistory} height={44} color="var(--color-accent)" />
               {genAvg != null && <span className="sp-avg mono">avg {fmtAvg(genAvg)}</span>}
               {isStrata && llm?.generationTpsSource === "slot-mean" && <span className="sp-avg">active-slot mean</span>}
+              {measured && llm?.perStreamTps != null && (
+                <span
+                  className="sp-avg mono"
+                  title="Average decode throughput of one running stream (1 / mean seconds per output token). Only engines that publish a per-token latency histogram report it."
+                >
+                  {fmtTps(llm.perStreamTps)} tok/s per stream
+                </span>
+              )}
+              {!measured && (
+                <span className="sp-avg" title="The endpoint answered, but no rate could be measured on the last poll.">
+                  Not measured: {llm?.measurementError ?? "unknown"}
+                </span>
+              )}
               {idleNote && (
                 <span className="sp-avg" data-llm-idle>
                   {idleNote}
@@ -797,7 +820,9 @@ export function LlmPanel({
             >
               <span className="eyebrow">Prefill</span>
               <div className="big-num sp-big-lg">
-                {llm?.prefillActive && prefillTps <= 0 ? (
+                {!measured ? (
+                  <span title={llm?.measurementError ?? undefined}>—</span>
+                ) : llm?.prefillActive && prefillTps <= 0 ? (
                   <>
                     <span className="ov-tps__dots" aria-hidden />
                     <small title={isStrata ? "A prompt is being processed; no current prefill rate is available." : "A prompt is being processed. The engine reports its speed only when the request finishes."}>prefilling</small>
@@ -812,6 +837,14 @@ export function LlmPanel({
               <TrendLine data={prefillHistory} height={44} color="var(--color-info)" />
               {prefillAvg != null && <span className="sp-avg mono">avg {fmtAvg(prefillAvg)}</span>}
               {isStrata && prefillTps > 0 && <span className="sp-avg">last reported mean</span>}
+              {measured && llm?.perStreamPrefillTps != null && (
+                <span
+                  className="sp-avg mono"
+                  title="Effective prefill rate of one request: prompt tokens ÷ prefill seconds over the finished window. The prompt counter includes prefix-cache tokens (this surface has no cached counter), so it is an effective speed, not raw GPU speed. The engine publishes prefill seconds only when a request finishes, so it is held between completions."
+                >
+                  {fmtTps(llm.perStreamPrefillTps)} tok/s per request — effective (incl. cached tokens)
+                </span>
+              )}
             </div>
           </div>
           {showPrefillSplit && (
@@ -941,6 +974,8 @@ export function LlmPanel({
         </div>
       )}
 
+      <ConversationList conversations={conversations} onAddHarness={onAddHarness} />
+
       <BenchmarkDialog
         open={openBench === "decode"}
         onClose={() => setOpenBench(null)}
@@ -954,7 +989,7 @@ export function LlmPanel({
         sparkName={sparkName ?? null}
         engine={remoteTarget ? null : llm?.backend ?? null}
         posture={remoteTarget ? null : llm?.posture ?? null}
-        liveTps={remoteTarget ? null : llm?.generationTps ?? null}
+        liveTps={remoteTarget ? null : measuredGenerationTps(llm)}
       />
       <PrefillBenchDialog
         open={openBench === "prefill"}

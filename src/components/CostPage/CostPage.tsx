@@ -116,13 +116,6 @@ export function CostPage() {
 
   const price = useMemo(() => prices?.models.find((m) => m.id === modelId) ?? null, [prices, modelId]);
 
-  // No saved pick (or the catalog dropped it): fall back to the first model.
-  useEffect(() => {
-    if (!prices || price) return;
-    const fallback = prices.models[0]?.id;
-    if (fallback) selectModel(fallback);
-  }, [prices, price, selectModel]);
-
   const view = useMemo(() => {
     if (!usage || !price) return null;
     const { history, lifetime } = usage;
@@ -191,7 +184,7 @@ export function CostPage() {
             <h2 id="cp-pick-title" className="tk-card__title">
               Priced as
             </h2>
-            {price ? <PriceLine price={price} /> : <p className="tk-card__sub">Pick any model to price your usage against.</p>}
+            {price ? <PriceLine price={price} /> : <p className="tk-card__sub">Choose a hosted model to price your usage against.</p>}
           </div>
           <ModelPicker models={prices?.models ?? []} selectedId={price?.id ?? null} onSelect={selectModel} />
         </div>
@@ -288,8 +281,11 @@ export function CostPage() {
           </div>
         ) : prices && prices.models.length === 0 ? (
           <div className="panel tk-note" role="status">
-            <b>No prices loaded.</b> The price catalog came back empty — retry in a moment.
+            <b>No price data yet.</b> Enable MODEL_PRICES_FETCH or supply a catalog at MODEL_PRICES_JSON_PATH, then retry.
+            <button type="button" className="btn btn--sm" onClick={() => setTick((t) => t + 1)}>Retry</button>
           </div>
+        ) : prices ? (
+          <div className="panel tk-note" role="status">Choose a hosted model to compare costs.</div>
         ) : (
           <div className="panel tk-note" role="status">
             Loading prices…
@@ -305,7 +301,7 @@ export function CostPage() {
 }
 
 function PriceLine({ price }: { price: ModelPrice }) {
-  const ctx = [price.provider, price.maxInputTokens ? `${Math.round(price.maxInputTokens / 1000).toLocaleString()}k context` : null].filter(
+  const ctx = [price.provider, price.maxInputTokens ? `${Math.round(price.maxInputTokens / 1000).toLocaleString("en-US")}k context` : null].filter(
     Boolean
   );
   return (
@@ -331,13 +327,21 @@ function CostTiles({
   const per = range.unit === "hour" ? "hour" : "day";
   const blended = blendedPerMillion(cost.totalCost, tally.total);
   const outputShare = cost.totalCost > 0 ? cost.outputCost / cost.totalCost : 0;
+  // The engine published no cached-prompt counter: the cached share is unknown, not
+  // zero. Saying "0 of them cached" would read as a measured cache miss and hide that
+  // every prompt token is priced at the full input rate, which overstates the bill.
+  const cacheUnknown = tally.cacheReported === false;
   return (
     <section className="tk-tiles" aria-label={`Cost summary for ${range.phrase}`}>
       <Tile label="Total cost" value={fmtMoney(cost.totalCost)} sub={`for ${range.phrase}`} title={cost.totalCost.toFixed(6)} />
       <Tile
         label="Input (prompt)"
         value={fmtMoney(cost.inputCost)}
-        sub={`${fmt(tally.prompt)} prompt tokens, ${fmt(tally.cached)} of them cached`}
+        sub={
+          cacheUnknown
+            ? `${fmt(tally.prompt)} prompt tokens, all priced as computed — this engine reports no cached share`
+            : `${fmt(tally.prompt)} prompt tokens, ${fmt(tally.cached)} of them cached`
+        }
         title={cost.inputCost.toFixed(6)}
       />
       <Tile
@@ -349,7 +353,13 @@ function CostTiles({
       <Tile
         label="Cache savings"
         value={cost.cacheSavings > 0 ? fmtMoney(cost.cacheSavings) : "—"}
-        sub={cost.cacheSavings > 0 ? "vs the full input price for cached prefill" : "no cache discount published"}
+        sub={
+          cost.cacheSavings > 0
+            ? "vs the full input price for cached prefill"
+            : cacheUnknown
+              ? "this engine does not report cached prompt tokens"
+              : "no cache discount published"
+        }
       />
       <Tile
         label={`Average per ${per}`}
@@ -420,7 +430,7 @@ function ModelPicker({
   return (
     <div className="cp-picker" ref={rootRef}>
       <button type="button" className="cp-toggle" onClick={() => setOpen((v) => !v)} aria-haspopup="listbox" aria-expanded={open}>
-        <span className="cp-toggle__id">{selected ? selected.id : "Pick a model…"}</span>
+        <span className="cp-toggle__id">{selected ? selected.id : "Choose a hosted model…"}</span>
         {selected ? <span className="cp-toggle__price">{priceLabel(selected)}</span> : null}
       </button>
       {open ? (

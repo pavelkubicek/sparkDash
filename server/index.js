@@ -16,11 +16,16 @@ import {
   createRateLimiter,
   assertAllowedTarget,
   validateDecodeBudget,
+  validateDecodeContextBudget,
   validatePrefillBudget,
 } from "./validate.js";
 import { authStatus, authorizeUpgrade, createAuthMiddleware, createHostGuardMiddleware, isLoopbackBind, setTailscaleName } from "./auth.js";
 import { inspectHealth } from "./health.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
+import { MqttPublisher } from "./mqtt/MqttPublisher.js";
+import { createOccupancyRuntime } from "./occupancy/runtime.js";
+import { formatContextSize, parseContextSize } from "../src/shared/prefillBench.js";
+import { PREFILL_RESERVE_TOKENS, sizeFitsContext } from "../src/shared/contextFit.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
 import { initiateSparkShutdown, shutdownErrorStatus } from "./shutdown.js";
 import { AutoPowerManager } from "./autopower/AutoPowerManager.js";
@@ -29,7 +34,7 @@ import { registerAutoPowerRoutes } from "./autopower/autopowerRoutes.js";
 import { loadAutoPowerConfig, getAutoPowerConfig } from "./autopower/store.js";
 import { remoteShutdownCommand, spawnLocalShutdown } from "./shutdown.js";
 import { GpuClockManager } from "./gpuclock/GpuClockManager.js";
-import { registerGpuClockRoutes } from "./gpuclock/routes.js";
+import { registerGpuClockFleetRoute, registerGpuClockRoutes } from "./gpuclock/routes.js";
 import {
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
@@ -312,6 +317,7 @@ function consumeBenchStartQuota(req, res) {
 // ─── Spark registry ──────────────────────────────────────
 const registry = new SparkRegistry();
 const inferenceActivity = new InferenceActivityStore();
+const occupancy = createOccupancyRuntime({ listSparks: () => registry.sparks });
 
 const fleetEnergyTracker = new FleetEnergyTracker({
   nodeIds: registry.sparkIds,
@@ -325,6 +331,13 @@ const eventLog = new EventLog({
   // The Activity page browses history, so keep far more than the Overview card shows.
   max: 2000,
 });
+
+// ─── MQTT bridge (opt-in, Settings → MQTT) ───────────────
+// Republishes the event stream and per-Spark availability to a broker the
+// user configures. Best-effort: a down broker drops messages rather than
+// ever blocking a poll loop (the client retries on its own in the meantime).
+const mqttPublisher = new MqttPublisher({ getSettings });
+eventLog.subscribe((event) => mqttPublisher.publishEvent(event));
 
 // ─── Unit history (so a fresh page can draw the last hours at once) ─────
 // GPU: a dense ~2 s series for 8 h (Overview/Spark charts) and a minute-resolution series for
@@ -495,10 +508,14 @@ function startAllMonitors() {
 
 /** Snapshots in registry tab order (not Map insertion order). */
 function orderedSnapshots() {
+  const conversations = occupancy.projection().bySpark;
   return registry.sparkIds
     .map((id) => monitors.get(id))
     .filter(Boolean)
-    .map((m) => m.snapshot());
+    .map((m) => {
+      const snap = m.snapshot();
+      return { ...snap, conversations: conversations[snap.id] || {} };
+    });
 }
 
 /** The Fleet Energy card's keep-awake switch; drives sampler and UI alike. */
@@ -553,6 +570,7 @@ app.get("/api/auth/status", createHostGuardMiddleware(), (req, res) => {
   res.json(authStatus(req));
 });
 app.use(createAuthMiddleware());
+occupancy.register(app);
 
 /** Fleet event log, newest first. Query: limit, sparkId, sinceId. */
 app.get("/api/events", (req, res) => {
@@ -1056,6 +1074,8 @@ app.delete("/api/sparks/:id", (req, res) => {
     toolEvalManager.removeSpark(req.params.id);
     vulnHuntManager.removeSpark(req.params.id);
     reaManager.removeSpark(req.params.id);
+    // Clear its retained status/metrics topics so MQTT subscribers stop seeing it.
+    mqttPublisher.removeUnit(req.params.id);
     recordEvent({
       type: "spark.removed",
       severity: "info",
@@ -1104,6 +1124,8 @@ app.put("/api/settings", (req, res) => {
       }
       restartBroadcast();
     }
+    // MQTT broker URL / prefix / enablement changed: reconnect (a no-op otherwise).
+    mqttPublisher.applySettings();
     res.json({ ...newSettings, inferenceActivityEnabled: inferenceActivity.enabled });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1770,7 +1792,8 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
 
   // Resolve model id for this port from live snapshot when possible
   let modelId = req.body?.modelId || null;
-  if (!modelId && !target.custom && monitor) {
+  let contextLength = null;
+  if (!target.custom && monitor) {
     const snap = monitor.snapshot();
     const llmList = Array.isArray(snap?.metrics?.llm) ? snap.metrics.llm : [];
     const portIndex = ports.indexOf(port);
@@ -1778,7 +1801,24 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
       (portIndex >= 0 ? llmList[portIndex] : null) ||
       llmList.find((m) => m?.available) ||
       llmList[0];
-    modelId = llm?.modelId || null;
+    if (!modelId) modelId = llm?.modelId || null;
+    contextLength = Number(llm?.contextLength) > 0 ? Number(llm.contextLength) : null;
+  }
+
+  // Deep-context start: every stream carries `contextTokens` of prompt before it decodes.
+  const contextTokens = parseContextSize(req.body?.contextTokens) || 0;
+  if (contextTokens > 0) {
+    try {
+      validateDecodeContextBudget(normalizeConcurrencies(req.body?.concurrencies), contextTokens);
+    } catch (err) {
+      return res.status(err.status || 429).json({ error: err.message });
+    }
+    const maxTokens = Number(req.body?.maxTokens ?? 400);
+    if (!sizeFitsContext(contextTokens, contextLength, PREFILL_RESERVE_TOKENS + maxTokens, 1)) {
+      return res.status(400).json({
+        error: `${formatContextSize(contextTokens)} of context plus ${maxTokens} reply tokens does not fit the model context (${contextLength.toLocaleString()} tokens)`,
+      });
+    }
   }
 
   try {
@@ -1794,6 +1834,7 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
       promptType: req.body?.promptType,
       temperature: req.body?.temperature,
       thinking: req.body?.thinking,
+      contextTokens: req.body?.contextTokens,
       debug: benchDebug,
       apiKey: target.apiKey,
       host: target.host,
@@ -2428,11 +2469,24 @@ app.post("/api/sparks/:id/shutdown", async (req, res) => {
   }
 });
 
+// One manager for the fleet batch and the per-unit routes: it serialises work per
+// Spark, so a fleet apply cannot run while another cap change is in flight for it.
+const gpuClockManager = new GpuClockManager();
+
+// Fleet-wide batch first (a plain Sparks-suffix path, like shutdown-all).
+registerGpuClockFleetRoute(app, {
+  manager: gpuClockManager,
+  registry,
+  recordEvent,
+  allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
+  rejectLimited,
+});
+
 // GPU clock cap (nvidia-smi -lgc, optionally kept across reboots by a systemd service).
 // Needs root on the unit: the local unit runs as root in the host mount namespace, a
 // remote one uses `sudo -n` as its SSH user. Same auth and limiters as power actions.
 registerGpuClockRoutes(app, {
-  manager: new GpuClockManager(),
+  manager: gpuClockManager,
   registry,
   recordEvent,
   allowRead: (req) => allowTest(principalKey(req)),
@@ -2724,12 +2778,24 @@ function broadcastPayload(payload) {
 }
 
 /**
+ * Hand the fleet to the MQTT bridge: entries with per-domain provenance,
+ * exactly what /metrics renders. Built only when MQTT is on, so the default
+ * (off) install pays nothing per tick; the publisher itself resends a topic
+ * only when its value changed.
+ */
+function publishMqttFleet() {
+  if (!getSettings().mqttEnabled) return;
+  mqttPublisher.publishFleet(metricsEntries(registry.sparkIds.map((id) => monitors.get(id))));
+}
+
+/**
  * Broadcast now instead of on the next tick.
  * Used after a user action (manual refresh / hermes check / update) so the
  * UI reflects the result right away.
  */
 function forceBroadcast() {
   broadcastPayload(buildSnapshotPayload());
+  publishMqttFleet();
 }
 
 function startBroadcast() {
@@ -2740,6 +2806,8 @@ function startBroadcast() {
     // payload carries the alerts this very snapshot produced. They run whether
     // or not a dashboard is open.
     alertsRuntime.tick(sparks);
+    // MQTT subscribers are not dashboards, so publish before the no-client skip below.
+    publishMqttFleet();
     // Nobody is listening: skip serialising every unit's snapshot. A client that
     // connects later gets a fresh one from the connection handler.
     if (wss.clients.size === 0) return;
@@ -2761,6 +2829,7 @@ function restartBroadcast() {
 loadSettings();
 loadSchedulerConfig();
 loadAutoPowerConfig();
+mqttPublisher.applySettings();
 
 const startupPreflight = inspectStartupPreflight(BIND_HOST);
 logStartupPreflight(startupPreflight, BIND_HOST, PORT);
@@ -2796,6 +2865,7 @@ if (!startupPreflight.fatal) {
     }
     startAllMonitors();
     alertsRuntime.start();
+    occupancy.start();
     fleetEnergyRuntime.start();
     llmTokenRuntime.start();
     // Model launcher probe + scheduler timers. Deliberately not tied to
@@ -2843,6 +2913,11 @@ async function shutdown(signal) {
   } catch (err) {
     console.error("[sparkDash] failed to flush event log:", err.message);
   }
+  // Publishes the dashboard's offline status and waits (bounded) for the broker's
+  // ack before closing; awaited below alongside the LLM dispatcher close.
+  const mqttStopped = mqttPublisher.stop().catch((err) => {
+    console.error("[sparkDash] failed to stop MQTT publisher:", err.message);
+  });
   try {
     unitHistoryRuntime.stop();
   } catch (err) {
@@ -2866,8 +2941,13 @@ async function shutdown(signal) {
     console.error("[sparkDash] failed to finalize model jobs:", err.message);
   }
   llmTokenRuntime.stop();
+  try {
+    await occupancy.stop();
+  } catch (err) {
+    console.error("[sparkDash] failed to stop occupancy poller:", err.message);
+  }
   const energyPersistenceSucceeded = fleetEnergyRuntime.stop();
-  const streamAgentClosedGracefully = await closeLlmStreamAgent();
+  const [streamAgentClosedGracefully] = await Promise.all([closeLlmStreamAgent(), mqttStopped]);
   if (!streamAgentClosedGracefully) {
     console.warn("[sparkDash] LLM dispatcher close timed out; destroyed open sockets");
   }

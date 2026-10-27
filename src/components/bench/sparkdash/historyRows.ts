@@ -1,5 +1,6 @@
 import type { DecodeBenchJob, PrefillBenchJob, QualityBenchJob } from "../../../api/types";
 import { formatContextSize } from "../../../shared/prefillBench.js";
+import { decodeBenchSamplingLabel } from "../../SparkPage/decodeSampling";
 
 /** One line of a bench page's run-history table. */
 export interface HistoryRow {
@@ -39,6 +40,8 @@ export function decodeHistoryRow(job: DecodeBenchJob): HistoryRow {
     detail: [
       best ? `peak at ×${best.concurrency}` : null,
       single ? `${single.meanDecodeTps.toFixed(1)}/stream at ×1` : null,
+      decodeBenchSamplingLabel(job.config),
+      job.config.contextTokens ? `${formatContextSize(job.config.contextTokens)} start ctx` : null,
     ]
       .filter(Boolean)
       .join(" · "),

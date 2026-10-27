@@ -155,4 +155,57 @@ describe("SparkCard", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("an online head with no available probe is unready, not known to have no model", () => {
+    // A head that is cold-starting or switching model produces the same empty probe
+    // state as an idle one, so residency is unknown and must not be asserted.
+    const unready = { ...head(true) } as SparkSnapshot;
+    unready.metrics = {
+      ...unready.metrics,
+      llm: [{ available: false, backend: "vllm", modelId: null, generationTps: 0, prefillTps: 0, contextLength: null }],
+    } as unknown as SparkSnapshot["metrics"];
+    const bare = { ...worker(), workerLabel: "", workerDerivedLabel: "" } as SparkSnapshot;
+    const { container } = render(<SparkCard spark={bare} headSpark={unready} temperatureUnit="celsius" />);
+    expect(container.textContent).not.toContain("No model");
+    expect(container.textContent).toContain("not ready");
+  });
+
+  it("says when no LLM port is watched on the head instead of claiming no model", () => {
+    const unwatched = { ...head(true) } as SparkSnapshot;
+    unwatched.metrics = { ...unwatched.metrics, llm: [] } as unknown as SparkSnapshot["metrics"];
+    const bare = { ...worker(), workerLabel: "", workerDerivedLabel: "" } as SparkSnapshot;
+    const { container } = render(<SparkCard spark={bare} headSpark={unwatched} temperatureUnit="celsius" />);
+    expect(container.textContent).not.toContain("No model");
+    expect(container.textContent).toContain("No LLM port is watched on the head");
+  });
+});
+
+describe("SparkCard per-stream decode rate", () => {
+  it("shows the per-stream rate when the engine reports one", () => {
+    const spark = head(true);
+    Object.assign(spark.metrics.llm[0], { generationTps: 40, perStreamTps: 18.5 });
+    const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
+    expect(container.textContent).toContain("18.5 tok/s per stream");
+  });
+  it("omits the per-stream line when the engine has no histogram", () => {
+    const spark = head(true);
+    Object.assign(spark.metrics.llm[0], { generationTps: 40, perStreamTps: null });
+    const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
+    expect(container.textContent).not.toContain("per stream");
+  });
+});
+
+describe("SparkCard effective prefill rate", () => {
+  it("labels the per-request prefill as effective (incl. cached tokens)", () => {
+    const spark = head(true);
+    Object.assign(spark.metrics.llm[0], { prefillTps: 2813, perStreamPrefillTps: 2813 });
+    const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
+    expect(container.textContent).toContain("2,813 tok/s per request — effective (incl. cached tokens)");
+  });
+  it("omits the prefill line when no request has finished", () => {
+    const spark = head(true);
+    Object.assign(spark.metrics.llm[0], { prefillTps: 0, perStreamPrefillTps: null });
+    const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
+    expect(container.textContent).not.toContain("effective (incl. cached tokens)");
+  });
 });

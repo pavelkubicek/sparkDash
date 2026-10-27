@@ -22,6 +22,7 @@ import type {
   VulnHuntStreamRead,
   ActivityEvent,
   ActivityEventsPage,
+  GpuClockPersistKind,
   EnergyHistory,
   MonthlyEnergy,
   TokenHistory,
@@ -45,6 +46,7 @@ import type {
   InferenceActivity,
   HermesBatchUpdateResponse,
   GpuClockStatus,
+  FleetGpuClockResult,
   HermesUpdatesResponse,
   LauncherAction,
   LauncherJob,
@@ -56,6 +58,9 @@ import type {
   LlmDailyResponse,
   MetricsHistoryRange,
   MetricsHistoryResponse,
+  OccupancyCheck,
+  OccupancyHelper,
+  OccupancyHelperInput,
   Settings,
   ShowcaseListResponse,
   ShowcaseSessionState,
@@ -638,22 +643,37 @@ export function fetchGpuClockCommand(
   return apiFetch(`/api/sparks/${encodeURIComponent(id)}/gpu-clock/command?${params}`);
 }
 
-/** Cap the GPU graphics clock now; `persist` also installs the boot service. */
+/** Cap the GPU graphics clock now; `persist` also installs the boot hook this unit can take. */
 export function setGpuClock(
   id: string,
   body: { maxMHz: number; minMHz?: number; persist: boolean; sudoPassword?: string }
-): Promise<{ success: boolean; capMHz: number; persist: boolean }> {
+): Promise<{ success: boolean; capMHz: number; persist: boolean; persistKind: GpuClockPersistKind }> {
   return apiFetch(`/api/sparks/${encodeURIComponent(id)}/gpu-clock`, {
     method: "PUT",
     body: JSON.stringify(body),
   });
 }
 
-/** Remove the cap and the boot service. */
+/** Remove the cap and its boot hook. */
 export function resetGpuClock(id: string, sudoPassword?: string): Promise<{ success: boolean }> {
   return apiFetch(`/api/sparks/${encodeURIComponent(id)}/gpu-clock`, {
     method: "DELETE",
     ...(sudoPassword ? { body: JSON.stringify({ sudoPassword }) } : {}),
+  });
+}
+
+/** POST /api/sparks/gpu-clock-all: cap (or, with reset, clear) the cap on every Spark. */
+export function setFleetGpuClock(maxMHz: number, persist = false): Promise<{ success: boolean; applied: number; results: FleetGpuClockResult[] }> {
+  return apiFetch("/api/sparks/gpu-clock-all", {
+    method: "POST",
+    body: JSON.stringify({ maxMHz, persist }),
+  });
+}
+
+export function resetFleetGpuClock(): Promise<{ success: boolean; applied: number; results: FleetGpuClockResult[] }> {
+  return apiFetch("/api/sparks/gpu-clock-all", {
+    method: "POST",
+    body: JSON.stringify({ reset: true }),
   });
 }
 
@@ -1023,6 +1043,26 @@ export function refreshToolEvalRun(sparkId: string, runId: string): Promise<{ st
 
 export function fetchToolEvalResult(sparkId: string, runId: string): Promise<{ run: ToolEvalRun | null; result: unknown }> {
   return teFetch(`${teBase(sparkId)}/runs/${encodeURIComponent(runId)}/result`);
+}
+
+export function fetchOccupancyHelpers(): Promise<{ helpers: OccupancyHelper[] }> {
+  return apiFetch("/api/occupancy/helpers");
+}
+
+export function saveOccupancyHelpers(helpers: OccupancyHelperInput[]): Promise<{ helpers: OccupancyHelper[] }> {
+  return apiFetch("/api/occupancy/helpers", { method: "PUT", body: JSON.stringify({ helpers }) });
+}
+
+export function deleteOccupancyHelper(id: string): Promise<{ helpers: OccupancyHelper[] }> {
+  return apiFetch(`/api/occupancy/helpers/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** Connection check. The response is coverage and a count; it has no session titles. */
+export function checkOccupancyHelper(url: string, token = ""): Promise<OccupancyCheck> {
+  return apiFetch("/api/occupancy/helpers/check", {
+    method: "POST",
+    body: JSON.stringify({ url, token }),
+  });
 }
 
 export function deleteToolEvalRun(sparkId: string, runId: string): Promise<{ success: boolean }> {

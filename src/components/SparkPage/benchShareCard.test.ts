@@ -153,6 +153,14 @@ function fakeContext(
 }
 
 describe("share card model", () => {
+  it("names the start context in the decode meta line only when one was set", () => {
+    const base = decodeJob();
+    const deep = decodeJob({ config: { ...base.config, contextTokens: 131072 } });
+    expect(buildDecodeShareCard(deep, { llmPort: 8888, modelId: "m", sparkName: "s" }).meta).toBe(
+      "Prose · 400 tok · temp 0 · thinking off · 128k start ctx · 1, 2 conc · 27.8 s"
+    );
+  });
+
   it("mirrors the decode table: sorted rows, aggregate + stream tok/s, TTFT and streams", () => {
     const job = decodeJob({ results: [decodeResult({ concurrency: 2, streamsOk: 1, streamsFailed: 1, aggregateDecodeTps: 56.83, meanDecodeTps: 28.6, meanTtftMs: 399 })] });
     const card = buildDecodeShareCard(job, { llmPort: 8888, modelId: "DeepSeek-v4.1-Flash-EXL3", sparkName: "spark-38bd" }, Date.UTC(2026, 8, 17));
@@ -616,7 +624,7 @@ describe("tool eval share card", () => {
   const run = { status: "completed" as const, startedAt: 1_000, finishedAt: 125_000, model: null };
 
   it("carries the headline numbers, the outcome split and a tile per category", () => {
-    const m = buildToolEvalShareCard(result(), run, { sparkName: "spark-38bd" }, Date.UTC(2026, 8, 17, 12));
+    const m = buildToolEvalShareCard(result(), run, { sparkName: "spark-38bd" }, new Date(2026, 8, 17, 12).getTime());
     const te = m.toolEval!;
     expect([m.title, m.host, m.status.label]).toEqual(["Tool Eval Bench", "spark-38bd", "COMPLETED"]);
     expect([te.score, te.rating, te.stars, te.modelName]).toEqual([82.46, "Good", 4, "org/model"]);
@@ -699,7 +707,8 @@ describe("tool eval comparison card", () => {
       },
       ...over,
     })!;
-  const run = { label: "", startedAt: Date.UTC(2026, 8, 10), model: null, baseUrl: "http://x", options: {}, type: "tool-eval" };
+  // Local noon: shareCardDate formats in local time, so a UTC-midnight start is the 9th west of UTC.
+  const run = { label: "", startedAt: new Date(2026, 8, 10, 12).getTime(), model: null, baseUrl: "http://x", options: {}, type: "tool-eval" };
   const a = () => side(60, [50, 80], ["pass", "fail", "partial", "pass"]);
   const b = () => side(72.5, [70, 75], ["pass", "pass", "fail", "pass"], { deployability: 71, responsiveness: 85 });
 

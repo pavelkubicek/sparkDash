@@ -11,8 +11,7 @@ export const LOW_POWER_STREAK = 5;
 /** Kernel-error findings stay visible this long after the counter last rose. */
 export const KERNEL_FINDING_TTL_MS = 60 * 60 * 1000;
 
-const TEMP_WARN = 85;
-const TEMP_CRITICAL = 90;
+const DEFAULT_TEMP_THRESHOLDS = Object.freeze({ warnC: 85, criticalC: 90 });
 const MEM_AVAIL_WARN_MB = 3072;
 const MEM_AVAIL_CRITICAL_MB = 1536;
 const LOW_POWER_UTIL = 90;
@@ -45,8 +44,14 @@ function nvidiaView(gpu) {
 }
 
 export class HealthEvaluator {
-  constructor({ now = Date.now } = {}) {
+  /**
+   * @param {{ now?: () => number, thresholds?: () => { warnC: number, criticalC: number } }} [opts]
+   *   `thresholds` is read on every evaluation, so a settings change applies
+   *   on the next sample without rebuilding the evaluator.
+   */
+  constructor({ now = Date.now, thresholds = () => DEFAULT_TEMP_THRESHOLDS } = {}) {
     this._now = now;
+    this._thresholds = thresholds;
     this._lowPowerStreak = 0;
     this._kernel = { xid: null, oom: null };
     this._kernelAt = { xid: 0, oom: 0 };
@@ -83,13 +88,15 @@ export class HealthEvaluator {
 
   _thermal(gpu, out) {
     const t = num(gpu?.temperature);
-    if (t == null || t < TEMP_WARN) return;
-    const critical = t >= TEMP_CRITICAL;
+    let { warnC, criticalC } = this._thresholds() ?? {};
+    if (num(warnC) == null || num(criticalC) == null || warnC >= criticalC) ({ warnC, criticalC } = DEFAULT_TEMP_THRESHOLDS);
+    if (t == null || t < warnC) return;
+    const critical = t >= criticalC;
     out.push({
       id: "thermal",
       severity: critical ? "critical" : "warn",
       title: critical ? "GPU is close to its shutdown temperature" : "GPU is running hot",
-      detail: `${Math.round(t)}°C (warns at ${TEMP_WARN}°C, critical at ${TEMP_CRITICAL}°C).`,
+      detail: `${Math.round(t)}°C (warns at ${warnC}°C, critical at ${criticalC}°C).`,
       hint: "Check airflow and the room temperature, and that nothing blocks the vents. Lower the power limit or the load if it keeps climbing.",
     });
   }
@@ -107,9 +114,9 @@ export class HealthEvaluator {
     out.push({
       id: "low-power",
       severity: "warn",
-      title: "GPU looks stuck in a low-power state",
+      title: "GPU has high utilisation with low power draw",
       detail: `${Math.round(util)}% utilisation but only ${draw.toFixed(1)} W for ${this._lowPowerStreak} samples in a row.`,
-      hint: "Often a driver or power-management hiccup. A GPU reset or a reboot usually clears it; check dmesg for NVRM errors first.",
+      hint: "This can be normal during memory-bound decode. Check workload progress and token throughput first; if progress has stopped, inspect driver logs and power-management settings.",
     });
   }
 

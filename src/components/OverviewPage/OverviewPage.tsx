@@ -259,7 +259,7 @@ export function OverviewPage({
 
   return (
     <div className="ov">
-      <FleetKpis sparks={visibleSparks} snapshotKey={sparks} show={kpis} />
+      <FleetKpis sparks={sparks} snapshotKey={sparks} show={kpis} />
       {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
       <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 16 }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
