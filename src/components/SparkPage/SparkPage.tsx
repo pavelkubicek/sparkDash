@@ -270,8 +270,9 @@ export function SparkPage({
       {spark.online ? <HealthList findings={spark.health} /> : null}
 
       {(
-        /* Two independent columns (xl+): hardware + LLM on the left, I/O on the
-           right. Below xl everything stacks in the Item order (GPU, memory, LLM first). */
+        /* Two independent columns (xl+): GPU + LLM on the left, memory/CPU and
+           I/O on the right. Below xl everything stacks in the Item order (GPU,
+           memory, LLM first). */
         <div className="sp-cols">
           <div className="sp-col">
             <Item order={1}>
@@ -283,22 +284,6 @@ export function SparkPage({
                 chip={spark.hardware.gpuChip}
                 hideMemory={showUnified}
               />
-            </Item>
-            {/* Unified memory (or RAM on a dedicated host) and CPU sit side by side (they stack when the column is narrow). */}
-            <Item order={2}>
-              <div className="sp-pair">
-                {showUnified && <UnifiedMemoryPanel um={unified} gpu={metrics.gpu} llm={metrics.llm} />}
-                <CpuPanel
-                  cpu={metrics.cpu}
-                  hardware={spark.hardware}
-                  sparkId={spark.id}
-                  temperatureUnit={temperatureUnit}
-                />
-                {/* Dedicated hosts have system RAM instead of a unified pool: CPU and RAM side by side. */}
-                {spark.kind === "host" && <RamPanel ram={metrics.ram} sparkId={spark.id} />}
-                {/* Models is the third column of the row (Windows PCs have no launchers). */}
-                {spark.platform !== "windows" && modelsPanel}
-              </div>
             </Item>
             {view === "all" && showSvc && llmOn && primaryPort != null && (
               <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
@@ -315,6 +300,22 @@ export function SparkPage({
             {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
           </div>
           <div className="sp-col">
+            {/* Unified memory (or RAM on a dedicated host) and CPU sit side by side (they stack when the column is narrow). */}
+            <Item order={2}>
+              <div className="sp-pair">
+                {showUnified && <UnifiedMemoryPanel um={unified} gpu={metrics.gpu} llm={metrics.llm} />}
+                <CpuPanel
+                  cpu={metrics.cpu}
+                  hardware={spark.hardware}
+                  sparkId={spark.id}
+                  temperatureUnit={temperatureUnit}
+                />
+                {/* Dedicated hosts have system RAM instead of a unified pool: CPU and RAM side by side. */}
+                {spark.kind === "host" && <RamPanel ram={metrics.ram} sparkId={spark.id} />}
+                {/* Models is the third column of the row (Windows PCs have no launchers). */}
+                {spark.platform !== "windows" && modelsPanel}
+              </div>
+            </Item>
             {/* I/O sits in the right rail; on mobile the --o orders place it
                 after the LLM panel. */}
             <Item order={7}>
