@@ -294,11 +294,11 @@ export function SparkPage({
                   sparkId={spark.id}
                   temperatureUnit={temperatureUnit}
                 />
-            {/* Dedicated hosts have system RAM instead of a unified pool: CPU and RAM side by side. */}
-            {spark.kind === "host" && <RamPanel ram={metrics.ram} sparkId={spark.id} />}
-            {/* Models is the third column of the row (Windows PCs have no launchers). */}
-            {spark.platform !== "windows" && modelsPanel}
-            </div>
+                {/* Dedicated hosts have system RAM instead of a unified pool: CPU and RAM side by side. */}
+                {spark.kind === "host" && <RamPanel ram={metrics.ram} sparkId={spark.id} />}
+                {/* Models is the third column of the row (Windows PCs have no launchers). */}
+                {spark.platform !== "windows" && modelsPanel}
+              </div>
             </Item>
             {/* History closes the hardware column: the right column (LLM, storage, network) is
                 usually the taller one, so this fills the space under the GPU / memory / CPU row
@@ -351,21 +351,6 @@ export function SparkPage({
                 <TailscalePanel tailscale={metrics.tailscale ?? null} />
               </Item>
             )}
-          </div>
-          <div className="sp-col">
-            {view === "all" && showSvc && llmOn && primaryPort != null && (
-              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
-            )}
-            {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
-            {view === "all" &&
-              showSvc &&
-              llmOn &&
-              extraPorts.map((port, j) => (
-                <Item key={port} order={10 + j}>
-                  {renderLlmPanel(port, j + 1)}
-                </Item>
-              ))}
-            {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
           </div>
         </div>
       )}
