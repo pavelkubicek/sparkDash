@@ -40,16 +40,15 @@ describe("SparkPage History panel", () => {
     expect(getUnitHistory).not.toHaveBeenCalled();
   });
 
-  it("closes the hardware column with the setting on, last when the columns stack", async () => {
+  it("sits full width under both columns, last when the columns stack", async () => {
     const { container } = render(<SparkPage spark={makeSpark()} temperatureUnit="celsius" metricsHistory />);
     await flush();
-    const [hardware] = container.querySelectorAll(".sp-cols > .sp-col");
-    const item = hardware.lastElementChild as HTMLElement;
-    const panel = item.querySelector(".sp-hist")!;
-    expect(panel).not.toBeNull();
-    const orders = [...container.querySelectorAll<HTMLElement>(".sp-item")].map((el) => Number(el.style.getPropertyValue("--o")));
-    expect(Number(item.style.getPropertyValue("--o"))).toBe(Math.max(...orders));
-    expect(panel.querySelector(".panel-title")!.textContent).toContain("History · last hour");
+    expect(container.querySelectorAll(".sp-cols > .sp-col").length).toBe(2);
+    const cols = container.querySelector(".sp-cols")!;
+    const last = cols.nextElementSibling as HTMLElement;
+    expect(last.classList.contains("sp-hist")).toBe(true);
+    expect(container.querySelector(".sp")!.lastElementChild).toBe(last);
+    expect(last.querySelector(".panel-title")!.textContent).toContain("History · last hour");
     expect(getUnitHistory).toHaveBeenCalledWith("spark-1", "1h");
     expect(container.textContent).toContain("Metrics history is off on the server");
   });

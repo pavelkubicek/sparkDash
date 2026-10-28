@@ -300,29 +300,9 @@ export function SparkPage({
                 {spark.platform !== "windows" && modelsPanel}
               </div>
             </Item>
-            {/* History closes the hardware column: the right column (LLM, storage, network) is
-                usually the taller one, so this fills the space under the GPU / memory / CPU row
-                instead of starting below both columns. Stacked (below xl) it stays last. */}
-            {metricsHistory && (
-              <Item order={40}>
-                <HistoryPanel key={spark.id} sparkId={spark.id} kind={spark.kind} temperatureUnit={temperatureUnit} />
-              </Item>
-            )}
-          </div>
-          <div className="sp-col">
-            {view === "all" && showSvc && llmOn && primaryPort != null && (
-              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
-            )}
-            {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
-            {view === "all" &&
-              showSvc &&
-              llmOn &&
-              extraPorts.map((port, j) => (
-                <Item key={port} order={10 + j}>
-                  {renderLlmPanel(port, j + 1)}
-                </Item>
-              ))}
-            {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
+            {/* I/O sits under the hardware on xl+ so both columns stay balanced
+                (the LLM panel alone is taller than the hardware stack); on mobile
+                the --o orders still place it after the LLM panel. */}
             <Item order={7}>
               <StoragePanel
                 storage={metrics.storage}
@@ -352,7 +332,27 @@ export function SparkPage({
               </Item>
             )}
           </div>
+          <div className="sp-col">
+            {view === "all" && showSvc && llmOn && primaryPort != null && (
+              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
+            )}
+            {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
+            {view === "all" &&
+              showSvc &&
+              llmOn &&
+              extraPorts.map((port, j) => (
+                <Item key={port} order={10 + j}>
+                  {renderLlmPanel(port, j + 1)}
+                </Item>
+              ))}
+            {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
+          </div>
         </div>
+      )}
+
+      {/* Full width under both columns: the small multiples need the room. */}
+      {metricsHistory && (
+        <HistoryPanel key={spark.id} sparkId={spark.id} kind={spark.kind} temperatureUnit={temperatureUnit} />
       )}
 
     </div>
