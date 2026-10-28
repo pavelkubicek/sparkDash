@@ -270,7 +270,7 @@ export function SparkPage({
       {spark.online ? <HealthList findings={spark.health} /> : null}
 
       {(
-        /* Two independent columns (xl+): hardware + I/O on the left, services on the
+        /* Two independent columns (xl+): hardware + LLM on the left, I/O on the
            right. Below xl everything stacks in the Item order (GPU, memory, LLM first). */
         <div className="sp-cols">
           <div className="sp-col">
@@ -300,9 +300,23 @@ export function SparkPage({
                 {spark.platform !== "windows" && modelsPanel}
               </div>
             </Item>
-            {/* I/O sits under the hardware on xl+ so both columns stay balanced
-                (the LLM panel alone is taller than the hardware stack); on mobile
-                the --o orders still place it after the LLM panel. */}
+            {view === "all" && showSvc && llmOn && primaryPort != null && (
+              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
+            )}
+            {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
+            {view === "all" &&
+              showSvc &&
+              llmOn &&
+              extraPorts.map((port, j) => (
+                <Item key={port} order={10 + j}>
+                  {renderLlmPanel(port, j + 1)}
+                </Item>
+              ))}
+            {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
+          </div>
+          <div className="sp-col">
+            {/* I/O sits in the right rail; on mobile the --o orders place it
+                after the LLM panel. */}
             <Item order={7}>
               <StoragePanel
                 storage={metrics.storage}
@@ -331,21 +345,6 @@ export function SparkPage({
                 <TailscalePanel tailscale={metrics.tailscale ?? null} />
               </Item>
             )}
-          </div>
-          <div className="sp-col">
-            {view === "all" && showSvc && llmOn && primaryPort != null && (
-              <Item order={3}>{renderLlmPanel(primaryPort, 0)}</Item>
-            )}
-            {view === "all" && showSvc && comfyPanel && <Item order={4}>{comfyPanel}</Item>}
-            {view === "all" &&
-              showSvc &&
-              llmOn &&
-              extraPorts.map((port, j) => (
-                <Item key={port} order={10 + j}>
-                  {renderLlmPanel(port, j + 1)}
-                </Item>
-              ))}
-            {view === "all" && showSvc && addPort && <Item order={30}>{addPort}</Item>}
           </div>
         </div>
       )}
