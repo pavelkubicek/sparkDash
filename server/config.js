@@ -247,6 +247,15 @@ const MODEL_SCHEDULER_TZ = process.env.MODEL_SCHEDULER_TZ || "Europe/Prague";
  */
 const MODEL_HOST_USER = process.env.MODEL_HOST_USER || "pavelkubicek";
 
+// ─── GPU clock schedule (time-of-day caps for the Spark fleet) ───
+/**
+ * Time windows and caps (config/gpu-clock-schedule.json). Its own file, like
+ * autopower.json, so a Settings Save (which replaces the whole settings object)
+ * can never clobber the schedule or vice versa.
+ */
+const GPU_CLOCK_SCHEDULE_PATH =
+  process.env.GPU_CLOCK_SCHEDULE_PATH || path.join(ROOT, "config", "gpu-clock-schedule.json");
+
 // ─── Spark AutoPower (idle-shutdown + scheduled wake for the spark fleet) ───
 /** Idle/watch/wake schedule (same file idiom as SCHEDULER_JSON_PATH). */
 const AUTOPOWER_JSON_PATH =
@@ -323,6 +332,7 @@ export {
   MODEL_SCHEDULER_TICK_MS,
   MODEL_SCHEDULER_TZ,
   MODEL_HOST_USER,
+  GPU_CLOCK_SCHEDULE_PATH,
   AUTOPOWER_JSON_PATH,
   AUTOPOWER_STATE_PATH,
   AUTOPOWER_TICK_MS,

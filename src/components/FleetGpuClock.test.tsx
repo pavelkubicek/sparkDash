@@ -1,6 +1,14 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchGpuClock, fetchSparks, resetFleetGpuClock, setFleetGpuClock } from "../api/client";
+import {
+  fetchGpuClock,
+  fetchGpuClockSchedule,
+  fetchSparks,
+  resetFleetGpuClock,
+  resetFleetGpuClockSchedule,
+  setFleetGpuClock,
+  setFleetGpuClockSchedule,
+} from "../api/client";
 import type { FleetGpuClockResult, GpuClockPersistKind, GpuClockStatus, SparkConfig } from "../api/types";
 import { FleetGpuClock, type FleetGpuClockApi } from "./FleetGpuClock";
 import { cleanupRenders, flush, render } from "../testing/render";
@@ -8,14 +16,29 @@ import { cleanupRenders, flush, render } from "../testing/render";
 vi.mock("../api/client", () => ({
   fetchSparks: vi.fn(),
   fetchGpuClock: vi.fn(),
+  fetchGpuClockSchedule: vi.fn(),
   setFleetGpuClock: vi.fn(),
   resetFleetGpuClock: vi.fn(),
+  setFleetGpuClockSchedule: vi.fn(),
+  resetFleetGpuClockSchedule: vi.fn(),
 }));
 
 const listApi = vi.mocked(fetchSparks);
 const statusApi = vi.mocked(fetchGpuClock);
+const scheduleApi = vi.mocked(fetchGpuClockSchedule);
 const setApi = vi.mocked(setFleetGpuClock);
 const resetApi = vi.mocked(resetFleetGpuClock);
+const setScheduleApi = vi.mocked(setFleetGpuClockSchedule);
+const resetScheduleApi = vi.mocked(resetFleetGpuClockSchedule);
+
+const DEFAULT_SCHEDULE = {
+  enabled: false,
+  tz: "Europe/Prague",
+  windows: [
+    { start: "08:00", end: "20:00", maxMHz: 2200 },
+    { start: "20:00", end: "08:00", maxMHz: 1900 },
+  ],
+};
 
 const FLEET = {
   sparks: [
@@ -35,6 +58,16 @@ const ready = (
   capMHz,
   sudo: "yes",
   persistKind,
+  schedule: {
+    installed: false,
+    kind: "none",
+    tz: null,
+    windows: [],
+    failed: false,
+    capNow: null,
+    nextChangeAt: null,
+    inSync: null,
+  },
   service: { installed: false, clocks: null, enabled: null, active: null },
   cron: { installed: false, clocks: null, failed: false },
 });
@@ -112,8 +145,11 @@ describe("FleetGpuClock", () => {
   beforeEach(() => {
     listApi.mockReset().mockResolvedValue(FLEET);
     statusApi.mockReset().mockResolvedValue(ready(2100));
+    scheduleApi.mockReset().mockResolvedValue(DEFAULT_SCHEDULE);
     setApi.mockReset();
     resetApi.mockReset();
+    setScheduleApi.mockReset();
+    resetScheduleApi.mockReset();
   });
   afterEach(() => {
     cleanupRenders();
@@ -619,5 +655,56 @@ describe("FleetGpuClock", () => {
     expect(now).toContain("Now: capped at 2100 MHz on 1 unit");
     expect(now).not.toContain("unreadable");
     expect(statusApi.mock.calls.map(([id]) => id).sort()).toEqual(["spark1", "spark2"]);
+  });
+
+  it("turns the time schedule on and sends both windows with Save", async () => {
+    setScheduleApi.mockResolvedValue({
+      success: true,
+      applied: 2,
+      results: [
+        { id: "spark1", ok: true, capMHz: 2200, kind: "unit" },
+        { id: "spark2", ok: true, capMHz: 2200, kind: "unit" },
+      ],
+      config: { ...DEFAULT_SCHEDULE, enabled: true },
+    });
+    const ref = { current: null as FleetGpuClockApi | null };
+    const { container } = render(<FleetGpuClock apiRef={ref} />);
+    await settle();
+
+    const boxes = container.querySelectorAll('input[type="checkbox"]');
+    await click(boxes[1] as HTMLInputElement);
+    expect(ref.current!.pending()).toBe(true);
+    // A schedule owns the clocks: fixed presets are not offered beside it.
+    expect(byText(container, "2200 MHz").disabled).toBe(true);
+
+    expect(await ref.current!.apply()).toBe(true);
+    expect(setScheduleApi).toHaveBeenCalledTimes(1);
+    const sent = setScheduleApi.mock.calls[0][0];
+    expect(sent.enabled).toBe(true);
+    expect(sent.windows).toEqual(DEFAULT_SCHEDULE.windows);
+    expect(setApi).not.toHaveBeenCalled();
+    await settle();
+    expect(ref.current!.pending()).toBe(false);
+  });
+
+  it("turns an enabled schedule off with the reset route", async () => {
+    scheduleApi.mockResolvedValue({ ...DEFAULT_SCHEDULE, enabled: true });
+    resetScheduleApi.mockResolvedValue({
+      success: true,
+      applied: 2,
+      results: [
+        { id: "spark1", ok: true, capMHz: null },
+        { id: "spark2", ok: true, capMHz: null },
+      ],
+      config: DEFAULT_SCHEDULE,
+    });
+    const ref = { current: null as FleetGpuClockApi | null };
+    const { container } = render(<FleetGpuClock apiRef={ref} />);
+    await settle();
+
+    await click(container.querySelectorAll('input[type="checkbox"]')[1] as HTMLInputElement);
+    expect(await ref.current!.apply()).toBe(true);
+    expect(resetScheduleApi).toHaveBeenCalledTimes(1);
+    expect(setScheduleApi).not.toHaveBeenCalled();
   });
 });

@@ -33,6 +33,9 @@ config/scheduler.json
 config/model-scheduler-state.json
 config/autopower.json
 config/autopower-state.json
+config/gpu-clock-schedule.json
+config/gpu-clock-schedule.json.*
+config/.gpu-clock-schedule.json.*.tmp
 *.log
 .DS_Store
 docs/

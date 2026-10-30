@@ -30,7 +30,7 @@ const keptText = (persistKind) => (persistKind === "cron" ? " by the @reboot cro
 /** Whole-batch budget for the fleet route; one unit's own timeout is 45 s, so this fits a few slow ones. */
 export const FLEET_DEADLINE_MS = 3 * 60_000;
 
-export function registerGpuClockRoutes(app, { manager, registry, recordEvent, allowRead, allowChange, rejectLimited }) {
+export function registerGpuClockRoutes(app, { manager, registry, recordEvent, allowRead, allowChange, rejectLimited, getSchedule }) {
   const handle = (fn) => async (req, res) => {
     try {
       const spark = registry.getSpark(req.params.id);
@@ -41,6 +41,16 @@ export function registerGpuClockRoutes(app, { manager, registry, recordEvent, al
       const known = Number.isInteger(err?.status);
       res.status(known ? err.status : 500).json({ error: known ? err.message : "GPU clock action failed", code: err?.code });
     }
+  };
+
+  /** A running schedule owns the clocks; a fixed cap would be overwritten at the next window. */
+  const scheduleRefusal = (req, res) => {
+    if (getSchedule?.()?.enabled !== true) return false;
+    res.status(409).json({
+      error: "A time schedule is installed on the fleet. Turn it off in Settings → GPU clock cap before setting a fixed cap.",
+      code: "schedule-installed",
+    });
+    return true;
   };
 
   app.get(
@@ -74,6 +84,7 @@ export function registerGpuClockRoutes(app, { manager, registry, recordEvent, al
     "/api/sparks/:id/gpu-clock",
     handle(async (spark, req, res) => {
       if (!allowChange(req)) return rejectLimited(res, "Too many GPU clock changes, try again in a minute");
+      if (scheduleRefusal(req, res)) return;
       if (refuseInsecurePassword(req, res)) return;
       const out = await manager.apply(spark, req.body);
       recordEvent({
@@ -90,6 +101,7 @@ export function registerGpuClockRoutes(app, { manager, registry, recordEvent, al
     "/api/sparks/:id/gpu-clock",
     handle(async (spark, req, res) => {
       if (!allowChange(req)) return rejectLimited(res, "Too many GPU clock changes, try again in a minute");
+      if (scheduleRefusal(req, res)) return;
       if (refuseInsecurePassword(req, res)) return;
       await manager.reset(spark, req.body);
       recordEvent({ type: "gpu.clock.reset", severity: "info", sparkId: spark.id, message: "GPU clock cap removed" });
@@ -106,7 +118,7 @@ export function registerGpuClockRoutes(app, { manager, registry, recordEvent, al
  */
 export function registerGpuClockFleetRoute(
   app,
-  { manager, registry, recordEvent, allowChange, rejectLimited, fleetDeadlineMs = FLEET_DEADLINE_MS }
+  { manager, registry, recordEvent, allowChange, rejectLimited, getSchedule, fleetDeadlineMs = FLEET_DEADLINE_MS }
 ) {
   app.post("/api/sparks/gpu-clock-all", async (req, res) => {
     const { maxMHz, persist, reset } = req.body ?? {};
@@ -124,6 +136,12 @@ export function registerGpuClockFleetRoute(
       }
     }
     if (!allowChange(req)) return rejectLimited(res, "Too many GPU clock changes, try again in a minute");
+    if (getSchedule?.()?.enabled === true) {
+      return res.status(409).json({
+        error: "A time schedule is installed on the fleet. Turn it off in Settings → GPU clock cap before setting a fixed cap.",
+        code: "schedule-installed",
+      });
+    }
     const results = [];
     // One slow or hung unit must not hold the whole batch: past the deadline the
     // remaining units are reported as not attempted, so the answer still arrives.
@@ -176,5 +194,105 @@ export function registerGpuClockFleetRoute(
     // no unit was actually capped or reset is not a success, however many were skipped.
     const applied = results.filter((r) => r.ok && r.supported !== false).length;
     res.json({ success: results.every((r) => r.ok) && applied > 0, applied, results });
+  });
+}
+
+/**
+ * GET/PUT/DELETE /api/sparks/gpu-clock-schedule — the fleet time-of-day
+ * schedule. The config lives in its own file (never settings.json, which a
+ * Settings Save replaces wholesale). PUT stores the config before touching
+ * hardware and reverts `enabled` when no unit could take it, so a fleet with
+ * every unit offline never claims a schedule it did not install.
+ */
+export function registerGpuClockScheduleRoute(
+  app,
+  { manager, registry, recordEvent, allowRead, allowChange, rejectLimited, getSchedule, saveSchedule, fleetDeadlineMs = FLEET_DEADLINE_MS }
+) {
+  app.get("/api/sparks/gpu-clock-schedule", (req, res) => {
+    if (!allowRead(req)) return rejectLimited(res, "Too many requests");
+    res.json(getSchedule());
+  });
+
+  app.put("/api/sparks/gpu-clock-schedule", async (req, res) => {
+    if (!allowChange(req)) return rejectLimited(res, "Too many GPU clock changes, try again in a minute");
+    let config;
+    try {
+      config = saveSchedule({ ...(req.body || {}), enabled: true });
+    } catch (err) {
+      return res.status(Number.isInteger(err?.status) ? err.status : 400).json({ error: err.message });
+    }
+    const results = [];
+    const deadline = Date.now() + fleetDeadlineMs;
+    for (const spark of registry.sparks) {
+      if (Date.now() > deadline) {
+        results.push({ id: spark.id, ok: false, error: "Not attempted: the fleet change ran out of time before this unit" });
+        continue;
+      }
+      const unsupported = gpuClockUnsupportedReason(spark);
+      if (unsupported) {
+        results.push({ id: spark.id, ok: true, supported: false, reason: unsupported });
+        continue;
+      }
+      try {
+        const out = await manager.applySchedule(spark, config);
+        recordEvent({
+          type: "gpu.clock.schedule.set",
+          severity: "info",
+          sparkId: spark.id,
+          message: `GPU clock schedule installed (${out.kind === "cron" ? "@reboot cron job" : "boot service"}): ${config.windows
+            .map((w) => `${w.start}–${w.end} ${w.maxMHz} MHz`)
+            .join(", ")}`,
+        });
+        results.push({ id: spark.id, ok: true, capMHz: out.capMHz, kind: out.kind });
+      } catch (err) {
+        if (err?.code === "no-nvidia") {
+          results.push({ id: spark.id, ok: true, supported: false, reason: err.message });
+        } else {
+          results.push({ id: spark.id, ok: false, error: err?.message || String(err) });
+        }
+      }
+    }
+    const applied = results.filter((r) => r.ok && r.supported !== false).length;
+    // A schedule nothing runs is not enabled: keep the windows for the retry, but
+    // let fixed caps work again instead of blocking them behind a dead config.
+    if (applied === 0) config = saveSchedule({ ...config, enabled: false });
+    res.json({ success: results.every((r) => r.ok) && applied > 0, applied, results, config });
+  });
+
+  app.delete("/api/sparks/gpu-clock-schedule", async (req, res) => {
+    if (!allowChange(req)) return rejectLimited(res, "Too many GPU clock changes, try again in a minute");
+    const results = [];
+    const deadline = Date.now() + fleetDeadlineMs;
+    for (const spark of registry.sparks) {
+      if (Date.now() > deadline) {
+        results.push({ id: spark.id, ok: false, error: "Not attempted: the fleet change ran out of time before this unit" });
+        continue;
+      }
+      const unsupported = gpuClockUnsupportedReason(spark);
+      if (unsupported) {
+        results.push({ id: spark.id, ok: true, supported: false, reason: unsupported });
+        continue;
+      }
+      try {
+        await manager.removeSchedule(spark);
+        recordEvent({
+          type: "gpu.clock.schedule.reset",
+          severity: "info",
+          sparkId: spark.id,
+          message: "Fleet GPU clock schedule removed and clocks reset",
+        });
+        results.push({ id: spark.id, ok: true, capMHz: null });
+      } catch (err) {
+        if (err?.code === "no-nvidia") {
+          results.push({ id: spark.id, ok: true, supported: false, reason: err.message });
+        } else {
+          results.push({ id: spark.id, ok: false, error: err?.message || String(err) });
+        }
+      }
+    }
+    // The config is disabled even when a unit refused: the schedule is no longer
+    // the fleet's instruction, and the refusal stays visible in the results.
+    const config = saveSchedule({ ...getSchedule(), enabled: false });
+    res.json({ success: results.every((r) => r.ok), applied: results.filter((r) => r.ok).length, results, config });
   });
 }

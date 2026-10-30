@@ -18,6 +18,16 @@ const base: GpuClockStatus = {
   capMHz: null,
   sudo: "yes",
   persistKind: "unit",
+  schedule: {
+    installed: false,
+    kind: "none",
+    tz: null,
+    windows: [],
+    failed: false,
+    capNow: null,
+    nextChangeAt: null,
+    inSync: null,
+  },
   service: { installed: false, clocks: null, enabled: null, active: null },
   cron: { installed: false, clocks: null, failed: false },
 };

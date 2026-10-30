@@ -34,7 +34,8 @@ import { registerAutoPowerRoutes } from "./autopower/autopowerRoutes.js";
 import { loadAutoPowerConfig, getAutoPowerConfig } from "./autopower/store.js";
 import { remoteShutdownCommand, spawnLocalShutdown } from "./shutdown.js";
 import { GpuClockManager } from "./gpuclock/GpuClockManager.js";
-import { registerGpuClockFleetRoute, registerGpuClockRoutes } from "./gpuclock/routes.js";
+import { registerGpuClockFleetRoute, registerGpuClockRoutes, registerGpuClockScheduleRoute } from "./gpuclock/routes.js";
+import { getGpuClockSchedule, loadGpuClockSchedule, saveGpuClockSchedule } from "./gpuclock/scheduleStore.js";
 import {
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
@@ -2472,6 +2473,22 @@ app.post("/api/sparks/:id/shutdown", async (req, res) => {
 // One manager for the fleet batch and the per-unit routes: it serialises work per
 // Spark, so a fleet apply cannot run while another cap change is in flight for it.
 const gpuClockManager = new GpuClockManager();
+// Load the persisted time-of-day schedule once; the store is lazy, this only
+// makes a damaged file fall back before the first request.
+loadGpuClockSchedule();
+
+// Time-of-day schedule: config plus the install/remove batch. Registered before
+// the per-unit routes for the same reason as the fixed fleet route.
+registerGpuClockScheduleRoute(app, {
+  manager: gpuClockManager,
+  registry,
+  recordEvent,
+  allowRead: (req) => allowTest(principalKey(req)),
+  allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
+  rejectLimited,
+  getSchedule: getGpuClockSchedule,
+  saveSchedule: saveGpuClockSchedule,
+});
 
 // Fleet-wide batch first (a plain Sparks-suffix path, like shutdown-all).
 registerGpuClockFleetRoute(app, {
@@ -2480,6 +2497,7 @@ registerGpuClockFleetRoute(app, {
   recordEvent,
   allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
   rejectLimited,
+  getSchedule: getGpuClockSchedule,
 });
 
 // GPU clock cap (nvidia-smi -lgc, optionally kept across reboots by a systemd service).
@@ -2492,6 +2510,7 @@ registerGpuClockRoutes(app, {
   allowRead: (req) => allowTest(principalKey(req)),
   allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
   rejectLimited,
+  getSchedule: getGpuClockSchedule,
 });
 
 app.post("/api/sparks/:id/wake", async (req, res) => {

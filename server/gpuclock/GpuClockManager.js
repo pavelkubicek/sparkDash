@@ -16,6 +16,8 @@ import {
   parseProgramOutput,
   parseSudoPassword,
 } from "./commands.js";
+import { buildManualScheduleCommand, buildScheduleInstallProgram, buildScheduleRemoveProgram } from "./schedule.js";
+import { gpuClockCapAt, parseGpuClockWindows } from "../../src/shared/gpuClockSchedule.js";
 
 const ACTION_TIMEOUT_MS = 45_000;
 const STATUS_TIMEOUT_MS = 15_000;
@@ -202,14 +204,39 @@ export class GpuClockManager {
     }
     const num = (v) => (/^\d+$/.test(v ?? "") ? Number(v) : null);
     const clocks = (v) => (/^\d+,\d+$/.test(v ?? "") ? v : null);
+    const capMHz = num(res.CAP);
+    const windows = parseGpuClockWindows(res.SCHED_WINDOWS);
+    const installed = res.SCHED_INSTALLED === "1";
+    const kind = installed ? (res.SCHED_KIND === "cron" ? "cron" : "unit") : "none";
+    const schedule = {
+      installed,
+      kind,
+      tz: res.SCHED_TZ || null,
+      windows,
+      /** The tick ran at this boot and could not apply a window. */
+      failed: res.SCHED_FAILED === "1",
+      /** The cap the schedule says should be in force right now. */
+      capNow: null,
+      /** Epoch ms of the next window boundary. */
+      nextChangeAt: null,
+      /** The live marker matches the schedule's window; null when nothing is installed. */
+      inSync: null,
+    };
+    if (installed && windows.length) {
+      const at = gpuClockCapAt({ tz: schedule.tz, windows }, this._now());
+      schedule.capNow = at?.maxMHz ?? null;
+      schedule.nextChangeAt = at?.nextChangeAt ?? null;
+      schedule.inSync = capMHz === null ? null : capMHz === schedule.capNow;
+    }
     return {
       supported: true,
       hwMaxMHz: num(res.HWMAX),
-      capMHz: num(res.CAP),
+      capMHz,
       sudo: ["root", "yes", "no"].includes(res.SUDO) ? res.SUDO : "no",
       /** What "keep after reboot" would use here: the systemd unit, the user's
        * @reboot cron line, or nothing. */
       persistKind: ["unit", "cron", "none"].includes(res.PERSIST_KIND) ? res.PERSIST_KIND : "none",
+      schedule,
       service: {
         installed: res.SVC_INSTALLED === "1",
         clocks: clocks(res.SVC_CLOCKS),
@@ -236,7 +263,19 @@ export class GpuClockManager {
     assertSupported(spark);
     const action = query.action;
     if (action === "reset") return { command: buildManualCommand("reset", {}, this._paths) };
-    if (action !== "apply") throw httpError(400, "action must be apply or reset");
+    if (action === "unschedule") {
+      return { command: buildManualScheduleCommand("unschedule", null, this._paths) };
+    }
+    if (action === "schedule") {
+      // Query strings: the compact window form the status program prints.
+      const config = {
+        enabled: true,
+        tz: typeof query.tz === "string" ? query.tz : "",
+        windows: parseGpuClockWindows(query.windows),
+      };
+      return { command: buildManualScheduleCommand("schedule", config, this._paths) };
+    }
+    if (action !== "apply") throw httpError(400, "action must be apply, reset, schedule or unschedule");
     // Query strings: only plain digits count as numbers.
     const num = (v, dflt) => (v === undefined ? dflt : typeof v === "string" && /^\d{1,6}$/.test(v) ? Number(v) : NaN);
     const req = parseCapRequest({
@@ -276,6 +315,33 @@ export class GpuClockManager {
     return this._exclusive(spark, async () => {
       const program = buildResetProgram({ ...this._paths, password: password != null });
       await this._privileged(spark, program, password);
+      return {};
+    });
+  }
+
+  /**
+   * Install (or update) the time-of-day schedule on one unit. The config is
+   * validated by the builder; the fleet route stores it before calling this.
+   * @param {object} spark
+   * @param {{ enabled?: boolean, tz: string, windows: object[] }} config
+   */
+  async applySchedule(spark, config) {
+    assertSupported(spark);
+    return this._exclusive(spark, async () => {
+      const program = buildScheduleInstallProgram(config, this._paths);
+      const res = await this._privileged(spark, program, null);
+      return {
+        capMHz: Number(res.CAP) || null,
+        kind: res.SCHED_KIND === "cron" ? "cron" : "unit",
+      };
+    });
+  }
+
+  /** Remove the schedule from one unit and reset its clocks to full capacity. */
+  async removeSchedule(spark) {
+    assertSupported(spark);
+    return this._exclusive(spark, async () => {
+      await this._privileged(spark, buildScheduleRemoveProgram(this._paths), null);
       return {};
     });
   }

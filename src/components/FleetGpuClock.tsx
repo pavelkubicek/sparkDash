@@ -1,6 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchGpuClock, fetchSparks, resetFleetGpuClock, setFleetGpuClock } from "../api/client";
-import type { FleetGpuClockResult, GpuClockStatus } from "../api/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  fetchGpuClock,
+  fetchGpuClockSchedule,
+  fetchSparks,
+  resetFleetGpuClock,
+  resetFleetGpuClockSchedule,
+  setFleetGpuClock,
+  setFleetGpuClockSchedule,
+} from "../api/client";
+import type {
+  FleetGpuClockResult,
+  FleetGpuClockScheduleResult,
+  GpuClockSchedule,
+  GpuClockScheduleStatus,
+  GpuClockScheduleWindow,
+  GpuClockStatus,
+} from "../api/types";
+import { defaultGpuClockSchedule, gpuClockCapAt, normalizeGpuClockSchedule } from "../shared/gpuClockSchedule";
+import { listTimeZones } from "../shared/timeZone";
 
 /** Fleet-wide GPU clock options: full capacity first, then 1800–2400 MHz in 100 MHz steps. */
 const CAP_PRESETS = [1800, 1900, 2000, 2100, 2200, 2300, 2400] as const;
@@ -66,6 +83,34 @@ function bootHook({ service, cron }: ReadyStatus): BootHook {
   return m ? Number(m[1]) : false;
 }
 
+/** Same windows and zone, whatever order the objects were built in. */
+function sameSchedule(a: GpuClockSchedule, b: GpuClockSchedule): boolean {
+  if (a.tz !== b.tz || a.windows.length !== b.windows.length) return false;
+  return a.windows.every((w, i) => {
+    const o = b.windows[i];
+    return w.start === o.start && w.end === o.end && w.maxMHz === o.maxMHz;
+  });
+}
+
+/** What the units report about the installed schedule. */
+interface ScheduleSummary {
+  installed: number;
+  total: number;
+  outOfSync: number;
+  failed: number;
+}
+
+/** One line about what the units report for the installed schedule. */
+function scheduleSummary(schedules: GpuClockScheduleStatus[]): ScheduleSummary {
+  const installed = schedules.filter((s) => s.installed);
+  return {
+    installed: installed.length,
+    total: schedules.length,
+    outOfSync: installed.filter((s) => s.inSync === false).length,
+    failed: installed.filter((s) => s.failed).length,
+  };
+}
+
 /**
  * Fleet-wide GPU clock cap in Settings. One row of states — Full capacity,
  * 1800–2400 MHz — with the one every Spark is on marked; picking another only
@@ -91,6 +136,14 @@ export function FleetGpuClock({
   const [canPersist, setCanPersist] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean; detail?: string } | null>(null);
+  /** The schedule as stored on the server, and the user's unsaved edit of it. */
+  const [schedule, setSchedule] = useState<GpuClockSchedule | null>(null);
+  const [savedSchedule, setSavedSchedule] = useState<GpuClockSchedule | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  /** What the units report about the schedule that is actually installed. */
+  const [schedSummary, setSchedSummary] = useState<ScheduleSummary | null>(null);
+  /** Re-renders the "now / next switch" preview while the dialog stays open. */
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const timer = useRef<number | undefined>(undefined);
   // Once the checkbox is touched, the fleet's own capability stops setting it.
   // The capability default alone never asks for a change: only a pick or a touch does.
@@ -154,6 +207,7 @@ export function FleetGpuClock({
       const persistOk = ready.length > 0 && ready.every((status) => status.persistKind !== "none");
       setCanPersist(ready.length === 0 ? null : persistOk);
       if (!persistHeld.current && (!persistTouched.current || !persistOk)) setPersist(persistOk);
+      setSchedSummary(ready.length ? scheduleSummary(ready.map((status) => status.schedule)) : null);
       if (caps.length === 0) {
         setNow({ kind: "unknown" });
         return;
@@ -174,6 +228,37 @@ export function FleetGpuClock({
     void read();
   }, [read]);
 
+  // The schedule lives in its own store, so the dialog fetches it alongside the
+  // fleet rather than from the settings object.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const cfg = normalizeGpuClockSchedule(await fetchGpuClockSchedule());
+        // The editor edits exactly two windows; a config built through the API
+        // with another count still opens on the shipped pair rather than a
+        // half-rendered row.
+        if (cfg.windows.length !== 2) cfg.windows = defaultGpuClockSchedule().windows;
+        if (cancelled) return;
+        setSchedule(cfg);
+        setSavedSchedule(cfg);
+        setScheduleError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setScheduleError(err instanceof Error ? err.message : "Could not read the time schedule");
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setClockNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const shared = now?.kind === "same" ? now.capMHz : undefined;
   // The boot hook every unit should end up with: the picked cap with the tick on,
   // none otherwise — removing the cap keeps nothing, and an unticked cap ends at reboot.
@@ -182,16 +267,85 @@ export function FleetGpuClock({
   // A pick whose last Save failed stays a change even where the fleet now matches it.
   // On a fleet already at the picked cap, a hook that is missing, stale or broken
   // on any unit — or installed where none is asked for — is still a change.
-  const pending = picked !== undefined && (
-    unsettled || now?.kind !== "same" || now.unreadable > 0 || picked !== shared ||
-    now.boots.some((hook) => hook !== wantHook)
+  const scheduleEnabled = savedSchedule?.enabled === true;
+  // A toggled-on draft already owns the clocks for the UI: offering a fixed pick
+  // beside it would be a second instruction for the same Save.
+  const scheduleOn = scheduleEnabled || schedule?.enabled === true;
+  // Turning the schedule on or off is a hardware change; so is editing an enabled
+  // schedule. Edits made while it is off are a draft and do not block Save.
+  const scheduleDirty = Boolean(
+    schedule &&
+      savedSchedule &&
+      (schedule.enabled !== savedSchedule.enabled ||
+        (schedule.enabled && !sameSchedule(schedule, savedSchedule))),
   );
+  const pending =
+    scheduleDirty ||
+    (!scheduleEnabled &&
+      picked !== undefined &&
+      (unsettled || now?.kind !== "same" || now.unreadable > 0 || picked !== shared ||
+        now.boots.some((hook) => hook !== wantHook)));
+
+  useEffect(() => {
+    if (!scheduleEnabled) return;
+    setPicked(undefined);
+    setUnsettled(false);
+  }, [scheduleEnabled]);
 
   useEffect(() => {
     onPendingChange?.(pending);
   }, [onPendingChange, pending]);
 
   const apply = useCallback(async () => {
+    if (scheduleDirty && schedule) {
+      setBusy(true);
+      setMsg(null);
+      try {
+        const res = schedule.enabled
+          ? await setFleetGpuClockSchedule(schedule)
+          : await resetFleetGpuClockSchedule();
+        const skipped = res.results.filter(
+          (r): r is Extract<FleetGpuClockScheduleResult, { supported: false }> =>
+            "supported" in r && r.supported === false,
+        );
+        const failed = res.results.filter(
+          (r): r is Extract<FleetGpuClockScheduleResult, { ok: false }> => !r.ok,
+        );
+        const detail = [
+          ...failed.map((r) => `${r.id}: ${r.error}`),
+          ...skipped.map((r) => `${r.id}: skipped — ${r.reason}`),
+        ].join("; ");
+        // The server reverts `enabled` when no unit took the install; the message
+        // must name what was attempted, not the reverted config.
+        const action = schedule.enabled ? "Schedule installed" : "Schedule removed";
+        setMsg({
+          ok: res.success,
+          text: res.success
+            ? `${action} — ${res.applied} of ${res.results.length} units`
+            : `${action} on ${res.applied} of ${res.results.length} units`,
+          detail: detail || undefined,
+        });
+        setSavedSchedule(res.config);
+        // A failed Save stays pending: the user can press Save again without
+        // retyping the windows, exactly like a refused fixed cap.
+        setSchedule(res.success ? res.config : schedule);
+        void read();
+        return res.success;
+      } catch (err: unknown) {
+        setMsg({
+          ok: false,
+          text: err instanceof Error ? err.message : "GPU clock schedule request failed",
+        });
+        return false;
+      } finally {
+        setBusy(false);
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => setMsg(null), 12_000);
+      }
+    }
+    // A schedule that is on and untouched owns the clocks; there is nothing to
+    // apply even when other settings are being saved.
+    if (scheduleEnabled) return true;
     if (picked === undefined) return true;
     const capMHz = picked;
     setBusy(true);
@@ -274,7 +428,7 @@ export function FleetGpuClock({
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => setMsg(null), 12_000);
     }
-  }, [picked, persist, read]);
+  }, [picked, persist, read, schedule, scheduleDirty, scheduleEnabled]);
 
   /** A new pick starts over; picking the failed state again keeps its retry. */
   const pick = (state: number | null) => {
@@ -292,6 +446,38 @@ export function FleetGpuClock({
       apiRef.current = null;
     };
   }, [apiRef, pending, apply]);
+
+  const timeZones = useMemo(() => listTimeZones(), []);
+  const preview = schedule ? gpuClockCapAt(schedule, clockNow) : null;
+  const previewText = (() => {
+    if (!schedule || !preview) return null;
+    if (preview.maxMHz == null) return "No window covers the current time — fix the windows.";
+    const next =
+      preview.nextChangeAt != null && preview.nextChangeMHz != null
+        ? new Intl.DateTimeFormat(undefined, {
+            timeZone: schedule.tz,
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(new Date(preview.nextChangeAt))
+        : null;
+    return `Now: ${preview.maxMHz} MHz until ${preview.end}${next ? `, then ${preview.nextChangeMHz} MHz at ${next}` : ""}.`;
+  })();
+
+  /** Two windows tile the day: editing one moves the other's edges with it. */
+  const setWindow = (index: number, patch: Partial<GpuClockScheduleWindow>) => {
+    setSchedule((prev) => {
+      if (!prev) return prev;
+      const windows = prev.windows.map((w, i) => (i === index ? { ...w, ...patch } : w));
+      if (windows.length === 2) {
+        windows[1 - index] = {
+          ...windows[1 - index],
+          start: windows[index].end,
+          end: windows[index].start,
+        };
+      }
+      return { ...prev, windows };
+    });
+  };
 
   return (
     <div className="set-fleetcap">
@@ -321,7 +507,7 @@ export function FleetGpuClock({
             picked === null ? " is-picked" : ""
           }`}
           onClick={() => pick(null)}
-          disabled={busy}
+          disabled={busy || scheduleOn}
         >
           Full capacity
         </button>
@@ -331,7 +517,7 @@ export function FleetGpuClock({
             type="button"
             className={`btn btn--sm${shared === mhz ? " is-current" : ""}${picked === mhz ? " is-picked" : ""}`}
             onClick={() => pick(mhz)}
-            disabled={busy}
+            disabled={busy || scheduleOn}
           >
             {mhz} MHz
           </button>
@@ -350,7 +536,7 @@ export function FleetGpuClock({
             if (picked === undefined && typeof shared === "number") setPicked(shared);
           }}
           // A tick held from a refused Save can still be cleared, to cap until reboot instead.
-          disabled={busy || (canPersist === false && !persist)}
+          disabled={busy || scheduleOn || (canPersist === false && !persist)}
         />
         Keep after reboot — the state you pick also installs a boot hook on each unit
       </label>
@@ -360,6 +546,119 @@ export function FleetGpuClock({
           a running cron service for an @reboot job. The cap applies until the next reboot.
         </p>
       ) : null}
+      <div className="set-fleetcap__schedule">
+        <label className="gpu-clock__check">
+          <input
+            type="checkbox"
+            checked={schedule?.enabled ?? false}
+            onChange={() =>
+              setSchedule((prev) => (prev ? { ...prev, enabled: !prev.enabled } : prev))
+            }
+            disabled={busy || !schedule}
+          />
+          Time schedule — a different cap by day and by night, kept across reboots
+        </label>
+        {scheduleError ? (
+          <p className="set-fleetcap__msg is-err">{scheduleError}</p>
+        ) : !schedule ? (
+          <p className="set-fleetcap__hint">Reading the time schedule…</p>
+        ) : (
+          <>
+            <div className="set-fleetcap__schedule-row">
+              <input
+                type="time"
+                step={900}
+                aria-label="First window start"
+                value={schedule.windows[0]?.start ?? "08:00"}
+                onChange={(e) => setWindow(0, { start: e.target.value })}
+                disabled={busy}
+              />
+              <span>–</span>
+              <input
+                type="time"
+                step={900}
+                aria-label="First window end"
+                value={schedule.windows[0]?.end ?? "20:00"}
+                onChange={(e) => setWindow(0, { end: e.target.value })}
+                disabled={busy}
+              />
+              <select
+                aria-label="First window cap"
+                value={schedule.windows[0]?.maxMHz ?? 2200}
+                onChange={(e) => setWindow(0, { maxMHz: Number(e.target.value) })}
+                disabled={busy}
+              >
+                {CAP_PRESETS.map((mhz) => (
+                  <option key={mhz} value={mhz}>
+                    {mhz} MHz
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="set-fleetcap__schedule-row">
+              <input
+                type="time"
+                step={900}
+                aria-label="Second window start"
+                value={schedule.windows[1]?.start ?? "20:00"}
+                onChange={(e) => setWindow(1, { start: e.target.value })}
+                disabled={busy}
+              />
+              <span>–</span>
+              <input
+                type="time"
+                step={900}
+                aria-label="Second window end"
+                value={schedule.windows[1]?.end ?? "08:00"}
+                onChange={(e) => setWindow(1, { end: e.target.value })}
+                disabled={busy}
+              />
+              <select
+                aria-label="Second window cap"
+                value={schedule.windows[1]?.maxMHz ?? 1900}
+                onChange={(e) => setWindow(1, { maxMHz: Number(e.target.value) })}
+                disabled={busy}
+              >
+                {CAP_PRESETS.map((mhz) => (
+                  <option key={mhz} value={mhz}>
+                    {mhz} MHz
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className="set-fleetcap__schedule-row">
+              <span>Time zone</span>
+              <select
+                aria-label="Schedule time zone"
+                value={schedule.tz}
+                onChange={(e) =>
+                  setSchedule((prev) => (prev ? { ...prev, tz: e.target.value } : prev))
+                }
+                disabled={busy}
+              >
+                {timeZones.map((zone) => (
+                  <option key={zone} value={zone}>
+                    {zone}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {previewText ? <p className="set-fleetcap__hint">{previewText}</p> : null}
+            {scheduleEnabled && schedSummary ? (
+              <p className="set-fleetcap__hint">
+                Installed on {schedSummary.installed} of {schedSummary.total} units
+                {schedSummary.outOfSync ? `; ${schedSummary.outOfSync} not at the expected cap` : ""}
+                {schedSummary.failed ? `; ${schedSummary.failed} failed to apply a window` : ""}.
+              </p>
+            ) : null}
+            {scheduleOn ? (
+              <p className="set-fleetcap__hint">
+                The time schedule owns the clocks — turn it off to use a fixed cap again.
+              </p>
+            ) : null}
+          </>
+        )}
+      </div>
       {pending ? (
         <p className="set-fleetcap__hint">Not applied yet — press Save to change every unit.</p>
       ) : null}

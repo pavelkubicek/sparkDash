@@ -46,7 +46,9 @@ import type {
   InferenceActivity,
   HermesBatchUpdateResponse,
   GpuClockStatus,
+  GpuClockSchedule,
   FleetGpuClockResult,
+  FleetGpuClockScheduleResult,
   HermesUpdatesResponse,
   LauncherAction,
   LauncherJob,
@@ -675,6 +677,31 @@ export function resetFleetGpuClock(): Promise<{ success: boolean; applied: numbe
     method: "POST",
     body: JSON.stringify({ reset: true }),
   });
+}
+
+/** GET /api/sparks/gpu-clock-schedule: the fleet time-of-day schedule. */
+export function fetchGpuClockSchedule(): Promise<GpuClockSchedule> {
+  return apiFetch("/api/sparks/gpu-clock-schedule");
+}
+
+/** Install (or update) the schedule on every supported unit and persist it. */
+export function setFleetGpuClockSchedule(
+  config: GpuClockSchedule
+): Promise<{ success: boolean; applied: number; results: FleetGpuClockScheduleResult[]; config: GpuClockSchedule }> {
+  return apiFetch("/api/sparks/gpu-clock-schedule", {
+    method: "PUT",
+    body: JSON.stringify(config),
+  });
+}
+
+/** Remove the schedule from every unit (clocks return to full capacity) and disable it. */
+export function resetFleetGpuClockSchedule(): Promise<{
+  success: boolean;
+  applied: number;
+  results: FleetGpuClockScheduleResult[];
+  config: GpuClockSchedule;
+}> {
+  return apiFetch("/api/sparks/gpu-clock-schedule", { method: "DELETE" });
 }
 
 // ─── Hermes update preview ───────────────────────────────

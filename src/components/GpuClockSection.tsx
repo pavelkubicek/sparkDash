@@ -113,6 +113,8 @@ export function GpuClockSection({ sparkId }: { sparkId: string }) {
    * Without passwordless sudo the status cannot probe for one, so a typed password decides it on the unit.
    */
   const cannotPersist = !sudoMissing && status.persistKind === "none";
+  /** A time schedule owns the clocks; a fixed cap would be overwritten at the next window. */
+  const scheduled = status.schedule.installed;
 
   /** How this unit keeps the cap, as the response reported it. */
   const keptText = (kind: string) =>
@@ -210,6 +212,25 @@ export function GpuClockSection({ sparkId }: { sparkId: string }) {
           again, or check that <code>sudo -n nvidia-smi -lgc</code> still works for this user.
         </p>
       ) : null}
+      {scheduled ? (
+        <p className="field-hint" data-testid="gpu-clock-schedule">
+          Time schedule ({status.schedule.kind === "cron" ? "@reboot cron job" : "boot timer"})
+          {status.schedule.windows.length
+            ? `: ${status.schedule.windows.map((w) => `${w.start}–${w.end} ${w.maxMHz} MHz`).join(", ")}`
+            : ""}
+          {status.schedule.capNow != null ? ` · now ${status.schedule.capNow} MHz` : ""}
+          {status.schedule.inSync === false ? " · not at the expected cap" : ""}
+        </p>
+      ) : null}
+      {status.schedule.failed ? (
+        <p className="field-hint is-warn" role="alert" data-testid="gpu-clock-schedule-failed">
+          The time schedule could not apply its last window on this unit. Check the unit's journal, or turn the schedule
+          off in Settings → GPU clock cap.
+        </p>
+      ) : null}
+      {scheduled ? (
+        <p className="field-hint">Turn the time schedule off in Settings → GPU clock cap to set a fixed cap here.</p>
+      ) : null}
       <div className="gpu-clock__row">
         <input
           id="gpu-clock-max"
@@ -220,13 +241,13 @@ export function GpuClockSection({ sparkId }: { sparkId: string }) {
           placeholder={hwMax != null ? `${MIN_CAP_MHZ}–${hwMax}` : "MHz"}
           value={maxInput}
           onChange={(e) => setMaxInput(e.target.value)}
-          disabled={busy}
+          disabled={busy || scheduled}
         />
         <span className="gpu-clock__unit">MHz max</span>
-        <button type="button" className="btn btn--sm" onClick={apply} disabled={busy || !valid || !pwOk || (sudoMissing && !secure)}>
+        <button type="button" className="btn btn--sm" onClick={apply} disabled={busy || scheduled || !valid || !pwOk || (sudoMissing && !secure)}>
           {busy ? "Working…" : "Apply"}
         </button>
-        <button type="button" className="btn btn--sm btn--ghost" onClick={remove} disabled={busy || !pwOk || (sudoMissing && !secure)}>
+        <button type="button" className="btn btn--sm btn--ghost" onClick={remove} disabled={busy || scheduled || !pwOk || (sudoMissing && !secure)}>
           Remove limit
         </button>
       </div>
@@ -235,7 +256,7 @@ export function GpuClockSection({ sparkId }: { sparkId: string }) {
           type="checkbox"
           checked={persist}
           onChange={(e) => setPersist(e.target.checked)}
-          disabled={busy || (cannotPersist && !persist)}
+          disabled={busy || scheduled || (cannotPersist && !persist)}
         />
         Keep after reboot (
         {cannotPersist

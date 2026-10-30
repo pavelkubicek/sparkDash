@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchGpuClock,
+  fetchGpuClockSchedule,
   fetchSettings,
   fetchSparks,
   resetFleetGpuClock,
+  resetFleetGpuClockSchedule,
   setFleetGpuClock,
+  setFleetGpuClockSchedule,
   updateSettings,
 } from "../api/client";
 import type { GpuClockStatus, Settings, SparkConfig } from "../api/types";
@@ -16,8 +19,11 @@ vi.mock("../api/client", () => ({
   updateSettings: vi.fn(),
   fetchSparks: vi.fn(),
   fetchGpuClock: vi.fn(),
+  fetchGpuClockSchedule: vi.fn(),
   setFleetGpuClock: vi.fn(),
   resetFleetGpuClock: vi.fn(),
+  setFleetGpuClockSchedule: vi.fn(),
+  resetFleetGpuClockSchedule: vi.fn(),
 }));
 
 const SETTINGS: Settings = {
@@ -56,6 +62,16 @@ const READY: GpuClockStatus = {
   capMHz: 2100,
   sudo: "yes",
   persistKind: "unit",
+  schedule: {
+    installed: false,
+    kind: "none",
+    tz: null,
+    windows: [],
+    failed: false,
+    capNow: null,
+    nextChangeAt: null,
+    inSync: null,
+  },
   service: { installed: false, clocks: null, enabled: null, active: null },
   cron: { installed: false, clocks: null, failed: false },
 };
@@ -74,6 +90,14 @@ describe("SettingsDialog fleet GPU clock and Save", () => {
   beforeEach(() => {
     vi.mocked(fetchSettings).mockReset().mockResolvedValue(SETTINGS);
     vi.mocked(updateSettings).mockReset().mockResolvedValue(SETTINGS);
+    vi.mocked(fetchGpuClockSchedule).mockReset().mockResolvedValue({
+      enabled: false,
+      tz: "Europe/Prague",
+      windows: [
+        { start: "08:00", end: "20:00", maxMHz: 2200 },
+        { start: "20:00", end: "08:00", maxMHz: 1900 },
+      ],
+    });
     vi.mocked(fetchSparks).mockReset().mockResolvedValue({
       sparks: [
         { id: "spark1", kind: "spark" },

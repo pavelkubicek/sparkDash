@@ -1829,6 +1829,31 @@
   overflow-wrap: anywhere;
   color: var(--color-muted);
 }
+/* Time-of-day schedule: two rows of time inputs plus their cap. */
+.set-fleetcap__schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+.set-fleetcap__schedule-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.set-fleetcap__schedule-row input[type="time"],
+.set-fleetcap__schedule-row select {
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 4px);
+  padding: 3px 6px;
+}
 
 /* A row whose control sits under the text instead of beside it. */
 .set-row--stack {

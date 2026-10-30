@@ -4,7 +4,7 @@ import express from "express";
 import { registerGpuClockFleetRoute } from "../routes.js";
 import { GpuClockManager } from "../GpuClockManager.js";
 
-async function withApp({ run, allow = () => true, fleetDeadlineMs }, fn) {
+async function withApp({ run, allow = () => true, fleetDeadlineMs, getSchedule }, fn) {
   const events = [];
   const app = express();
   app.use(express.json());
@@ -20,6 +20,7 @@ async function withApp({ run, allow = () => true, fleetDeadlineMs }, fn) {
     recordEvent: (e) => events.push(e),
     allowChange: allow,
     rejectLimited: (res, message) => res.status(429).json({ error: message }),
+    ...(getSchedule ? { getSchedule } : {}),
     ...(fleetDeadlineMs === undefined ? {} : { fleetDeadlineMs }),
   });
   const server = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
@@ -163,4 +164,17 @@ test("rate-limited callers are refused before anything runs", async () => {
     assert.equal((await fetch(`${base}/gpu-clock-all`, json("POST", { maxMHz: 1800 }))).status, 429);
     assert.equal(ran, 0);
   });
+});
+
+test("a fixed cap is refused while a time schedule owns the clocks", async () => {
+  let ran = 0;
+  await withApp(
+    { run: async () => { ran += 1; return "RESULT=ok"; }, getSchedule: () => ({ enabled: true }) },
+    async (base) => {
+      const res = await fetch(`${base}/gpu-clock-all`, json("POST", { maxMHz: 2000 }));
+      assert.equal(res.status, 409);
+      assert.equal((await res.json()).code, "schedule-installed");
+      assert.equal(ran, 0);
+    },
+  );
 });

@@ -26,6 +26,18 @@ export const MARKER_FILE = "gpu-clock-cap";
 export const CRON_TAG = "sparkdash-gpu-clock-cap";
 
 /**
+ * The time-of-day schedule is a second, separate hook family. Distinct names
+ * from sparkLimiter's unit and from the fixed @reboot line, so installing one
+ * can remove the other without guessing which line is which.
+ */
+export const SCHEDULE_SERVICE = "sparkdash-gpu-clock-schedule";
+export const SCHEDULE_UNIT_NAME = `${SCHEDULE_SERVICE}.service`;
+export const SCHEDULE_TIMER_NAME = `${SCHEDULE_SERVICE}.timer`;
+export const SCHEDULE_TAG = "sparkdash-gpu-clock-schedule";
+export const SCHEDULE_SPEC_FILE = "gpu-clock-schedule";
+export const SCHEDULE_SCRIPT_FILE = "gpu-clock-schedule.sh";
+
+/**
  * The `@reboot` crontab line used where sudo cannot reach a root shell. It
  * applies the cap at boot through the narrow rule the cap itself uses, so keeping
  * it needs no privilege capping does not already have, and refreshes the marker,
@@ -91,6 +103,8 @@ const DEFAULT_PATHS = Object.freeze({
   runDir: "/run/sparkdash",
   bootIdFile: "/proc/sys/kernel/random/boot_id",
   systemdRunDir: "/run/systemd/system",
+  /** Root-owned home of the schedule tick script (systemd timer path). */
+  schedScriptDir: "/usr/local/lib/sparkdash",
   nvsmi: NVSMI_CANDIDATES,
   flock: FLOCK_CANDIDATES,
   systemctl: "systemctl",
@@ -108,9 +122,9 @@ const DEFAULT_PATHS = Object.freeze({
 });
 
 /** Paths come from code only (tests point them at a sandbox); still refuse anything odd. */
-function resolvePaths(overrides = {}) {
+export function resolvePaths(overrides = {}) {
   const p = { ...DEFAULT_PATHS, ...overrides };
-  const list = [p.unitDir, p.runDir, p.bootIdFile, p.systemdRunDir, ...p.nvsmi, ...p.flock];
+  const list = [p.unitDir, p.runDir, p.bootIdFile, p.systemdRunDir, p.schedScriptDir, ...p.nvsmi, ...p.flock];
   if (p.systemctl !== "systemctl") list.push(p.systemctl);
   if (p.sandboxSudo) list.push(p.sandboxSudo);
   for (const v of list) {
@@ -188,7 +202,7 @@ export function buildUnit({ minMHz, maxMHz, nvsmi = "/usr/bin/nvidia-smi", runDi
  * The sudo gate: with a typed password a refusal means a wrong password; otherwise
  * passwordless sudo is missing (NOPASSWD: ALL, or a rule for the nvidia-smi commands).
  */
-function needSudoLine(paths) {
+export function needSudoLine(paths) {
   if (!paths.password) {
     return 'need_sudo || fail no-sudo "passwordless sudo is required for the user that runs the change (NOPASSWD: ALL, or a rule for nvidia-smi -lgc and -rgc)"';
   }
@@ -202,7 +216,7 @@ function needSudoLine(paths) {
   ].join("\n");
 }
 
-function header(paths) {
+export function header(paths) {
   const nv = paths.nvsmi.map((c) => `"${c}"`).join(" ");
   const fl = paths.flock.map((c) => `"${c}"`).join(" ");
   return [
@@ -238,6 +252,17 @@ function header(paths) {
     'ALT_FAIL="$ALT_DIR/gpu-clock-cap.failed"',
     `LOCKFILE="$ALT_DIR/${MARKER_FILE}.lock"`,
     `BOOTID_FILE=${paths.bootIdFile}`,
+    // Schedule hook family (time-of-day caps). The spec and tick script live next
+    // to the marker the install wrote: root's run dir for the systemd timer, the
+    // user's config dir for the @reboot/*/5 cron job.
+    `SCHED_UNIT=${paths.unitDir}/${SCHEDULE_UNIT_NAME}`,
+    `SCHED_TIMER=${paths.unitDir}/${SCHEDULE_TIMER_NAME}`,
+    `SCHED_SCRIPT=${paths.schedScriptDir}/${SCHEDULE_SCRIPT_FILE}`,
+    `SCHED_SPEC="$RUNDIR/${SCHEDULE_SPEC_FILE}"`,
+    `SCHED_FAIL="$RUNDIR/${SCHEDULE_SPEC_FILE}.failed"`,
+    `ALT_SCHED_SPEC="$ALT_DIR/${SCHEDULE_SPEC_FILE}"`,
+    `ALT_SCHED_SCRIPT="$ALT_DIR/${SCHEDULE_SCRIPT_FILE}"`,
+    `ALT_SCHED_FAIL="$ALT_DIR/${SCHEDULE_SPEC_FILE}.failed"`,
     "NV=''",
     `for c in ${nv}; do if [ -x "$c" ]; then NV="$c"; break; fi; done`,
     "FLOCK=''",
@@ -249,6 +274,18 @@ function header(paths) {
     'clean() { printf "%s" "$1" | head -n 1 | tr -cd "A-Za-z0-9 .,:_()/-" | head -c 160; }',
     'hwmax() { "$NV" --query-gpu=clocks.max.gr --format=csv,noheader,nounits 2>/dev/null | head -n 1 | digits; }',
     'bootid() { tr -dc "0-9a-fA-F-" < "$BOOTID_FILE" 2>/dev/null | head -c 64; }',
+    // The cap recorded for this boot, from root's marker or the user's. NVML cannot
+    // read an -lgc lock back, so this file is the only record.
+    'marker_cap() {',
+    '  for F in "$MARKER" "$ALT_MARKER"; do',
+    '    [ -r "$F" ] || continue',
+    '    read -r M B < "$F" || continue',
+    '    M=$(printf "%s" "${M:-}" | digits)',
+    '    B=$(printf "%s" "${B:-}" | tr -dc "0-9a-fA-F-")',
+    '    if [ -n "$M" ] && [ "$B" = "$(bootid)" ]; then printf "%s" "$M"; return 0; fi',
+    '  done',
+    '  return 1',
+    '}',
     // Anything that ends up inside the crontab line must be a plain absolute path:
     // $HOME and the sudo path come from the unit, not from this module.
     'safe_path() { case "$1" in /*) ;; *) return 1 ;; esac; case "$1" in *[!A-Za-z0-9_./-]*|*..*) return 1 ;; esac; }',
@@ -299,6 +336,8 @@ function header(paths) {
     `CRON_TAG="${CRON_TAG}"`,
     // Our line is the one that ENDS in the tag: a user line that merely mentions it is never read, dropped or rewritten.
     `CRON_RE='^@reboot .* # ${CRON_TAG}[[:space:]]*$'`,
+    // The schedule's own lines (@reboot and */5) carry a second tag.
+    `SCHED_CRON_RE='# ${SCHEDULE_TAG}[[:space:]]*$'`,
     'CRONBIN=$(command -v crontab 2>/dev/null || true)',
     // The crontab is read once into CRON_TXT. A read that fails for any reason
     // other than "no crontab" is an error, never an empty crontab: writing back
@@ -315,6 +354,7 @@ function header(paths) {
     '}',
     `cron_text() { [ -z "$CRON_TXT" ] || printf '%s\\n' "$CRON_TXT"; }`,
     'cron_has() { cron_text | grep -q "$CRON_RE"; }',
+    'sched_cron_has() { cron_text | grep -q "$SCHED_CRON_RE"; }',
     'cron_clocks() { cron_text | grep "$CRON_RE" | sed -n \'s/.*-lgc \\([0-9][0-9]*,[0-9][0-9]*\\).*/\\1/p\' | head -n 1; }',
     'can_cron() {',
     '  [ -n "$CRONBIN" ] || return 1',
@@ -323,13 +363,13 @@ function header(paths) {
     '  done',
     '  return 1',
     '}',
-    // Drops just our own line, leaving the user's other jobs alone.
-    "drop_cron() {",
+    // Drops just the lines matching $1, leaving every other job alone.
+    "drop_cron_re() {",
     '  [ -n "$CRONBIN" ] || return 0',
     '  cron_load || return 1',
-    '  cron_has || { rm -f "$ALT_FAIL" 2>/dev/null; return 0; }',
+    '  cron_text | grep -q "$1" || return 0',
     '  T=$(mktemp) || return 1',
-    '  cron_text | grep -v "$CRON_RE" > "$T"',
+    '  cron_text | grep -v "$1" > "$T"',
     '  if [ -s "$T" ]; then',
     '    "$CRONBIN" "$T" >/dev/null 2>&1 || { rm -f "$T"; return 1; }',
     '  else',
@@ -339,8 +379,12 @@ function header(paths) {
     '  fi',
     '  rm -f "$T"',
     '  cron_load || return 1',
-    '  ! cron_has && { rm -f "$ALT_FAIL" 2>/dev/null; true; }',
+    '  if cron_text | grep -q "$1"; then return 1; fi',
+    '  return 0',
     '}',
+    'drop_fixed_cron() { drop_cron_re "$CRON_RE" || return 1; rm -f "$ALT_FAIL" 2>/dev/null; return 0; }',
+    'drop_sched_cron() { drop_cron_re "$SCHED_CRON_RE" || return 1; rm -f "$ALT_SCHED_FAIL" 2>/dev/null; return 0; }',
+    'drop_cron() { drop_fixed_cron || return 1; drop_sched_cron; }',
     // Removes a previous service (a stale one would re-apply the old cap at boot).
     "drop_service() {",
     '  if [ -f "$UNIT" ]; then',
@@ -348,6 +392,22 @@ function header(paths) {
     '    $SUDO rm -f "$UNIT" || return 1',
     "    $SUDO $SYSTEMCTL daemon-reload >/dev/null 2>&1 || true",
     "  fi",
+    "}",
+    // Removes the schedule's timer/service/script and its spec files.
+    "drop_sched_unit() {",
+    `  if [ -f "$SCHED_TIMER" ]; then $SUDO $SYSTEMCTL disable --now ${SCHEDULE_TIMER_NAME} >/dev/null 2>&1 || true; fi`,
+    `  if [ -f "$SCHED_UNIT" ]; then $SUDO $SYSTEMCTL disable --now ${SCHEDULE_UNIT_NAME} >/dev/null 2>&1 || true; fi`,
+    '  if [ -f "$SCHED_UNIT" ] || [ -f "$SCHED_TIMER" ] || [ -f "$SCHED_SCRIPT" ]; then',
+    '    $SUDO rm -f "$SCHED_UNIT" "$SCHED_TIMER" "$SCHED_SCRIPT" "$SCHED_FAIL" || return 1',
+    "    $SUDO $SYSTEMCTL daemon-reload >/dev/null 2>&1 || true",
+    "  fi",
+    "}",
+    // A leftover spec without a hook is harmless, but it would still make the
+    // status describe a schedule nobody runs: drop both copies best-effort.
+    "drop_sched_specs() {",
+    '  rm -f "$SCHED_SPEC" "$ALT_SCHED_SPEC" "$ALT_SCHED_SCRIPT" "$SCHED_FAIL" "$ALT_SCHED_FAIL" 2>/dev/null',
+    '  $SUDO rm -f "$SCHED_SPEC" "$ALT_SCHED_SPEC" "$ALT_SCHED_SCRIPT" "$SCHED_FAIL" "$ALT_SCHED_FAIL" 2>/dev/null',
+    '  return 0',
     "}",
   ];
 }
@@ -373,15 +433,7 @@ export function buildStatusProgram(overrides = {}) {
     'if cron_has; then CI=1; CCLK=$(cron_clocks); fi',
     // The @reboot job leaves the boot id behind when it could not re-apply the cap; a stale line alone is not "kept".
     'if [ "$CI" = 1 ] && [ -n "$(bootid)" ] && [ -r "$ALT_FAIL" ] && [ "$(tr -dc "0-9a-fA-F-" < "$ALT_FAIL" 2>/dev/null | head -c 64)" = "$(bootid)" ]; then CF=1; fi',
-    "CAP=''",
-    'read_marker() {',
-    '  [ -r "$1" ] || return 0',
-    '  read -r M B < "$1" || return 0',
-    '  M=$(printf "%s" "${M:-}" | digits); B=$(printf "%s" "${B:-}" | tr -dc "0-9a-fA-F-")',
-    '  if [ -n "$M" ] && [ "$B" = "$(bootid)" ]; then CAP=$M; fi',
-    '}',
-    'read_marker "$MARKER"',
-    '[ -n "$CAP" ] || read_marker "$ALT_MARKER"',
+    "CAP=$(marker_cap) || CAP=''",
     "INST=0; CLK=''; EN=''; ACT=''",
     'if [ -f "$UNIT" ]; then',
     "  INST=1",
@@ -389,7 +441,25 @@ export function buildStatusProgram(overrides = {}) {
     `  EN=$($SYSTEMCTL is-enabled ${UNIT_NAME} 2>/dev/null | head -n 1 | tr -dc "a-z-")`,
     `  ACT=$($SYSTEMCTL is-active ${UNIT_NAME} 2>/dev/null | head -n 1 | tr -dc "a-z-")`,
     "fi",
-    "printf 'RESULT=ok\\nHWMAX=%s\\nSUDO=%s\\nPERSIST_KIND=%s\\nCAP=%s\\nSVC_INSTALLED=%s\\nSVC_CLOCKS=%s\\nSVC_ENABLED=%s\\nSVC_ACTIVE=%s\\nCRON_INSTALLED=%s\\nCRON_CLOCKS=%s\\nCRON_FAILED=%s\\n' \"$HW\" \"$S\" \"$PK\" \"$CAP\" \"$INST\" \"$CLK\" \"$EN\" \"$ACT\" \"$CI\" \"$CCLK\" \"$CF\"",
+    // Time-of-day schedule: which hook family is installed and the spec it reads.
+    "SI=0; SK=none; SF=0; STZ=''; SW=''",
+    'if [ -f "$SCHED_UNIT" ] && [ -f "$SCHED_TIMER" ]; then SI=1; SK=unit; fi',
+    'if sched_cron_has; then SI=1; [ "$SK" = none ] && SK=cron; fi',
+    'for F in "$SCHED_SPEC" "$ALT_SCHED_SPEC"; do',
+    '  [ -r "$F" ] || continue',
+    '  STZ=$(sed -n "s/^TZ=//p" "$F" | head -n 1 | tr -cd "A-Za-z0-9_+/-")',
+    '  SW=$(awk \'$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { printf "%s%s:%s:%s", (n++ ? "," : ""), $1, $2, $3 }\' "$F")',
+    '  break',
+    'done',
+    // The tick writes the boot id to its failure marker when it could not apply
+    // a window; a spec alone is not "working".
+    'if [ -n "$(bootid)" ]; then',
+    '  for F in "$SCHED_FAIL" "$ALT_SCHED_FAIL"; do',
+    '    [ -r "$F" ] || continue',
+    '    [ "$(tr -dc "0-9a-fA-F-" < "$F" 2>/dev/null | head -c 64)" = "$(bootid)" ] && SF=1',
+    '  done',
+    'fi',
+    "printf 'RESULT=ok\\nHWMAX=%s\\nSUDO=%s\\nPERSIST_KIND=%s\\nCAP=%s\\nSVC_INSTALLED=%s\\nSVC_CLOCKS=%s\\nSVC_ENABLED=%s\\nSVC_ACTIVE=%s\\nCRON_INSTALLED=%s\\nCRON_CLOCKS=%s\\nCRON_FAILED=%s\\nSCHED_INSTALLED=%s\\nSCHED_KIND=%s\\nSCHED_FAILED=%s\\nSCHED_TZ=%s\\nSCHED_WINDOWS=%s\\n' \"$HW\" \"$S\" \"$PK\" \"$CAP\" \"$INST\" \"$CLK\" \"$EN\" \"$ACT\" \"$CI\" \"$CCLK\" \"$CF\" \"$SI\" \"$SK\" \"$SF\" \"$STZ\" \"$SW\"",
     "exit 0",
     "",
   ].join("\n");
@@ -438,6 +508,9 @@ export function buildApplyProgram({ minMHz, maxMHz, persist }, overrides = {}) {
     '  done',
     'fi',
     'if [ "$HOOK" = cron ] && [ -f "$UNIT" ]; then fail service-failed "a boot service this unit cannot remove without NOPASSWD: ALL is still installed and would re-apply its own cap at every boot; nothing was changed"; fi',
+    // A fixed cap supersedes a time schedule; the schedule's root service must go
+    // before the new cap is applied, or it would re-apply its own window at boot.
+    'if [ -f "$SCHED_UNIT" ] || [ -f "$SCHED_TIMER" ]; then can_sudo_root || fail service-failed "the time schedule is installed and this user cannot remove its boot service; turn the schedule off instead of setting a fixed cap"; fi',
     'marker_preflight "set the cap"',
     // Order matters: nothing existing is touched until the new cap has been accepted by nvidia-smi.
     'lgc() { if [ "$HOOK" = cron ]; then LC_ALL=C "$SUDO_BIN" -k -n "$NV" -lgc "$MIN,$MAX"; else $SUDO "$NV" -lgc "$MIN,$MAX"; fi; }',
@@ -475,6 +548,8 @@ export function buildApplyProgram({ minMHz, maxMHz, persist }, overrides = {}) {
     '  write_marker || fail marker-failed "$MARKER_ERR"',
     // A stale hook of either kind would re-apply the old cap at the next boot.
     '  drop_cron || fail cron-failed "the cap is applied until the next reboot, but the existing @reboot job could not be removed and will re-apply its own cap at boot"',
+    '  drop_sched_unit || fail service-failed "the cap is applied until the next reboot, but the time schedule service could not be removed and would re-apply its own window at boot"',
+    '  drop_sched_specs',
     '  if [ -f "$UNIT" ]; then',
     // Stopping the old service resets clocks and deletes the marker, so restore both afterwards.
     '    if ! drop_service; then',
@@ -517,6 +592,8 @@ export function buildApplyProgram({ minMHz, maxMHz, persist }, overrides = {}) {
     // A @reboot line left from when this unit had only the narrow rule would
     // race the service at boot with its own, older cap.
     '  drop_cron || fail cron-failed "the boot service is installed, but the old @reboot job could not be removed and would re-apply its own cap at boot"',
+    '  drop_sched_unit || fail service-failed "the boot service is installed, but the time schedule service could not be removed and would re-apply its own window at boot"',
+    '  drop_sched_specs',
     // No root: an @reboot line in the user's own crontab. It runs the very same
     // `sudo -n nvidia-smi -lgc` the cap has just run, so the narrow rule the unit
     // already grants is enough — and it refreshes the marker at every boot.
@@ -525,6 +602,7 @@ export function buildApplyProgram({ minMHz, maxMHz, persist }, overrides = {}) {
     cron.replace(/\n$/, ""),
     "SPARKDASH_CRON_EOF",
     '  CRON_LINE=$(sed "s#@@JOB@@#$JOB#g; s#@@CRON@@#$CRONBIN#g; s#@@SUDO@@#$SUDO_BIN#g; s#@@NV@@#$NV#g; s#@@ALT_DIR@@#$ALT_DIR#g; s#@@BOOTID@@#$BOOTID_FILE#g; s#@@FLOCK@@#$FLOCK#g" "$D/cron") || fail cron-failed "could not prepare the @reboot job"',
+    '  drop_sched_unit || fail service-failed "the @reboot job was not installed because the time schedule service could not be removed and would re-apply its own window at boot"',
     '  T=$(mktemp) || fail cron-failed "could not create a temporary file"',
     '  cron_text | grep -v "$CRON_RE" > "$T"',
     "  printf '%s\\n' \"$CRON_LINE\" >> \"$T\"",
@@ -537,6 +615,8 @@ export function buildApplyProgram({ minMHz, maxMHz, persist }, overrides = {}) {
     '    fail cron-failed "the @reboot job did not install; the cap applies until the next reboot"',
     '  fi',
     '  rm -f "$ALT_FAIL" 2>/dev/null',
+    '  drop_sched_cron || fail cron-failed "the @reboot job is installed, but the old time schedule job could not be removed"',
+    '  drop_sched_specs',
     '  fi',
     "fi",
     // Which hook took, so the row can name it instead of a bare "kept".
@@ -561,8 +641,10 @@ export function buildResetProgram(overrides = {}) {
     'marker_preflight "reset"',
     'drop_cron || fail cron-failed "could not remove the existing @reboot job"',
     'drop_service || fail service-failed "could not remove the existing service"',
+    'drop_sched_unit || fail service-failed "could not remove the time schedule service"',
+    'drop_sched_specs',
     '$SUDO "$NV" -rgc >/dev/null 2>&1 || fail rgc-failed "nvidia-smi could not reset the clocks"',
-    'rm -f "$MARKER" "$ALT_MARKER" "$ALT_FAIL" 2>/dev/null || $SUDO rm -f "$MARKER" "$ALT_MARKER" "$ALT_FAIL" 2>/dev/null || fail marker-failed "could not clear the recorded cap"',
+    'rm -f "$MARKER" "$ALT_MARKER" "$ALT_FAIL" "$SCHED_FAIL" "$ALT_SCHED_FAIL" 2>/dev/null || $SUDO rm -f "$MARKER" "$ALT_MARKER" "$ALT_FAIL" "$SCHED_FAIL" "$ALT_SCHED_FAIL" 2>/dev/null || fail marker-failed "could not clear the recorded cap"',
     paths.manual ? "printf 'Done: GPU clock cap removed.\\n'" : "printf 'RESULT=ok\\n'",
     "exit 0",
     "",
@@ -580,6 +662,7 @@ export function parseProgramOutput(out) {
     "RESULT", "CODE", "MSG", "HWMAX", "SUDO", "PERSIST_KIND", "PERSIST", "CAP",
     "SVC_INSTALLED", "SVC_CLOCKS", "SVC_ENABLED", "SVC_ACTIVE",
     "CRON_INSTALLED", "CRON_CLOCKS", "CRON_FAILED",
+    "SCHED_INSTALLED", "SCHED_KIND", "SCHED_FAILED", "SCHED_TZ", "SCHED_WINDOWS",
   ]);
   const res = {};
   for (const line of String(out ?? "").split("\n")) {
@@ -614,6 +697,11 @@ export function buildManualCommand(action, req = {}, overrides = {}) {
   const what = action === "apply"
     ? `cap the GPU clock at ${req.maxMHz} MHz${req.persist === true ? " and keep it after reboot" : ""}`
     : "remove the GPU clock cap and its boot service";
+  return wrapManual(program, what);
+}
+
+/** Wrap an on-unit program in the paste-into-a-terminal recipe (plain sudo). */
+export function wrapManual(program, what) {
   return [
     "# sparkDash: run this on the Spark itself. It will ask for your sudo password.",
     `# It will ${what}. Read it first; nothing is sent anywhere.`,

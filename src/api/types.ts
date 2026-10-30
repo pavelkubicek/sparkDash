@@ -215,6 +215,39 @@ export interface GpuThrottle {
  *  nothing at all. */
 export type GpuClockPersistKind = "unit" | "cron" | "none";
 
+/** One daily window of the fleet time-of-day GPU clock schedule. */
+export interface GpuClockScheduleWindow {
+  /** "HH:MM" 24-hour local time in the schedule's zone. */
+  start: string;
+  end: string;
+  maxMHz: number;
+}
+
+/** GET/PUT /api/sparks/gpu-clock-schedule: the fleet time-of-day schedule. */
+export interface GpuClockSchedule {
+  enabled: boolean;
+  /** IANA zone the windows are read in. */
+  tz: string;
+  windows: GpuClockScheduleWindow[];
+}
+
+/** What the unit reports about its installed schedule. */
+export interface GpuClockScheduleStatus {
+  installed: boolean;
+  /** Which hook keeps it: the systemd timer, the user's cron job, or none. */
+  kind: GpuClockPersistKind;
+  tz: string | null;
+  windows: GpuClockScheduleWindow[];
+  /** The tick ran at this boot and could not apply a window. */
+  failed: boolean;
+  /** The cap the schedule says should be in force right now. */
+  capNow: number | null;
+  /** Epoch ms of the next window boundary. */
+  nextChangeAt: number | null;
+  /** The live marker matches the schedule's window; null when nothing is installed. */
+  inSync: boolean | null;
+}
+
 /** GET /api/sparks/:id/gpu-clock: the GPU clock cap (`nvidia-smi -lgc`) and its boot hook. */
 export type GpuClockStatus =
   | { supported: false; reason?: string }
@@ -230,6 +263,8 @@ export type GpuClockStatus =
       sudo: "root" | "yes" | "no";
       /** What "keep after reboot" would install on this unit. */
       persistKind: GpuClockPersistKind;
+      /** The time-of-day schedule installed here, if any. */
+      schedule: GpuClockScheduleStatus;
       service: {
         installed: boolean;
         /** "min,max" the service applies at boot. */
@@ -250,6 +285,12 @@ export type GpuClockStatus =
 /** POST /api/sparks/gpu-clock-all: per-unit outcome of a fleet-wide cap or reset. */
 export type FleetGpuClockResult =
   | { id: string; ok: true; capMHz: number | null; persistKind: GpuClockPersistKind }
+  | { id: string; ok: true; supported: false; reason: string }
+  | { id: string; ok: false; error: string };
+
+/** PUT/DELETE /api/sparks/gpu-clock-schedule: per-unit outcome of a schedule change. */
+export type FleetGpuClockScheduleResult =
+  | { id: string; ok: true; capMHz: number | null; kind?: GpuClockPersistKind }
   | { id: string; ok: true; supported: false; reason: string }
   | { id: string; ok: false; error: string };
 

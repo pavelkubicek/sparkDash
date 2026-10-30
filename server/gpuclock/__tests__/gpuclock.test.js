@@ -15,7 +15,15 @@ import {
   parseSudoPassword,
   MARKER_FILE,
   UNIT_NAME,
+  SCHEDULE_SPEC_FILE,
+  SCHEDULE_TIMER_NAME,
+  SCHEDULE_UNIT_NAME,
 } from "../commands.js";
+import {
+  buildManualScheduleCommand,
+  buildScheduleInstallProgram,
+  buildScheduleRemoveProgram,
+} from "../schedule.js";
 import { GpuClockManager, assertSupported, remoteCommand } from "../GpuClockManager.js";
 
 /** A temp tree with fake nvidia-smi, systemctl, sudo and crontab; the programs run
@@ -26,7 +34,7 @@ function sandbox({ hwMax = 3003, lgcFails = false, narrowSudo = false, cron = fa
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gpuclock-"));
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
-  for (const d of ["units", "run", "systemd", "user-home"]) fs.mkdirSync(path.join(root, d));
+  for (const d of ["units", "run", "systemd", "user-home", "scripts"]) fs.mkdirSync(path.join(root, d));
   fs.writeFileSync(path.join(root, "boot_id"), "11111111-2222-3333-4444-555555555555\n");
   if (cron) fs.writeFileSync(path.join(root, "cron_active"), "");
   const lock = path.join(root, "lock");
@@ -55,6 +63,10 @@ case "$1" in
       rm -f ${lock} ${root}/run/${MARKER_FILE}
     fi ;;
   restart) [ -f ${root}/restart_fails ] && exit 1 ;;
+  start)
+    if [ "$2" = "sparkdash-gpu-clock-schedule.service" ] && [ -f ${root}/scripts/gpu-clock-schedule.sh ]; then
+      sh ${root}/scripts/gpu-clock-schedule.sh
+    fi ;;
   is-enabled) [ -f ${root}/units/${UNIT_NAME} ] && echo enabled || echo disabled ;;
   is-active)
     if [ -f ${root}/cron_active ] && { [ "$2" = cron.service ] || [ "$2" = crond.service ]; }; then
@@ -123,6 +135,7 @@ esac
     runDir: path.join(root, "run"),
     bootIdFile: path.join(root, "boot_id"),
     systemdRunDir: path.join(root, "systemd"),
+    schedScriptDir: path.join(root, "scripts"),
     nvsmi: [path.join(bin, "nvidia-smi")],
     systemctl: path.join(bin, "systemctl"),
     sandbox: true,
@@ -414,6 +427,10 @@ test("GpuClockManager.status: normal answer, and a unit without nvidia-smi is 'u
   });
   assert.deepEqual(await ok.status(spark), {
     supported: true, hwMaxMHz: 3003, capMHz: 1800, sudo: "yes", persistKind: "unit",
+    schedule: {
+      installed: false, kind: "none", tz: null, windows: [], failed: false,
+      capNow: null, nextChangeAt: null, inSync: null,
+    },
     service: { installed: true, clocks: "0,1800", enabled: "enabled", active: "active" },
     cron: { installed: false, clocks: null, failed: false },
   });
@@ -1596,4 +1613,151 @@ esac
       sb.cleanup();
     }
   }
+});
+
+// ─── Time-of-day schedule ─────────────────────────────────
+/** A full-day window makes the cap independent of when the test runs. */
+const FULL_DAY_SCHEDULE = {
+  enabled: true,
+  tz: "Europe/Prague",
+  windows: [{ start: "00:00", end: "00:00", maxMHz: 2200 }],
+};
+
+const DAY_NIGHT_SCHEDULE = {
+  enabled: true,
+  tz: "Europe/Prague",
+  windows: [
+    { start: "08:00", end: "20:00", maxMHz: 2200 },
+    { start: "20:00", end: "08:00", maxMHz: 1900 },
+  ],
+};
+
+test("schedule validation rejects gaps, overlaps and hostile values", () => {
+  assert.doesNotThrow(() => buildScheduleInstallProgram(DAY_NIGHT_SCHEDULE));
+  assert.throws(
+    () => buildScheduleInstallProgram({ ...DAY_NIGHT_SCHEDULE, windows: [{ start: "08:00", end: "20:00", maxMHz: 2200 }] }),
+    /cover every minute/,
+  );
+  assert.throws(
+    () =>
+      buildScheduleInstallProgram({
+        ...DAY_NIGHT_SCHEDULE,
+        windows: [
+          { start: "08:00", end: "20:00", maxMHz: 2200 },
+          { start: "19:00", end: "08:00", maxMHz: 1900 },
+        ],
+      }),
+    /overlap/,
+  );
+  assert.throws(() => buildScheduleInstallProgram({ ...DAY_NIGHT_SCHEDULE, tz: "Europe/Prague; id" }), /tz must be/);
+  assert.throws(
+    () => buildScheduleInstallProgram({ ...DAY_NIGHT_SCHEDULE, windows: [{ start: "00:00", end: "00:00", maxMHz: 100 }] }),
+    /maxMHz/,
+  );
+});
+
+test("the schedule install program is valid POSIX sh and carries only validated values", () => {
+  const program = buildScheduleInstallProgram(DAY_NIGHT_SCHEDULE);
+  execFileSync("sh", ["-n", "-c", program]);
+  assert.match(program, /TZ=Europe\/Prague/);
+  assert.match(program, /480 1200 2200/);
+  assert.match(program, /1200 480 1900/);
+  assert.doesNotMatch(program, /PATH=/);
+  assert.throws(() => buildScheduleInstallProgram(DAY_NIGHT_SCHEDULE, { unitDir: "/etc/x; id" }), /unsafe path/);
+});
+
+test("the unit path installs a timer, applies the window now, and reports it", () => {
+  const sb = sandbox();
+  try {
+    const res = sb.run(buildScheduleInstallProgram(FULL_DAY_SCHEDULE, sb.paths));
+    assert.equal(res.RESULT, "ok", JSON.stringify(res));
+    assert.equal(res.CAP, "2200");
+    assert.equal(res.SCHED_KIND, "unit");
+    assert.match(sb.read(`run/${SCHEDULE_SPEC_FILE}`), /^TZ=Europe\/Prague\n0 0 2200/);
+    assert.ok(sb.read(`units/${SCHEDULE_UNIT_NAME}`));
+    assert.ok(sb.read(`units/${SCHEDULE_TIMER_NAME}`));
+    assert.ok(sb.read("scripts/gpu-clock-schedule.sh"));
+    assert.equal(sb.lockText(), "0,2200");
+    assert.equal(sb.read(`run/${MARKER_FILE}`).trim(), "2200 11111111-2222-3333-4444-555555555555");
+
+    const status = sb.run(buildStatusProgram(sb.paths));
+    assert.equal(status.SCHED_INSTALLED, "1");
+    assert.equal(status.SCHED_KIND, "unit");
+    assert.equal(status.SCHED_TZ, "Europe/Prague");
+    assert.equal(status.SCHED_WINDOWS, "0:0:2200");
+    assert.equal(status.SCHED_FAILED, "0");
+    assert.equal(status.CAP, "2200");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("the cron path installs @reboot and every-five-minutes lines and applies the cap", () => {
+  const sb = sandbox({ narrowSudo: true, cron: true });
+  try {
+    const res = sb.run(buildScheduleInstallProgram(FULL_DAY_SCHEDULE, sb.paths));
+    assert.equal(res.RESULT, "ok", JSON.stringify(res));
+    assert.equal(res.CAP, "2200");
+    assert.equal(res.SCHED_KIND, "cron");
+    assert.match(sb.cronText(), /@reboot \/bin\/sh .* # sparkdash-gpu-clock-schedule/);
+    assert.match(sb.cronText(), /^\*\/5 \* \* \* \* \/bin\/sh .* # sparkdash-gpu-clock-schedule$/m);
+    assert.match(sb.read(`run/${SCHEDULE_SPEC_FILE}`), /^TZ=Europe\/Prague\n0 0 2200/);
+    assert.equal(sb.lockText(), "0,2200");
+
+    const status = sb.run(buildStatusProgram(sb.paths));
+    assert.equal(status.SCHED_INSTALLED, "1");
+    assert.equal(status.SCHED_KIND, "cron");
+    assert.equal(status.CAP, "2200");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a tick at the same cap does nothing; a removed spec leaves the clocks alone", () => {
+  const sb = sandbox();
+  try {
+    assert.equal(sb.run(buildScheduleInstallProgram(FULL_DAY_SCHEDULE, sb.paths)).RESULT, "ok");
+    const script = sb.read("scripts/gpu-clock-schedule.sh");
+    const lgcs = () => (sb.calls().match(/-lgc/g) ?? []).length;
+    const before = lgcs();
+    sb.shell(`sh ${sb.paths.schedScriptDir}/gpu-clock-schedule.sh`);
+    assert.equal(lgcs(), before, "the marker already holds the window's cap");
+    assert.equal(sb.lockText(), "0,2200");
+
+    fs.rmSync(path.join(sb.root, `run/${SCHEDULE_SPEC_FILE}`), { force: true });
+    sb.shell(`sh ${sb.paths.schedScriptDir}/gpu-clock-schedule.sh`);
+    assert.equal(lgcs(), before, "no spec means the schedule was removed");
+    assert.equal(sb.lockText(), "0,2200");
+    assert.ok(script.length > 0);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("removing the schedule drops both hook families, resets clocks and clears markers", () => {
+  const sb = sandbox();
+  try {
+    assert.equal(sb.run(buildScheduleInstallProgram(FULL_DAY_SCHEDULE, sb.paths)).RESULT, "ok");
+    const res = sb.run(buildScheduleRemoveProgram(sb.paths));
+    assert.equal(res.RESULT, "ok", JSON.stringify(res));
+    assert.equal(sb.read(`units/${SCHEDULE_UNIT_NAME}`), null);
+    assert.equal(sb.read(`units/${SCHEDULE_TIMER_NAME}`), null);
+    assert.equal(sb.read("scripts/gpu-clock-schedule.sh"), null);
+    assert.equal(sb.read(`run/${SCHEDULE_SPEC_FILE}`), null);
+    assert.equal(sb.read(`run/${MARKER_FILE}`), null);
+    assert.equal(sb.lockText(), null);
+    const status = sb.run(buildStatusProgram(sb.paths));
+    assert.equal(status.SCHED_INSTALLED, "0");
+    assert.equal(status.CAP, "");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("the paste-into-a-terminal schedule command is the same program with plain sudo", () => {
+  const command = buildManualScheduleCommand("schedule", DAY_NIGHT_SCHEDULE);
+  assert.match(command, /SPARKDASH_SCRIPT_EOF/);
+  assert.match(command, /TZ=Europe\/Prague/);
+  assert.match(command, /480 1200 2200/);
+  assert.throws(() => buildManualScheduleCommand("schedule", { ...DAY_NIGHT_SCHEDULE, tz: "Nope/Zone" }), /tz must be/);
 });

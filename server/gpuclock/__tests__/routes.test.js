@@ -4,7 +4,7 @@ import express from "express";
 import { registerGpuClockRoutes, isSecureRequest } from "../routes.js";
 import { GpuClockManager } from "../GpuClockManager.js";
 
-async function withApp({ run, allow = () => true, sparks, remoteAddr }, fn) {
+async function withApp({ run, allow = () => true, sparks, remoteAddr, getSchedule }, fn) {
   const events = [];
   const app = express();
   app.use(express.json());
@@ -18,6 +18,7 @@ async function withApp({ run, allow = () => true, sparks, remoteAddr }, fn) {
     allowRead: allow,
     allowChange: allow,
     rejectLimited: (res, message) => res.status(429).json({ error: message }),
+    ...(getSchedule ? { getSchedule } : {}),
   });
   const server = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
   const base = `http://127.0.0.1:${server.address().port}/api/sparks`;
@@ -169,5 +170,18 @@ test("the status tells the page whether a typed password would be accepted from 
   });
   await withApp({ run, remoteAddr: "192.168.1.9" }, async (base) => {
     assert.equal((await (await fetch(`${base}/s1/gpu-clock`)).json()).passwordAllowed, false);
+  });
+});
+
+test("per-unit cap and reset are refused while a time schedule is installed", async () => {
+  let ran = 0;
+  const run = async () => { ran += 1; return "RESULT=ok"; };
+  await withApp({ run, getSchedule: () => ({ enabled: true }) }, async (base) => {
+    const put = await fetch(`${base}/s1/gpu-clock`, json("PUT", { maxMHz: 1800 }));
+    assert.equal(put.status, 409);
+    assert.equal((await put.json()).code, "schedule-installed");
+    const del = await fetch(`${base}/s1/gpu-clock`, json("DELETE"));
+    assert.equal(del.status, 409);
+    assert.equal(ran, 0);
   });
 });
