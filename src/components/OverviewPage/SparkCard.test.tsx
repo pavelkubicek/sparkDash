@@ -70,19 +70,23 @@ describe("SparkCard", () => {
     expect(text).toContain("2 running · 1 queued");
     expect(text).not.toContain("slots");
   });
-  it("lists private loaded models alongside the monitored model without duplicates", () => {
+  it("lists private loaded models under the monitored model without duplicates", () => {
     const spark = head(true);
     spark.metrics.residentModels = [
       { modelId: "big-model", container: "primary-vllm" },
       { modelId: "datalab-to/surya-ocr-2", container: "surya-vllm" },
     ];
     const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
-    const rows = [...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent);
-    expect(rows).toEqual(["big-model", "datalab-to/surya-ocr-2"]);
+    const rows = () => [...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent);
+    expect(rows()).toEqual(["big-model"]);
+    const button = container.querySelector(".ov-modelrow__more") as HTMLButtonElement;
+    expect(button.textContent).toBe("+1 more");
+    act(() => button.click());
+    expect(rows()).toEqual(["big-model", "datalab-to/surya-ocr-2"]);
     expect(container.querySelectorAll(".ov-modelrow")[1].textContent).toContain("Loaded");
   });
 
-  it("shows the first loaded alias and folds the rest behind one button", () => {
+  it("keeps the head card to one entry and folds every loaded alias behind its button", () => {
     const spark = head(true);
     spark.metrics.residentModels = [
       { modelId: "alias-a", container: "a" },
@@ -90,19 +94,12 @@ describe("SparkCard", () => {
       { modelId: "alias-c", container: "c" },
     ];
     const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
-    expect([...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent)).toEqual([
-      "big-model",
-      "alias-a",
-    ]);
+    const rows = () => [...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent);
+    expect(rows()).toEqual(["big-model"]);
     const button = container.querySelector(".ov-modelrow__more") as HTMLButtonElement;
-    expect(button.textContent).toBe("+2 more");
+    expect(button.textContent).toBe("+3 more");
     act(() => button.click());
-    expect([...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent)).toEqual([
-      "big-model",
-      "alias-a",
-      "alias-b",
-      "alias-c",
-    ]);
+    expect(rows()).toEqual(["big-model", "alias-a", "alias-b", "alias-c"]);
     expect(button.textContent).toBe("Show less");
   });
 

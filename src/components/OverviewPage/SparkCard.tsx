@@ -269,6 +269,10 @@ function SparkCardImpl({
         ...(spark.metrics.residentModels ?? []).map((entry) => entry.modelId),
       ])].filter((name) => name !== modelText)
     : [];
+  // The first row is the monitored model, or the first alias when no endpoint
+  // names one. The toggle lives on that row, so a head reads as one entry like
+  // a worker does; expanding adds every remaining alias below it.
+  const hiddenModels = modelText ? loadedModels : loadedModels.slice(1);
 
   return (
     <div ref={cardRef} className={`overview-card ov-sc ${online ? "" : "is-off"} ${hot && online ? "is-hot" : ""} ${online && worstSeverity(spark.health) ? `is-health-${worstSeverity(spark.health)}` : ""} ${onSelect ? "is-link" : ""}`}>
@@ -478,7 +482,32 @@ function SparkCardImpl({
           {modelText ? (
             <div className="ov-modelrow" title={modelTitle}>
               <code>{modelText}</code>
+              {hiddenModels.length > 0 ? (
+                <button
+                  type="button"
+                  className="ov-modelrow__more"
+                  aria-expanded={showAllLoaded}
+                  onClick={() => setShowAllLoaded((v) => !v)}
+                >
+                  {showAllLoaded ? "Show less" : `+${hiddenModels.length} more`}
+                </button>
+              ) : null}
               {modelEyebrowRight ? <span className="ov-modelrow__ctx">{modelEyebrowRight}</span> : null}
+            </div>
+          ) : loadedModels.length > 0 ? (
+            <div className="ov-modelrow" title={`${loadedModels[0]} · loaded model; throughput shown for the monitored endpoint above`}>
+              <code>{loadedModels[0]}</code>
+              {hiddenModels.length > 0 ? (
+                <button
+                  type="button"
+                  className="ov-modelrow__more"
+                  aria-expanded={showAllLoaded}
+                  onClick={() => setShowAllLoaded((v) => !v)}
+                >
+                  {showAllLoaded ? "Show less" : `+${hiddenModels.length} more`}
+                </button>
+              ) : null}
+              <span className="ov-modelrow__ctx">Loaded</span>
             </div>
           ) : (
             // Nothing to show, but keep the row's height so Storage lines up across the cards.
@@ -486,24 +515,8 @@ function SparkCardImpl({
               <code>{"\u00a0"}</code>
             </div>
           )}
-          {loadedModels.length > 0 ? (
-            <div className="ov-modelrow" title={`${loadedModels[0]} · loaded model; throughput shown for the monitored endpoint above`}>
-              <code>{loadedModels[0]}</code>
-              {loadedModels.length > 1 ? (
-                <button
-                  type="button"
-                  className="ov-modelrow__more"
-                  aria-expanded={showAllLoaded}
-                  onClick={() => setShowAllLoaded((v) => !v)}
-                >
-                  {showAllLoaded ? "Show less" : `+${loadedModels.length - 1} more`}
-                </button>
-              ) : null}
-              <span className="ov-modelrow__ctx">Loaded</span>
-            </div>
-          ) : null}
           {showAllLoaded
-            ? loadedModels.slice(1).map((name) => (
+            ? hiddenModels.map((name) => (
                 <div className="ov-modelrow" key={name} title={`${name} · loaded model; throughput shown for the monitored endpoint above`}>
                   <code>{name}</code>
                   <span className="ov-modelrow__ctx">Loaded</span>
