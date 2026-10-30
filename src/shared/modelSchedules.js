@@ -278,6 +278,7 @@ function partsFormatter(tz) {
         day: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
+        second: "2-digit",
         hourCycle: "h23",
       });
     } catch {
@@ -290,6 +291,7 @@ function partsFormatter(tz) {
         day: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
+        second: "2-digit",
         hourCycle: "h23",
       });
     }
@@ -310,7 +312,9 @@ export function zonedParts(date, tz) {
   const parts = partsFormatter(tz).formatToParts(new Date(ms));
   const get = (t) => parts.find((p) => p.type === t)?.value ?? "";
   const hour = Number(get("hour")) % 24;
-  const minuteOfDay = hour * 60 + Number(get("minute") || 0);
+  const minute = Number(get("minute") || 0);
+  const second = Number(get("second") || 0);
+  const minuteOfDay = hour * 60 + minute;
   const weekday = get("weekday");
   const isWeekend = weekday === "Sat" || weekday === "Sun";
   const dateKey = `${get("year")}-${get("month")}-${get("day")}`;
@@ -320,7 +324,8 @@ export function zonedParts(date, tz) {
     Math.max(0, Number(get("month")) - 1),
     Number(get("day")),
     hour,
-    Number(get("minute") || 0)
+    minute,
+    second
   );
   return {
     minute: wrapMinute(minuteOfDay),

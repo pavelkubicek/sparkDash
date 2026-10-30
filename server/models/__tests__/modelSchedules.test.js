@@ -11,6 +11,7 @@ import {
   resolveActiveWindow,
   nextBoundary,
   zonedParts,
+  zonedMinuteToEpoch,
   nextBoundaryAt,
   normalizeModelSchedule,
   validateModelSchedule,
@@ -192,6 +193,14 @@ test("zonedParts maps an instant to wall minute + dayType in a zone", () => {
   const sat = Date.UTC(2026, 0, 3, 12, 0, 0);
   assert.equal(zonedParts(sat, "Europe/Prague").dayType, "weekend");
   assert.equal(zonedParts(sat, "Europe/Prague").weekday, "Sat");
+});
+
+test("a sub-minute instant does not shift the zone offset or the next boundary", () => {
+  // 16:43:55 CET: dropping the seconds used to round the offset down to 59
+  // minutes, putting a 20:00 boundary at 20:01.
+  const t = Date.UTC(2026, 9, 30, 16, 43, 55);
+  assert.equal(zonedParts(t, "Europe/Prague").offsetMin, 60);
+  assert.equal(zonedMinuteToEpoch(t, "Europe/Prague", 20 * 60), Date.UTC(2026, 9, 30, 19, 0, 0));
 });
 
 test("an unknown zone falls back to UTC instead of throwing", () => {
