@@ -360,6 +360,20 @@
   font-weight: 600;
   color: var(--color-text);
 }
+.ov .ov-modelrow__more {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-accent-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ov .ov-modelrow__more:hover {
+  background: var(--color-accent-soft);
+}
 .ov .ov-modelrow__ctx {
   flex: none;
   padding: 2px 8px;

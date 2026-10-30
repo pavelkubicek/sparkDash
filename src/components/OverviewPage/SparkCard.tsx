@@ -89,6 +89,9 @@ function SparkCardImpl({
   const llm = llmIdx >= 0 ? llmList[llmIdx] : null;
   const [wakeMsg, setWakeMsg] = useState<string | null>(null);
   const [waking, setWaking] = useState(false);
+  /** Loaded aliases beyond the first stay folded until asked for: a head with ten
+   *  aliases used to push the card's other rows off the screen. */
+  const [showAllLoaded, setShowAllLoaded] = useState(false);
 
   // Registers this card with the shared IntersectionObserver (hooks/sparkVisibility):
   // the visible id set is reported over the WS and the server pauses HW polling for
@@ -258,6 +261,14 @@ function SparkCardImpl({
       {!online ? <Tag>Offline</Tag> : null}
     </div>
   );
+
+  // Every loaded model the card can name, minus the one already in the main row.
+  const loadedModels = online && role !== "worker"
+    ? [...new Set([
+        ...llmList.filter((entry) => entry.available).flatMap((entry) => entry.models?.length ? entry.models : entry.modelId ? [entry.modelId] : []),
+        ...(spark.metrics.residentModels ?? []).map((entry) => entry.modelId),
+      ])].filter((name) => name !== modelText)
+    : [];
 
   return (
     <div ref={cardRef} className={`overview-card ov-sc ${online ? "" : "is-off"} ${hot && online ? "is-hot" : ""} ${online && worstSeverity(spark.health) ? `is-health-${worstSeverity(spark.health)}` : ""} ${onSelect ? "is-link" : ""}`}>
@@ -475,15 +486,30 @@ function SparkCardImpl({
               <code>{"\u00a0"}</code>
             </div>
           )}
-          {online && role !== "worker" && [...new Set([
-            ...llmList.filter((entry) => entry.available).flatMap((entry) => entry.models?.length ? entry.models : entry.modelId ? [entry.modelId] : []),
-            ...(spark.metrics.residentModels ?? []).map((entry) => entry.modelId),
-          ])].filter((name) => name !== modelText).map((name) => (
-            <div className="ov-modelrow" key={name} title={`${name} · loaded model; throughput shown for the monitored endpoint above`}>
-              <code>{name}</code>
+          {loadedModels.length > 0 ? (
+            <div className="ov-modelrow" title={`${loadedModels[0]} · loaded model; throughput shown for the monitored endpoint above`}>
+              <code>{loadedModels[0]}</code>
+              {loadedModels.length > 1 ? (
+                <button
+                  type="button"
+                  className="ov-modelrow__more"
+                  aria-expanded={showAllLoaded}
+                  onClick={() => setShowAllLoaded((v) => !v)}
+                >
+                  {showAllLoaded ? "Show less" : `+${loadedModels.length - 1} more`}
+                </button>
+              ) : null}
               <span className="ov-modelrow__ctx">Loaded</span>
             </div>
-          ))}
+          ) : null}
+          {showAllLoaded
+            ? loadedModels.slice(1).map((name) => (
+                <div className="ov-modelrow" key={name} title={`${name} · loaded model; throughput shown for the monitored endpoint above`}>
+                  <code>{name}</code>
+                  <span className="ov-modelrow__ctx">Loaded</span>
+                </div>
+              ))
+            : null}
         </>
       )}
 

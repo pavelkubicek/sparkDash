@@ -82,6 +82,30 @@ describe("SparkCard", () => {
     expect(container.querySelectorAll(".ov-modelrow")[1].textContent).toContain("Loaded");
   });
 
+  it("shows the first loaded alias and folds the rest behind one button", () => {
+    const spark = head(true);
+    spark.metrics.residentModels = [
+      { modelId: "alias-a", container: "a" },
+      { modelId: "alias-b", container: "b" },
+      { modelId: "alias-c", container: "c" },
+    ];
+    const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
+    expect([...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent)).toEqual([
+      "big-model",
+      "alias-a",
+    ]);
+    const button = container.querySelector(".ov-modelrow__more") as HTMLButtonElement;
+    expect(button.textContent).toBe("+2 more");
+    act(() => button.click());
+    expect([...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent)).toEqual([
+      "big-model",
+      "alias-a",
+      "alias-b",
+      "alias-c",
+    ]);
+    expect(button.textContent).toBe("Show less");
+  });
+
   it("does not present an offline unit's discovered models as loaded", () => {
     const spark = head(false);
     spark.metrics.residentModels = [{ modelId: "surya-private", container: "surya-vllm" }];
