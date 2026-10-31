@@ -737,7 +737,7 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness }: Settin
           {/* Outside the settings block: a fleet CPU action needs no saved settings either. */}
           <SettingRow
             title="CPU clock cap"
-            help="Caps the CPU maximum frequency on every Spark (cpupower -c all frequency-set -u): pick Full capacity or a MHz value — 2808 MHz is the usual cap — and Save applies it. Keep after reboot installs the boot hook each unit can take. The SSH user needs a NOPASSWD rule for the exact cpupower commands."
+            help="Caps the CPU maximum frequency on every Spark (cpupower frequency-set -u): by default only the performance cores, whose 3900 MHz ceiling is where the heat is — 2808 MHz is the usual cap — or every core with the toggle off. Save applies it; Keep after reboot installs the boot hook each unit can take. The SSH user needs a NOPASSWD rule for the exact cpupower commands."
             stack
           >
             <CpuClockCap apiRef={cpuClock} onPendingChange={setCpuClockPending} />

@@ -287,7 +287,7 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
             now.unreadable ? `, ${now.unreadable} unreadable` : ""
           }`
         ) : (
-          `Now: CPU capped at ${now.capMHz} MHz${modeText(now.mode)} on ${now.units} unit${
+          `Now: CPU capped at ${now.capMHz} MHz${modeText(now.mode)} across ${now.units} unit${
             now.units === 1 ? "" : "s"
           }${now.unreadable ? `, ${now.unreadable} unreadable` : ""}`
         )}
