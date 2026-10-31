@@ -160,9 +160,9 @@ function header(paths) {
     "  done",
     '  PERF=${PERF#,}; EFF=${EFF#,}; ALL=${ALL#,}',
     // Numeric order, so the command matches the sudoers line and reads naturally.
-    '  PERF=$(printf "%s\\n" $PERF | sort -n | tr "\\n" ","); PERF=${PERF%,}',
-    '  EFF=$(printf "%s\\n" $EFF | sort -n | tr "\\n" ","); EFF=${EFF%,}',
-    '  ALL=$(printf "%s\\n" $ALL | sort -n | tr "\\n" ","); ALL=${ALL%,}',
+    '  PERF=$(printf "%s" "$PERF" | tr "," "\\n" | sort -n | tr "\\n" ","); PERF=${PERF%,}',
+    '  EFF=$(printf "%s" "$EFF" | tr "," "\\n" | sort -n | tr "\\n" ","); EFF=${EFF%,}',
+    '  ALL=$(printf "%s" "$ALL" | tr "," "\\n" | sort -n | tr "\\n" ","); ALL=${ALL%,}',
     '  [ -n "$EFF" ] && HET=1',
     "  return 0",
     "}",
