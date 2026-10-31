@@ -294,6 +294,40 @@ export type FleetGpuClockScheduleResult =
   | { id: string; ok: true; supported: false; reason: string }
   | { id: string; ok: false; error: string };
 
+/** GET /api/sparks/:id/cpu-clock: the CPU maximum-frequency cap (cpupower) and its boot hook. */
+export type CpuClockStatus =
+  | { supported: false; reason?: string }
+  | {
+      supported: true;
+      /** CPU maximum frequency (MHz). */
+      hwMaxMHz: number | null;
+      /** Live `scaling_max_freq` (MHz), whether or not this dashboard set it. */
+      currentMaxMHz: number | null;
+      /** Cap in effect right now (MHz), null when none is recorded. */
+      capMHz: number | null;
+      sudo: "root" | "yes" | "no";
+      /** What "keep after reboot" would install on this unit. */
+      persistKind: GpuClockPersistKind;
+      service: {
+        installed: boolean;
+        maxMHz: number | null;
+        enabled: string | null;
+        active: string | null;
+      };
+      cron: {
+        installed: boolean;
+        maxMHz: number | null;
+        /** The @reboot job ran at this boot and could not re-apply the cap. */
+        failed: boolean;
+      };
+    };
+
+/** POST /api/sparks/cpu-clock-all: per-unit outcome of a fleet-wide CPU cap or reset. */
+export type FleetCpuClockResult =
+  | { id: string; ok: true; maxMHz: number | null; persistKind: GpuClockPersistKind }
+  | { id: string; ok: true; supported: false; reason: string }
+  | { id: string; ok: false; error: string };
+
 /** One health finding for a Spark (server rules in server/health/HealthEvaluator.js). */
 export interface HealthFinding {
   id: "thermal" | "low-power" | "memory" | "xid" | "oom" | "concurrency" | "link-speed" | "roce-link" | "roce-loss";

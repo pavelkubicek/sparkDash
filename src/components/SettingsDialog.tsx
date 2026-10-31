@@ -12,6 +12,7 @@ import { SettingRow, ToggleRow } from "./SettingRows";
 import { AlertsDialog } from "./AlertsDialog";
 import { BrowserAlertsSettings } from "./BrowserAlertsSettings";
 import { FleetGpuClock, type FleetGpuClockApi } from "./FleetGpuClock";
+import { CpuClockCap, type CpuClockApi } from "./CpuClockCap";
 import { LanguageSelector } from "./LanguageSelector";
 import "../styles/dialogs.css";
 
@@ -149,6 +150,9 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness }: Settin
   // The GPU clock row applies through Save, so a pick there is unsaved work too.
   const fleetClock = useRef<FleetGpuClockApi | null>(null);
   const [fleetClockPending, setFleetClockPending] = useState(false);
+  // The CPU row applies through Save too.
+  const cpuClock = useRef<CpuClockApi | null>(null);
+  const [cpuClockPending, setCpuClockPending] = useState(false);
   const [theme, setTheme] = useState<ThemeId>(readTheme);
   const [tokenSet, setTokenSet] = useState(() => getToken() !== "");
   const [showAlerts, setShowAlerts] = useState(false);
@@ -243,6 +247,7 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness }: Settin
       // Hardware first: Save is the only thing that changes a clock, and a unit
       // that refuses it must not leave the settings half-saved behind.
       if (fleetClockPending && !(await fleetClock.current?.apply())) return;
+      if (cpuClockPending && !(await cpuClock.current?.apply())) return;
       // The settings write remains unsaved work even when only the GPU changed.
       // Keep it retryable if it fails after the hardware choice has been cleared.
       setDirty(true);
@@ -729,6 +734,15 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness }: Settin
             <FleetGpuClock apiRef={fleetClock} onPendingChange={setFleetClockPending} />
           </SettingRow>
 
+          {/* Outside the settings block: a fleet CPU action needs no saved settings either. */}
+          <SettingRow
+            title="CPU clock cap"
+            help="Caps the CPU maximum frequency on every Spark (cpupower -c all frequency-set -u): pick Full capacity or a MHz value — 2808 MHz is the usual cap — and Save applies it. Keep after reboot installs the boot hook each unit can take. The SSH user needs a NOPASSWD rule for the exact cpupower commands."
+            stack
+          >
+            <CpuClockCap apiRef={cpuClock} onPendingChange={setCpuClockPending} />
+          </SettingRow>
+
           {/* Outside the settings block: a rejected token is exactly when settings fail to load. */}
           <SettingRow
             title={t("accessToken.title")}
@@ -777,7 +791,7 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness }: Settin
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || !settings || !(dirty || fleetClockPending)}
+              disabled={saving || !settings || !(dirty || fleetClockPending || cpuClockPending)}
               className="btn btn--primary"
             >
               {saving ? t("dialog.saving") : t("dialog.save")}

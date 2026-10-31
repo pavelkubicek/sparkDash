@@ -812,6 +812,50 @@ The marker is read from `/run/sparkdash/gpu-clock-cap` (for a root-run unit)
 or `~/.config/sparkdash/gpu-clock-cap` of the SSH user. The optional boot_id
 makes a stale marker disappear after a reboot, when the lock is gone too.
 
+## CPU clock cap
+
+**Settings → CPU clock cap** caps the CPU maximum frequency on every Spark
+(`cpupower -c all frequency-set -u <MHz>`): **Full capacity** (the hardware
+maximum) or a MHz value — 2808 MHz is the usual cap. The input accepts any
+value from 300 to 10000; a unit refuses a cap above its own
+`cpuinfo_max_freq`. Picking a state only selects it; **Save** applies it to
+every supported unit first, then stores the other settings. Units already
+changed are not rolled back when another refuses. A mixed fleet marks nothing.
+
+**Keep after reboot** installs a boot hook on each unit. Where `NOPASSWD: ALL`
+(or root) reaches `systemctl` and `install`, the hook is
+`sparkdash-cpu-clock-limit.service`: `ExecStart` sets the cap, `ExecStop`
+restores the hardware maximum, and `ExecStartPost` writes the marker. Where
+only a narrow `NOPASSWD` rule for `cpupower` is granted and a cron service
+runs, the hook is an `@reboot` line tagged `# sparkdash-cpu-clock-cap` in the
+SSH user's crontab. Units that offer neither are disabled with the reason
+inline, before anything changes.
+
+The CPU cap is a fixed maximum; it has no time schedule. The routes mirror the
+GPU cap: `GET/PUT/DELETE /api/sparks/:id/cpu-clock` and
+`POST /api/sparks/cpu-clock-all` (`{maxMHz, persist}` or `{reset: true}`). The
+status reports the hardware maximum, the live `scaling_max_freq`, the marker
+cap, and which hook is installed. The marker is
+`/run/sparkdash/cpu-clock-cap` for a root-run unit, otherwise
+`~/.config/sparkdash/cpu-clock-cap`; it holds `MAX boot_id` like the GPU one,
+so a stale marker disappears after a reboot.
+
+**The narrow sudoers rule.** Pin the `cpupower` path and arguments; a bare
+`cpupower *` also matches other subcommands. The rule must cover the cap you
+apply, the reset value (the unit's hardware maximum), and the service
+commands if **Keep after reboot** uses the systemd hook:
+
+```
+# /etc/sudoers.d/sparkdash-cpu-clock   (edit with: sudo visudo -f /etc/sudoers.d/sparkdash-cpu-clock)
+sparky ALL=(root) NOPASSWD: /usr/bin/cpupower -c all frequency-set -u 2808MHz, /usr/bin/cpupower -c all frequency-set -u 3900MHz, /usr/bin/systemctl start sparkdash-cpu-clock-limit.service, /usr/bin/systemctl stop sparkdash-cpu-clock-limit.service, /usr/bin/systemctl enable sparkdash-cpu-clock-limit.service, /usr/bin/systemctl disable sparkdash-cpu-clock-limit.service, /usr/bin/systemctl is-enabled sparkdash-cpu-clock-limit.service, /usr/bin/systemctl is-active sparkdash-cpu-clock-limit.service
+```
+
+Replace `3900MHz` with the unit's `cpuinfo_max_freq` in MHz (`awk '{print $1/1000}' /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq`),
+and the `cpupower` path with the one `command -v cpupower` prints. On sudo
+1.9.10 or newer a regular expression covers every allowed cap and reset value:
+`/usr/bin/cpupower ^-c all frequency-set -u [0-9]+MHz$`. Check the rule with
+`sudo -n -l | grep cpupower` as that user.
+
 ## Quick start
 
 ```bash

@@ -34,6 +34,8 @@ import { registerAutoPowerRoutes } from "./autopower/autopowerRoutes.js";
 import { loadAutoPowerConfig, getAutoPowerConfig } from "./autopower/store.js";
 import { remoteShutdownCommand, spawnLocalShutdown } from "./shutdown.js";
 import { GpuClockManager } from "./gpuclock/GpuClockManager.js";
+import { CpuClockManager } from "./cpuclock/CpuClockManager.js";
+import { registerCpuClockFleetRoute, registerCpuClockRoutes } from "./cpuclock/routes.js";
 import { registerGpuClockFleetRoute, registerGpuClockRoutes, registerGpuClockScheduleRoute } from "./gpuclock/routes.js";
 import { getGpuClockSchedule, loadGpuClockSchedule, saveGpuClockSchedule } from "./gpuclock/scheduleStore.js";
 import {
@@ -2511,6 +2513,26 @@ registerGpuClockRoutes(app, {
   allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
   rejectLimited,
   getSchedule: getGpuClockSchedule,
+});
+
+// CPU maximum-frequency cap (cpupower -c all frequency-set -u <MHz>MHz). The same
+// transport and narrow-sudo rule as the GPU cap; persistence uses the boot service
+// where sudo reaches root, otherwise the user's @reboot cron job.
+const cpuClockManager = new CpuClockManager();
+registerCpuClockFleetRoute(app, {
+  manager: cpuClockManager,
+  registry,
+  recordEvent,
+  allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
+  rejectLimited,
+});
+registerCpuClockRoutes(app, {
+  manager: cpuClockManager,
+  registry,
+  recordEvent,
+  allowRead: (req) => allowTest(principalKey(req)),
+  allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
+  rejectLimited,
 });
 
 app.post("/api/sparks/:id/wake", async (req, res) => {

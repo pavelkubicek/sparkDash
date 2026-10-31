@@ -20,10 +20,13 @@ vi.mock("../api/client", () => ({
   fetchSparks: vi.fn(),
   fetchGpuClock: vi.fn(),
   fetchGpuClockSchedule: vi.fn(),
+  fetchCpuClock: vi.fn(),
   setFleetGpuClock: vi.fn(),
   resetFleetGpuClock: vi.fn(),
   setFleetGpuClockSchedule: vi.fn(),
   resetFleetGpuClockSchedule: vi.fn(),
+  setFleetCpuClock: vi.fn(),
+  resetFleetCpuClock: vi.fn(),
 }));
 
 const SETTINGS: Settings = {

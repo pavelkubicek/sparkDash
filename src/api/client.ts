@@ -46,6 +46,8 @@ import type {
   InferenceActivity,
   HermesBatchUpdateResponse,
   GpuClockStatus,
+  CpuClockStatus,
+  FleetCpuClockResult,
   GpuClockSchedule,
   FleetGpuClockResult,
   FleetGpuClockScheduleResult,
@@ -702,6 +704,45 @@ export function resetFleetGpuClockSchedule(): Promise<{
   config: GpuClockSchedule;
 }> {
   return apiFetch("/api/sparks/gpu-clock-schedule", { method: "DELETE" });
+}
+
+// ─── CPU maximum-frequency cap (Spark units) ─────────────
+export function fetchCpuClock(id: string): Promise<CpuClockStatus> {
+  return apiFetch(`/api/sparks/${encodeURIComponent(id)}/cpu-clock`);
+}
+
+/** Cap the CPU maximum frequency now; `persist` also installs the boot hook this unit can take. */
+export function setCpuClock(
+  id: string,
+  body: { maxMHz: number; persist: boolean }
+): Promise<{ success: boolean; maxMHz: number; persist: boolean; persistKind: GpuClockPersistKind }> {
+  return apiFetch(`/api/sparks/${encodeURIComponent(id)}/cpu-clock`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Restore the hardware maximum and remove both boot hooks. */
+export function resetCpuClock(id: string): Promise<{ success: boolean }> {
+  return apiFetch(`/api/sparks/${encodeURIComponent(id)}/cpu-clock`, { method: "DELETE" });
+}
+
+/** POST /api/sparks/cpu-clock-all: cap (or, with reset, clear) the cap on every Spark. */
+export function setFleetCpuClock(
+  maxMHz: number,
+  persist = false
+): Promise<{ success: boolean; applied: number; results: FleetCpuClockResult[] }> {
+  return apiFetch("/api/sparks/cpu-clock-all", {
+    method: "POST",
+    body: JSON.stringify({ maxMHz, persist }),
+  });
+}
+
+export function resetFleetCpuClock(): Promise<{ success: boolean; applied: number; results: FleetCpuClockResult[] }> {
+  return apiFetch("/api/sparks/cpu-clock-all", {
+    method: "POST",
+    body: JSON.stringify({ reset: true }),
+  });
 }
 
 // ─── Hermes update preview ───────────────────────────────
