@@ -714,8 +714,8 @@ export function fetchCpuClock(id: string): Promise<CpuClockStatus> {
 /** Cap the CPU maximum frequency now; `persist` also installs the boot hook this unit can take. */
 export function setCpuClock(
   id: string,
-  body: { maxMHz: number; persist: boolean }
-): Promise<{ success: boolean; maxMHz: number; persist: boolean; persistKind: GpuClockPersistKind }> {
+  body: { maxMHz: number; persist: boolean; perfOnly: boolean }
+): Promise<{ success: boolean; maxMHz: number; persist: boolean; persistKind: GpuClockPersistKind; perfOnly: boolean }> {
   return apiFetch(`/api/sparks/${encodeURIComponent(id)}/cpu-clock`, {
     method: "PUT",
     body: JSON.stringify(body),
@@ -730,11 +730,12 @@ export function resetCpuClock(id: string): Promise<{ success: boolean }> {
 /** POST /api/sparks/cpu-clock-all: cap (or, with reset, clear) the cap on every Spark. */
 export function setFleetCpuClock(
   maxMHz: number,
-  persist = false
+  persist = false,
+  perfOnly = true
 ): Promise<{ success: boolean; applied: number; results: FleetCpuClockResult[] }> {
   return apiFetch("/api/sparks/cpu-clock-all", {
     method: "POST",
-    body: JSON.stringify({ maxMHz, persist }),
+    body: JSON.stringify({ maxMHz, persist, perfOnly }),
   });
 }
 

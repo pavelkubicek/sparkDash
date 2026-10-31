@@ -12,7 +12,14 @@ async function withApp({ status, apply, reset, allow = () => true }, fn) {
       service: { installed: false, maxMHz: null, enabled: null, active: null },
       cron: { installed: true, maxMHz: 2808, failed: false },
     })),
-    apply: apply ?? (async () => ({ maxMHz: 2808, persist: true, persistKind: "cron" })),
+    apply:
+      apply ??
+      (async (_spark, body) => ({
+        maxMHz: body.maxMHz,
+        persist: body.persist,
+        persistKind: "cron",
+        perfOnly: body.perfOnly !== false,
+      })),
     reset: reset ?? (async () => ({})),
   };
   const app = express();
@@ -55,21 +62,21 @@ const json = (method, body) => ({
 test("fleet cap applies to every Spark, reports the host and records one event per unit", async () => {
   const seen = [];
   await withApp(
-    { apply: async (spark) => (seen.push(spark.id), { maxMHz: 2808, persist: true, persistKind: "cron" }) },
+    { apply: async (spark) => (seen.push(spark.id), { maxMHz: 2808, persist: true, persistKind: "cron", perfOnly: true }) },
     async (base, events) => {
-      const res = await fetch(`${base}/cpu-clock-all`, json("POST", { maxMHz: 2808, persist: true }));
+      const res = await fetch(`${base}/cpu-clock-all`, json("POST", { maxMHz: 2808, persist: true, perfOnly: true }));
       const body = await res.json();
       assert.equal(body.success, true);
       assert.equal(body.applied, 2);
       assert.deepEqual(body.results, [
-        { id: "s1", ok: true, maxMHz: 2808, persistKind: "cron" },
-        { id: "s2", ok: true, maxMHz: 2808, persistKind: "cron" },
+        { id: "s1", ok: true, maxMHz: 2808, persistKind: "cron", perfOnly: true },
+        { id: "s2", ok: true, maxMHz: 2808, persistKind: "cron", perfOnly: true },
         { id: "h1", ok: true, supported: false, reason: "CPU clock caps are only supported on Spark units" },
       ]);
       assert.deepEqual(seen, ["s1", "s2"]);
       assert.equal(events.length, 2);
       assert.ok(events.every((e) => e.type === "cpu.clock.set"));
-      assert.match(events[0].message, /2808 MHz.*@reboot/);
+      assert.match(events[0].message, /2808 MHz on performance cores.*@reboot/);
     },
   );
 });
@@ -93,6 +100,7 @@ test("fleet body validation rejects both/neither and out-of-range values", async
     assert.equal((await fetch(`${base}/cpu-clock-all`, json("POST", {}))).status, 400);
     assert.equal((await fetch(`${base}/cpu-clock-all`, json("POST", { maxMHz: "2808" }))).status, 400);
     assert.equal((await fetch(`${base}/cpu-clock-all`, json("POST", { maxMHz: 299 }))).status, 400);
+    assert.equal((await fetch(`${base}/cpu-clock-all`, json("POST", { maxMHz: 2808, perfOnly: "no" }))).status, 400);
   });
 });
 
@@ -100,7 +108,10 @@ test("per-unit status, cap and reset answer with the unit's state", async () => 
   const calls = [];
   await withApp(
     {
-      apply: async (_spark, body) => (calls.push(body), { maxMHz: body.maxMHz, persist: body.persist, persistKind: "cron" }),
+      apply: async (_spark, body) => (
+        calls.push(body),
+        { maxMHz: body.maxMHz, persist: body.persist, persistKind: "cron", perfOnly: body.perfOnly !== false }
+      ),
       reset: async () => (calls.push("reset"), {}),
     },
     async (base, events) => {
@@ -108,13 +119,13 @@ test("per-unit status, cap and reset answer with the unit's state", async () => 
       assert.equal(status.capMHz, 2808);
       assert.equal(status.hwMaxMHz, 3000);
 
-      const put = await fetch(`${base}/s1/cpu-clock`, json("PUT", { maxMHz: 2808, persist: true }));
+      const put = await fetch(`${base}/s1/cpu-clock`, json("PUT", { maxMHz: 2808, persist: true, perfOnly: false }));
       assert.equal(put.status, 200);
       assert.equal((await put.json()).maxMHz, 2808);
 
       const del = await fetch(`${base}/s1/cpu-clock`, { method: "DELETE" });
       assert.equal(del.status, 200);
-      assert.deepEqual(calls, [{ maxMHz: 2808, persist: true }, "reset"]);
+      assert.deepEqual(calls, [{ maxMHz: 2808, persist: true, perfOnly: false }, "reset"]);
       assert.equal(events.length, 2);
 
       assert.equal((await fetch(`${base}/h1/cpu-clock`)).status, 400);

@@ -42,7 +42,7 @@ export function registerCpuClockRoutes(app, { manager, registry, recordEvent, al
         type: "cpu.clock.set",
         severity: "info",
         sparkId: spark.id,
-        message: `CPU frequency capped at ${out.maxMHz} MHz${out.persist ? ` (kept after reboot${keptText(out.persistKind)})` : ""}`,
+        message: `CPU frequency capped at ${out.maxMHz} MHz on ${out.perfOnly ? "performance cores" : "all cores"}${out.persist ? ` (kept after reboot${keptText(out.persistKind)})` : ""}`,
       });
       res.json({ success: true, ...out });
     })
@@ -68,14 +68,14 @@ export function registerCpuClockFleetRoute(
   { manager, registry, recordEvent, allowChange, rejectLimited, fleetDeadlineMs = CPU_FLEET_DEADLINE_MS }
 ) {
   app.post("/api/sparks/cpu-clock-all", async (req, res) => {
-    const { maxMHz, persist, reset } = req.body ?? {};
+    const { maxMHz, persist, perfOnly, reset } = req.body ?? {};
     const wantsReset = reset === true;
     if (wantsReset === (maxMHz !== undefined)) {
       return res.status(400).json({ error: "Send either { maxMHz } or { reset: true }, not both" });
     }
     if (!wantsReset) {
       try {
-        parseCpuCapRequest({ maxMHz, persist });
+        parseCpuCapRequest({ maxMHz, persist, perfOnly });
       } catch (err) {
         return res.status(400).json({ error: err.message });
       }
@@ -104,14 +104,14 @@ export function registerCpuClockFleetRoute(
           });
           results.push({ id: spark.id, ok: true, maxMHz: null, persistKind: "none" });
         } else {
-          const out = await manager.apply(spark, { maxMHz, persist: persist === true });
+          const out = await manager.apply(spark, { maxMHz, persist: persist === true, perfOnly });
           recordEvent({
             type: "cpu.clock.set",
             severity: "info",
             sparkId: spark.id,
-            message: `Fleet cap: CPU frequency capped at ${out.maxMHz} MHz${out.persist ? ` (kept after reboot${keptText(out.persistKind)})` : ""}`,
+            message: `Fleet cap: CPU frequency capped at ${out.maxMHz} MHz on ${out.perfOnly ? "performance cores" : "all cores"}${out.persist ? ` (kept after reboot${keptText(out.persistKind)})` : ""}`,
           });
-          results.push({ id: spark.id, ok: true, maxMHz: out.maxMHz, persistKind: out.persistKind });
+          results.push({ id: spark.id, ok: true, maxMHz: out.maxMHz, persistKind: out.persistKind, perfOnly: out.perfOnly });
         }
       } catch (err) {
         if (err?.code === "no-cpupower" || err?.code === "no-cpufreq") {

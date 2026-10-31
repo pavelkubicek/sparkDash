@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchCpuClock, fetchSparks, resetFleetCpuClock, setFleetCpuClock } from "../api/client";
-import type { CpuClockStatus, FleetCpuClockResult } from "../api/types";
+import type { CpuClockCoreMode, CpuClockStatus, FleetCpuClockResult } from "../api/types";
 
 const DEFAULT_CAP_MHZ = 2808;
 const MIN_CAP_MHZ = 300;
@@ -24,30 +24,56 @@ interface CpuClockCapProps {
   readTimeoutMs?: number;
 }
 
-/** The cap a unit's installed boot hook keeps: null with no hook, false when broken. */
-type BootHook = number | null | false;
+/** The cap an installed boot hook keeps, or null with no hook, false when broken. */
+type Hook = { maxMHz: number | null; mode: CpuClockCoreMode | "custom" | null } | null | false;
 
-/** What the Sparks report right now: one shared cap, a mix, or nothing readable. */
+/** What the Sparks report right now: one shared state, a mix, or nothing readable. */
 type FleetNow =
-  | { kind: "same"; capMHz: number | null; units: number; unreadable: number; boots: BootHook[] }
-  | { kind: "mixed"; caps: (number | null)[]; unreadable: number }
+  | {
+      kind: "same";
+      capMHz: number | null;
+      mode: CpuClockCoreMode | null;
+      units: number;
+      unreadable: number;
+      het: boolean;
+      perfMax: number | null;
+      allMax: number | null;
+      perfCores: string | null;
+      hooks: Hook[];
+    }
+  | {
+      kind: "mixed";
+      caps: (number | null)[];
+      unreadable: number;
+      het: boolean;
+      perfMax: number | null;
+      allMax: number | null;
+    }
   | { kind: "unknown" };
 
 type ReadyStatus = Extract<CpuClockStatus, { supported: true }>;
 
-function bootHook({ service, cron }: ReadyStatus): BootHook {
-  if (!service.installed && !cron.installed) return null;
-  if (service.installed && cron.installed) return false;
-  const maxMHz = service.installed
-    ? service.enabled === "enabled" ? service.maxMHz : null
-    : cron.failed ? null : cron.maxMHz;
-  return maxMHz;
+function hookOf(status: ReadyStatus): Hook {
+  if (!status.service.installed && !status.cron.installed) return null;
+  if (status.service.installed && status.cron.installed) return false;
+  return status.service.installed
+    ? { maxMHz: status.service.maxMHz, mode: status.service.mode }
+    : { maxMHz: status.cron.maxMHz, mode: status.cron.mode };
+}
+
+/** The mode the unit is actually in: the recorded cap wins, then the boot hook. */
+function modeOf(status: ReadyStatus): CpuClockCoreMode | null {
+  if (status.capMode === "perf" || status.capMode === "all") return status.capMode;
+  const hook = hookOf(status);
+  return hook && (hook.mode === "perf" || hook.mode === "all") ? hook.mode : null;
 }
 
 /**
- * Fleet-wide CPU maximum-frequency cap in Settings. Two states — Full capacity
- * or a MHz value — with the one every Spark is on marked; Save applies it to
- * each unit. Same transport and narrow-sudo rule as the GPU cap.
+ * Fleet-wide CPU maximum-frequency cap in Settings. On a heterogeneous unit
+ * (GB10: Cortex-X925 + Cortex-A725) the default is to cap only the performance
+ * cores, the high-ceiling group; a toggle caps every core instead. Save applies
+ * the picked state to each unit. Same transport and narrow-sudo rule as the GPU
+ * cap.
  */
 export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIMEOUT_MS }: CpuClockCapProps) {
   const [now, setNow] = useState<FleetNow | null>(null);
@@ -57,12 +83,15 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
   const [unsettled, setUnsettled] = useState(false);
   const [capInput, setCapInput] = useState(String(DEFAULT_CAP_MHZ));
   const [persist, setPersist] = useState(false);
+  /** Cap the performance cores only (the default on a heterogeneous CPU). */
+  const [perfOnly, setPerfOnly] = useState(true);
   /** null while nothing could be read: unknown is not the same as refused. */
   const [canPersist, setCanPersist] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean; detail?: string } | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const persistTouched = useRef(false);
+  const perfTouched = useRef(false);
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   const readUnit = useCallback(
@@ -105,19 +134,35 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
 
       const ready = statuses.filter((status): status is ReadyStatus => Boolean(status?.supported));
       const caps = ready.map((status) => status.capMHz);
+      const modes = ready.map(modeOf);
       const unreadable = statuses.filter((status) => !status).length;
+      const het = ready.some((status) => status.heterogeneous);
+      const perfMax = ready.map((status) => status.perfMaxMHz).find((v): v is number => typeof v === "number") ?? null;
+      const allMax = ready.map((status) => status.allMaxMHz).find((v): v is number => typeof v === "number") ?? null;
       const persistOk = ready.length > 0 && ready.every((status) => status.persistKind !== "none");
       setCanPersist(ready.length === 0 ? null : persistOk);
       if (!persistTouched.current || !persistOk) setPersist(persistOk);
+      if (!perfTouched.current) setPerfOnly(!modes.includes("all"));
       if (caps.length === 0) {
         setNow({ kind: "unknown" });
         return;
       }
       const first = caps[0];
       setNow(
-        caps.every((cap) => cap === first)
-          ? { kind: "same", capMHz: first, units: caps.length, unreadable, boots: ready.map(bootHook) }
-          : { kind: "mixed", caps, unreadable },
+        caps.every((cap) => cap === first) && modes.every((mode) => mode === modes[0])
+          ? {
+              kind: "same",
+              capMHz: first,
+              mode: modes[0],
+              units: caps.length,
+              unreadable,
+              het,
+              perfMax,
+              allMax,
+              perfCores: ready.find((status) => status.perfCores)?.perfCores ?? null,
+              hooks: ready.map(hookOf),
+            }
+          : { kind: "mixed", caps, unreadable, het, perfMax, allMax },
       );
     } catch {
       if (mine !== latest.current) return;
@@ -129,12 +174,19 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
     void read();
   }, [read]);
 
+  const wantMode: CpuClockCoreMode = perfOnly ? "perf" : "all";
   const shared = now?.kind === "same" ? now.capMHz : undefined;
-  const wantHook = picked !== undefined && picked !== null && persist ? picked : null;
+  const wantHook = picked !== undefined && picked !== null && persist ? { maxMHz: picked, mode: wantMode } : null;
+  const hookDiffers = (hook: Hook) => {
+    if (hook === false) return true;
+    if (wantHook === null) return hook !== null;
+    return !hook || hook.maxMHz !== wantHook.maxMHz || hook.mode !== wantHook.mode;
+  };
+  const modeDiffers = picked !== null && now?.kind === "same" && now.mode !== null && now.mode !== wantMode;
   const pending =
     picked !== undefined &&
-    (unsettled || now?.kind !== "same" || now.unreadable > 0 || picked !== shared ||
-      now.boots.some((hook) => hook !== wantHook));
+    (unsettled || now?.kind !== "same" || now.unreadable > 0 || picked !== shared || modeDiffers ||
+      (now?.kind === "same" && now.hooks.some(hookDiffers)));
 
   useEffect(() => {
     onPendingChange?.(pending);
@@ -146,7 +198,7 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
     setBusy(true);
     setMsg(null);
     try {
-      const res = maxMHz === null ? await resetFleetCpuClock() : await setFleetCpuClock(maxMHz, persist);
+      const res = maxMHz === null ? await resetFleetCpuClock() : await setFleetCpuClock(maxMHz, persist, perfOnly);
       const capped = res.results.filter((r) => r.ok && !("supported" in r)).length;
       const skipped = res.results.filter(
         (r): r is Extract<FleetCpuClockResult, { supported: false }> => "supported" in r && r.supported === false,
@@ -157,15 +209,18 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
         ...skipped.map((r) => `${r.id}: skipped — ${r.reason}`),
       ].join("; ");
       const nothingChanged = capped === 0;
+      const cores = perfOnly ? "performance cores" : "all cores";
       setMsg({
         ok: failed.length === 0 && !nothingChanged,
         text: nothingChanged
           ? failed.length
             ? `No unit completed the requested change — some changes may have applied${skipped.length ? `, ${skipped.length} skipped` : ""}`
             : `Nothing changed — 0 of ${res.results.length} units ${maxMHz === null ? "unlocked" : "capped"}`
-          : `${maxMHz === null ? "Full CPU frequency" : `CPU capped at ${maxMHz} MHz`} — ${capped} of ${res.results.length} units${
-              skipped.length ? `, ${skipped.length} skipped` : ""
-            }`,
+          : maxMHz === null
+            ? `Full CPU frequency — ${capped} of ${res.results.length} units`
+            : `CPU capped at ${maxMHz} MHz on ${cores} — ${capped} of ${res.results.length} units${
+                skipped.length ? `, ${skipped.length} skipped` : ""
+              }`,
         detail: detail || undefined,
       });
       const took = failed.length === 0 && !nothingChanged;
@@ -189,7 +244,7 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => setMsg(null), 12_000);
     }
-  }, [picked, persist, read]);
+  }, [picked, persist, perfOnly, read]);
 
   const pick = (state: number | null) => {
     if (state !== picked) setUnsettled(false);
@@ -205,7 +260,16 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
   }, [apiRef, pending, apply]);
 
   const capMHz = Number(capInput);
-  const validCap = capInput.trim() !== "" && Number.isInteger(capMHz) && capMHz >= MIN_CAP_MHZ && capMHz <= MAX_CAP_MHZ;
+  const limit = now?.kind === "same" ? (perfOnly ? now.perfMax : now.allMax) : null;
+  const validCap =
+    capInput.trim() !== "" &&
+    Number.isInteger(capMHz) &&
+    capMHz >= MIN_CAP_MHZ &&
+    capMHz <= MAX_CAP_MHZ &&
+    (limit === null || capMHz <= limit);
+  const canChooseCores = now?.kind === "same" || now?.kind === "mixed" ? now.het : false;
+  const modeText = (mode: CpuClockCoreMode | null) =>
+    mode === "perf" ? " on performance cores" : mode === "all" ? " on all cores" : "";
 
   return (
     <div className="set-fleetcap">
@@ -223,11 +287,32 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
             now.unreadable ? `, ${now.unreadable} unreadable` : ""
           }`
         ) : (
-          `Now: CPU capped at ${now.capMHz} MHz on ${now.units} unit${now.units === 1 ? "" : "s"}${
-            now.unreadable ? `, ${now.unreadable} unreadable` : ""
-          }`
+          `Now: CPU capped at ${now.capMHz} MHz${modeText(now.mode)} on ${now.units} unit${
+            now.units === 1 ? "" : "s"
+          }${now.unreadable ? `, ${now.unreadable} unreadable` : ""}`
         )}
       </p>
+      {canChooseCores ? (
+        <label className="gpu-clock__check">
+          <input
+            type="checkbox"
+            aria-label="Performance cores only"
+            checked={perfOnly}
+            onChange={(e) => {
+              perfTouched.current = true;
+              setPerfOnly(e.target.checked);
+              // Re-target the cap that is already applied, so the toggle is
+              // actionable through Save like a frequency pick.
+              if (picked === undefined && typeof shared === "number") setPicked(shared);
+            }}
+            disabled={busy}
+          />
+          Performance cores only
+          {now?.kind === "same" && now.perfMax !== null
+            ? ` — caps the ${now.perfMax} MHz cores${now.perfCores ? ` (${now.perfCores})` : ""} and leaves the efficiency cores at their own limit`
+            : " — caps the high-frequency cores and leaves the efficiency cores at their own limit"}
+        </label>
+      ) : null}
       <div className="set-fleetcap__presets" role="group" aria-label="CPU clock cap states">
         <button
           type="button"
@@ -251,7 +336,7 @@ export function CpuClockCap({ apiRef, onPendingChange, readTimeoutMs = READ_TIME
         <input
           type="number"
           min={MIN_CAP_MHZ}
-          max={MAX_CAP_MHZ}
+          max={limit ?? MAX_CAP_MHZ}
           inputMode="numeric"
           aria-label="CPU cap MHz"
           value={capInput}

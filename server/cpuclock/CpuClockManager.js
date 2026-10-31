@@ -104,22 +104,33 @@ export class CpuClockManager {
       throw this._fail(res);
     }
     const num = (v) => (/^\d+$/.test(v ?? "") ? Number(v) : null);
+    const mode = (v) => (v === "perf" || v === "all" ? v : v === "custom" ? "custom" : null);
     return {
       supported: true,
       hwMaxMHz: num(res.HWMAX),
+      perfMaxMHz: num(res.PERFMAX),
+      allMaxMHz: num(res.MINMAX),
+      effMaxMHz: num(res.EFFMAX),
+      perfCores: res.PERF_CPUS || null,
+      heterogeneous: res.HET === "1",
       currentMaxMHz: num(res.CURMAX),
       capMHz: num(res.CAP),
+      capMode: mode(res.CAP_MODE),
       sudo: ["root", "yes", "no"].includes(res.SUDO) ? res.SUDO : "no",
       persistKind: ["unit", "cron", "none"].includes(res.PERSIST_KIND) ? res.PERSIST_KIND : "none",
       service: {
         installed: res.SVC_INSTALLED === "1",
         maxMHz: num(res.SVC_CLOCKS),
+        cpus: res.SVC_CPUS || null,
+        mode: mode(res.SVC_MODE),
         enabled: res.SVC_ENABLED || null,
         active: res.SVC_ACTIVE || null,
       },
       cron: {
         installed: res.CRON_INSTALLED === "1",
         maxMHz: num(res.CRON_CLOCKS),
+        cpus: res.CRON_CPUS || null,
+        mode: mode(res.CRON_MODE),
         failed: res.CRON_FAILED === "1",
       },
     };
@@ -137,6 +148,7 @@ export class CpuClockManager {
         maxMHz: Number(res.CAP) || req.maxMHz,
         persist: persisted,
         persistKind: persisted ? (res.PERSIST_KIND === "cron" ? "cron" : "unit") : "none",
+        perfOnly: (res.PERSIST_MODE ?? (req.perfOnly ? "perf" : "all")) === "perf",
       };
     });
   }

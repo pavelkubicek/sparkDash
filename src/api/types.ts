@@ -294,29 +294,48 @@ export type FleetGpuClockScheduleResult =
   | { id: string; ok: true; supported: false; reason: string }
   | { id: string; ok: false; error: string };
 
+/** Which cores a CPU cap targets: the performance cores alone, or every core. */
+export type CpuClockCoreMode = "perf" | "all";
+
 /** GET /api/sparks/:id/cpu-clock: the CPU maximum-frequency cap (cpupower) and its boot hook. */
 export type CpuClockStatus =
   | { supported: false; reason?: string }
   | {
       supported: true;
-      /** CPU maximum frequency (MHz). */
+      /** Highest core maximum frequency (MHz): the performance-core ceiling. */
       hwMaxMHz: number | null;
-      /** Live `scaling_max_freq` (MHz), whether or not this dashboard set it. */
+      /** Performance-core ceiling (MHz), the highest group. */
+      perfMaxMHz: number | null;
+      /** Ceiling shared by every core (MHz), the all-core cap limit. */
+      allMaxMHz: number | null;
+      /** Efficiency-core ceiling (MHz), null on a uniform CPU. */
+      effMaxMHz: number | null;
+      /** Comma-separated performance cores (`5,6,…,19`), null when unreadable. */
+      perfCores: string | null;
+      /** True when the CPU has more than one maximum-frequency group. */
+      heterogeneous: boolean;
+      /** Live `scaling_max_freq` (MHz) of the capped core set, whether or not this dashboard set it. */
       currentMaxMHz: number | null;
       /** Cap in effect right now (MHz), null when none is recorded. */
       capMHz: number | null;
+      /** Which cores the recorded cap targets. */
+      capMode: CpuClockCoreMode | null;
       sudo: "root" | "yes" | "no";
       /** What "keep after reboot" would install on this unit. */
       persistKind: GpuClockPersistKind;
       service: {
         installed: boolean;
         maxMHz: number | null;
+        cpus: string | null;
+        mode: CpuClockCoreMode | "custom" | null;
         enabled: string | null;
         active: string | null;
       };
       cron: {
         installed: boolean;
         maxMHz: number | null;
+        cpus: string | null;
+        mode: CpuClockCoreMode | "custom" | null;
         /** The @reboot job ran at this boot and could not re-apply the cap. */
         failed: boolean;
       };
@@ -324,7 +343,7 @@ export type CpuClockStatus =
 
 /** POST /api/sparks/cpu-clock-all: per-unit outcome of a fleet-wide CPU cap or reset. */
 export type FleetCpuClockResult =
-  | { id: string; ok: true; maxMHz: number | null; persistKind: GpuClockPersistKind }
+  | { id: string; ok: true; maxMHz: number | null; persistKind: GpuClockPersistKind; perfOnly?: boolean }
   | { id: string; ok: true; supported: false; reason: string }
   | { id: string; ok: false; error: string };
 
