@@ -8,6 +8,8 @@ export const ACTIVITY_ID = "__activity__";
 export const SHOWCASE_ID = "__showcase__";
 /** Cost compare page: fleet token usage priced as a hosted API model. */
 export const COST_ID = "__cost__";
+/** Kiosk wall display: rendered outside the dashboard shell (useAppRoute), so the app never navigates to it in place. */
+export const KIOSK_ID = "__kiosk__";
 /** Benchmark pages: the active id is this prefix + the benchmark type (decode, tool-eval, …). */
 export const BENCH_PREFIX = "__bench__:";
 /** Tool pages (REA, …): the active id is this prefix + the tool type. */
@@ -21,6 +23,7 @@ const FIXED_PATHS: Record<string, string> = {
   [ACTIVITY_ID]: "/activity",
   [SHOWCASE_ID]: "/showcase",
   [COST_ID]: "/cost",
+  [KIOSK_ID]: "/kiosk",
 };
 
 export function benchId(type: string): string {

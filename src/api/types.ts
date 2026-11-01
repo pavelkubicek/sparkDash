@@ -387,8 +387,12 @@ export interface GpuMetrics {
   processes?: Array<{ pid: number; name: string; vramMB: number }>;
   /** NVIDIA clock throttle / thermal slowdown state from nvidia-smi. */
   throttle?: GpuThrottle | null;
-  /** Kernel NVRM NV_ERR_NO_MEMORY count since boot (cached ~60s). */
-  nvErrNoMemory?: number;
+  /**
+   * Kernel NVRM NV_ERR_NO_MEMORY count since boot (cached ~60s). null while the since-boot
+   * baseline is still being read a page at a time, or when the journal is unreadable: the
+   * count is unknown then, not zero.
+   */
+  nvErrNoMemory?: number | null;
   /** Kernel Xid errors and OOM-killer kills since boot (cached ~60s). null when the journal is unreadable. */
   kernelErrors?: { xid: number; oomKills: number; lastXid: string | null } | null;
   /**
@@ -506,6 +510,9 @@ export interface RoceDevice {
   speedMbps: number | null;
   rxBps: number | null;
   txBps: number | null;
+  /** RDMA payload throughput from the port's port_rcv_data / port_xmit_data counters, bytes/s. */
+  rdmaRxBps: number | null;
+  rdmaTxBps: number | null;
   rxErrors: number | null;
   txErrors: number | null;
   rxDropped: number | null;
@@ -556,6 +563,8 @@ export interface LlmMetrics {
   via?: "direct" | "ssh-tunnel";
   modelId: string | null;
   modelPath: string | null;
+  /** Engine version from vLLM's GET /version; null when the backend reports none or it could not be read. */
+  engineVersion?: string | null;
   /** Exact served request IDs from /v1/models, in response order. */
   models?: string[];
   contextLength: number | null;
@@ -787,6 +796,16 @@ export interface SparkMetrics {
 }
 
 // ─── Spark snapshot (server pushes this) ──────────────────
+/** Hint attached to a head whose engine answers on a paired worker (#271). */
+export interface LlmMovedToWorker {
+  workerId: string;
+  workerName: string;
+  port: number;
+  modelId: string | null;
+  backend: string | null;
+  message: string;
+}
+
 export interface SparkSnapshot {
   id: string;
   /** Active health findings, most important first is not guaranteed; sort with sortFindings. */
@@ -821,6 +840,11 @@ export interface SparkSnapshot {
   workerDerivedLabel?: string | null;
   /** Optional head Spark id when role is worker */
   workerHeadId?: string | null;
+  /**
+   * Head only: the engine answers on a paired worker while every head port is down (#271).
+   * Display-only hint — sparkDash never swaps roles itself.
+   */
+  llmMovedTo?: LlmMovedToWorker | null;
   /** Standalone: whether LLM is probed (head always true, worker always false) */
   llmMonitoring?: boolean;
   /** Standalone/LLM flag sibling: false hides GPU/VRAM/Usage for GPU-less machines */
@@ -1000,6 +1024,8 @@ export interface HealthResponse {
   authMode: AuthMode;
   errors: string[];
   warnings: string[];
+  /** The running server's package version; absent on servers that predate the field. */
+  version?: string | null;
 }
 
 export interface InferenceActivity {
@@ -1251,6 +1277,8 @@ export interface DecodeBenchConfig {
   promptType?: DecodeBenchPromptType;
   /** Sampling temperature (default 0.7). Older runs have none: they ran at 0. */
   temperature?: number;
+  /** Sent only for a detected TensorFold backend; absent means no top_k override. */
+  topK?: number;
   /** Thinking on (default). Older runs have none: they ran with it off. */
   thinking?: boolean;
   /** Prompt tokens each stream carries before it decodes (deep-context start). Absent: empty context. */
@@ -2168,6 +2196,11 @@ export interface TokenHistoryRow {
    * Absent on data recorded before the flag existed (treated as reported).
    */
   cacheReported?: boolean;
+  /**
+   * Prompt tokens credited while the engine published no cached-prompt counter: neither
+   * cached nor computed. Absent on older data (then `cacheReported: false` means all of it).
+   */
+  unreportedPromptTokens?: number;
 }
 
 export interface TokenHistory {

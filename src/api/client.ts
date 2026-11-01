@@ -450,6 +450,16 @@ export function clearQualityBenchHistory(
   return apiFetch(`/api/sparks/${id}/llm/quality-bench${q}`, { method: "DELETE" });
 }
 
+/** Remove one saved run. A run still in flight must be cancelled first (409). */
+export function deleteQualityBenchRun(
+  id: string,
+  benchId: string
+): Promise<{ success: boolean }> {
+  return apiFetch(`/api/sparks/${id}/llm/quality-bench/history/${benchId}`, {
+    method: "DELETE",
+  });
+}
+
 // ─── LLM Prompt Showcase ──────────────────────────────
 /** Start a concurrent prompt showcase (returns 202 session). */
 export function startShowcase(
@@ -990,6 +1000,11 @@ export function updateLauncher(
     method: "PUT",
     body: JSON.stringify(input),
   });
+}
+
+/** Save the order of a Spark's model list (the full list of launcher ids, first to last). */
+export function reorderLaunchers(sparkId: string, order: string[]): Promise<{ launchers: LlmLauncher[] }> {
+  return apiFetch(`${launchersBase(sparkId)}/order`, { method: "PUT", body: JSON.stringify({ order }) });
 }
 
 export function removeLauncher(sparkId: string, launcherId: string): Promise<{ success: boolean }> {

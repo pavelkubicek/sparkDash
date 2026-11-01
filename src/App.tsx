@@ -23,6 +23,7 @@ import { ModelTakeoverDialog } from "./components/OverviewPage/ModelLauncher/Mod
 import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
 import { ShowcaseView } from "./components/ShowcasePage/ShowcaseView";
+import { KioskPage } from "./components/KioskPage/KioskPage";
 import { ThemeSwitch } from "./components/ThemeSwitch";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { HarnessWizard } from "./components/HarnessWizard";
@@ -42,6 +43,7 @@ import {
   ThermometerIcon,
   BotIcon,
   CoinsIcon,
+  ExpandIcon,
 } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
@@ -53,6 +55,7 @@ import {
   TEMPS_ID,
   TOKENS_ID,
   COST_ID,
+  KIOSK_ID,
   benchId,
   benchTypeOf,
   toolId,
@@ -229,6 +232,8 @@ function DashboardApp() {
   }, []);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode | null>(null);
+  /** Version the running server reports; Settings falls back to this page's own build. */
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   /** Used when WS is down so add/delete still updates the tab bar */
   const [fallbackSparks, setFallbackSparks] = useState<SparkSnapshot[]>([]);
@@ -346,8 +351,14 @@ function DashboardApp() {
   // Auth posture once on load — drives the "Open access" header warning.
   useEffect(() => {
     fetchHealth()
-      .then((h) => setAuthMode(h.authMode))
-      .catch(() => setAuthMode(null));
+      .then((h) => {
+        setAuthMode(h.authMode);
+        setServerVersion(h.version ?? null);
+      })
+      .catch(() => {
+        setAuthMode(null);
+        setServerVersion(null);
+      });
   }, []);
 
   const handleSettingsSaved = useCallback((s: Settings) => {
@@ -485,6 +496,7 @@ function DashboardApp() {
       { id: "nav:temps", group: "Go to", label: "Temps", hint: "Page", icon: <ThermometerIcon className="h-4 w-4" />, keywords: "gpu temperature thermal temps heat cooling", run: () => navigate(TEMPS_ID) },
       { id: "nav:showcase", group: "Go to", label: "Showcase", hint: "Page", icon: <TerminalIcon className="h-4 w-4" />, keywords: "prompts terminals stream demo", run: () => navigate(SHOWCASE_ID) },
       { id: "nav:activity", group: "Go to", label: "Activity", hint: "Page", icon: <ListIcon className="h-4 w-4" />, keywords: "events log history recent", run: () => navigate(ACTIVITY_ID) },
+      { id: "nav:kiosk", group: "Go to", label: "Kiosk", hint: "Wall display", icon: <ExpandIcon className="h-4 w-4" />, keywords: "wall tv display fullscreen full screen", run: () => window.location.assign(idToPath(KIOSK_ID)) },
     );
     for (const s of displaySparks) {
       cmds.push({
@@ -703,6 +715,7 @@ function DashboardApp() {
         open={showSettings}
         onClose={() => setShowSettings(false)}
         onSaved={handleSettingsSaved}
+        serverVersion={serverVersion}
         onOpenHarness={() => {
           setShowSettings(false);
           setHarnessSparkId(displayActive?.id);
@@ -730,6 +743,8 @@ function App() {
     <>
       {route.mode === "showcase" && route.showcaseSparkId ? (
         <ShowcasePage sparkId={route.showcaseSparkId} />
+      ) : route.mode === "kiosk" ? (
+        <KioskPage />
       ) : (
         <DashboardApp />
       )}

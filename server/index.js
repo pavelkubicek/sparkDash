@@ -1,13 +1,17 @@
+// First on purpose: imports are evaluated in order, and config.js, settings.js
+// and the bench modules read process.env while they load.
+import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import dotenv from "dotenv";
 import { SparkRegistry } from "./sparks/SparkRegistry.js";
 import { resolveFrontendDir, FRONTEND_MISSING_MESSAGE } from "./frontendDir.js";
 import { SparkMonitor } from "./sparks/SparkMonitor.js";
+import { LlmProbe } from "./collectors/LlmProbe.js";
+import { detectLlmMovedToWorker, reconcileMovedEngineHints } from "./sparks/LlmMovedToWorker.js";
 import { sshExec } from "./collectors/ssh.js";
 import { comfyCancelJob } from "./collectors/comfyActions.js";
 import {
@@ -39,6 +43,7 @@ import { registerCpuClockFleetRoute, registerCpuClockRoutes } from "./cpuclock/r
 import { registerGpuClockFleetRoute, registerGpuClockRoutes, registerGpuClockScheduleRoute } from "./gpuclock/routes.js";
 import { getGpuClockSchedule, loadGpuClockSchedule, saveGpuClockSchedule } from "./gpuclock/scheduleStore.js";
 import {
+  backendForPort,
   decodeBenchManager,
   DECODE_BENCH_DEFAULTS,
   normalizeConcurrencies,
@@ -75,6 +80,7 @@ import { ALERTS_JSON_PATH, AUTOPOWER_FEATURE, FLEET_ENERGY_JSON_PATH, FLEET_ENER
 import { createAlertsRuntime, registerAlertRoutes } from "./alerts/runtime.js";
 import { FleetEnergyTracker } from "./energy/FleetEnergyTracker.js";
 import { EventLog } from "./events/EventLog.js";
+import { planListenRetry } from "./listenRetry.js";
 import { UnitHistory } from "./metrics/UnitHistory.js";
 import { createUnitHistoryRuntime, registerUnitHistoryRoutes } from "./metrics/UnitHistoryRuntime.js";
 import { LauncherStore } from "./llmlaunch/LauncherStore.js";
@@ -97,13 +103,13 @@ import {
 import { testSparkConnectivity } from "./connectivity.js";
 import { TailscaleProbe } from "./collectors/TailscaleProbe.js";
 import { inspectStartupPreflight, logStartupPreflight } from "./startupPreflight.js";
+import { readServerVersion } from "./serverVersion.js";
 import { PROMETHEUS_CONTENT_TYPE, metricsEntries, renderPrometheusMetrics } from "./prometheus.js";
-
-dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
+const SERVER_VERSION = readServerVersion(ROOT);
 
 // Default to loopback. A non-loopback bind without SPARKDASH_TOKEN stays OPEN —
 // anyone who can reach the port can mutate settings and power units — unless
@@ -634,7 +640,7 @@ app.post("/api/restart", (_req, res) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json(inspectHealth(process.env.BIND_HOST || "127.0.0.1"));
+  res.json({ ...inspectHealth(process.env.BIND_HOST || "127.0.0.1"), version: SERVER_VERSION });
 });
 
 function clientKey(req) {
@@ -1154,7 +1160,7 @@ app.get("/api/sparks/:id/metrics", (req, res) => {
   // REST snapshot consumers (e.g. the standalone showcase page with no WS
   // tab open) get a short grace so they read a fresh poll, not a stale cache.
   if (monitor.isPaused()) grantActionGrace(req.params.id, METRICS_GRACE_MS);
-  res.json(monitor.snapshot());
+  res.json(withMovedEngineHint(monitor.snapshot()));
 });
 
 // Test SSH + LLM connectivity for a registered Spark.
@@ -1256,6 +1262,17 @@ app.post("/api/sparks/:id/llm-launchers", (req, res) => {
   const result = launcherStore.add(spark.id, req.body);
   if (!result.ok) return res.status(400).json({ error: result.error });
   res.status(201).json({ launcher: result.launcher });
+});
+
+// Registered before the ":lid" route below, which would otherwise take "order" for a launcher id.
+app.put("/api/sparks/:id/llm-launchers/order", (req, res) => {
+  const spark = launcherContext(req, res);
+  if (!spark) return;
+  const order = req.body?.order;
+  if (!Array.isArray(order) || !order.every((id) => typeof id === "string")) {
+    return res.status(400).json({ error: "body.order must be an array of model ids" });
+  }
+  res.json({ launchers: launcherStore.reorder(spark.id, order) });
 });
 
 app.put("/api/sparks/:id/llm-launchers/:lid", async (req, res) => {
@@ -1795,6 +1812,7 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
 
   // Resolve model id for this port from live snapshot when possible
   let modelId = req.body?.modelId || null;
+  let backend = null;
   let contextLength = null;
   if (!target.custom && monitor) {
     const snap = monitor.snapshot();
@@ -1805,6 +1823,9 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
       llmList.find((m) => m?.available) ||
       llmList[0];
     if (!modelId) modelId = llm?.modelId || null;
+    // Never infer sampler compatibility from a model name, the request body, or another port's
+    // engine: resolved from this port's own snapshot entry (see backendForPort).
+    backend = backendForPort(llmList, port);
     contextLength = Number(llm?.contextLength) > 0 ? Number(llm.contextLength) : null;
   }
 
@@ -1832,6 +1853,7 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
       lanIp: llmProbeHost(spark),
       port,
       modelId,
+      backend,
       concurrencies: req.body?.concurrencies,
       maxTokens: req.body?.maxTokens,
       promptType: req.body?.promptType,
@@ -2211,6 +2233,17 @@ app.delete("/api/sparks/:id/llm/quality-bench", (req, res) => {
   res.json({ success: true });
 });
 
+app.delete("/api/sparks/:id/llm/quality-bench/history/:benchId", (req, res) => {
+  const spark = registry.getSpark(req.params.id);
+  if (!spark) return res.status(404).json({ error: "Spark not found" });
+  const result = qualityBenchManager.deleteRun(spark.id, req.params.benchId);
+  if (!result.ok && result.reason === "running") {
+    return res.status(409).json({ error: "Cancel the run before deleting it" });
+  }
+  if (!result.ok) return res.status(404).json({ error: "Benchmark not found" });
+  res.json({ success: true });
+});
+
 app.get("/api/sparks/:id/llm/quality-bench/:benchId", (req, res) => {
   const spark = registry.getSpark(req.params.id);
   if (!spark) return res.status(404).json({ error: "Spark not found" });
@@ -2224,9 +2257,18 @@ app.get("/api/sparks/:id/llm/quality-bench/:benchId", (req, res) => {
 app.delete("/api/sparks/:id/llm/quality-bench/:benchId", (req, res) => {
   const spark = registry.getSpark(req.params.id);
   if (!spark) return res.status(404).json({ error: "Spark not found" });
-  const job = qualityBenchManager.cancel(spark.id, req.params.benchId);
-  if (!job) return res.status(404).json({ error: "Benchmark not found" });
-  res.json(job);
+  const job = qualityBenchManager.getJob(req.params.benchId);
+  if (!job || job.sparkId !== spark.id) {
+    return res.status(404).json({ error: "Benchmark not found" });
+  }
+  // This route only cancels a run in flight. A finished run used to come back as a
+  // 200 with its own record, which read as a successful cancel while nothing changed.
+  if (job.status !== "running") {
+    return res.status(409).json({
+      error: "This run has already finished; delete it from the history instead",
+    });
+  }
+  res.json(qualityBenchManager.cancel(spark.id, req.params.benchId));
 });
 
 /**
@@ -2793,7 +2835,8 @@ function buildSnapshotPayload(sparks = orderedSnapshots()) {
   const payload = {
     type: "snapshot",
     generatedAt: Date.now(),
-    sparks,
+    // A head whose engine answers on its worker carries the hint; every other snapshot is untouched.
+    sparks: movedEngineHints.size ? sparks.map(withMovedEngineHint) : sparks,
     refreshInterval: getSettings().pollIntervalMs,
     // Model launcher block, namespaced under one key so the merge surface
     // stays a single added property. Contains no Date.now()-derived value
@@ -2852,6 +2895,81 @@ function forceBroadcast() {
   publishMqttFleet();
 }
 
+// ─── #271: an engine that moved to the worker ────────────
+// Workers are not polled, so a recipe that starts rank 0 on the worker leaves the head's LLM
+// ports unanswered with no explanation. Probe the workers only while the head is down, throttled,
+// and surface a hint. Never write config, never swap roles.
+const movedEngineHints = new Map();
+const movedEngineProbeState = new Map();
+// The hint each head last raised an event for, kept apart from the live hint so that a worker
+// answering intermittently does not re-announce the same move every probe window.
+const movedEngineAnnounced = new Map();
+let movedEngineWatchTimer = null;
+let movedEngineRefreshing = false;
+
+async function probeWorkerLlm(workerSpark, port) {
+  if (!workerSpark) return null;
+  const probe = new LlmProbe(workerSpark, port);
+  try {
+    return await probe.probe();
+  } catch {
+    return null;
+  } finally {
+    probe.dispose?.();
+  }
+}
+
+async function refreshMovedEngineHints() {
+  // Probes are awaited one after another, each a fresh detection with its own timeout, so a
+  // head with several paired workers and ports can outlast the 30 s interval. Without this the
+  // timer would stack overlapping runs that re-probe and fight over the throttle state.
+  if (movedEngineRefreshing) return;
+  movedEngineRefreshing = true;
+  try {
+    // Workers report no `llmPorts` in their snapshot (LLM polling is off for them by design);
+    // the registry keeps the configured ports the detector needs to probe.
+    const sparks = orderedSnapshots().map((s) => {
+      const cfg = registry.getSpark(s.id);
+      return cfg?.llmPorts?.length ? { ...s, llmPorts: cfg.llmPorts } : s;
+    });
+    await reconcileMovedEngineHints({
+      sparks,
+      hints: movedEngineHints,
+      probeState: movedEngineProbeState,
+      announced: movedEngineAnnounced,
+      detect: (head) =>
+        detectLlmMovedToWorker({
+          head,
+          sparks,
+          probe: (workerSnap, port) => probeWorkerLlm(registry.getSpark(workerSnap.id), port),
+          state: movedEngineProbeState,
+        }),
+      onEvent: (hint, headId) =>
+        recordEvent({
+          sparkId: headId,
+          type: "llm.moved_to_worker",
+          severity: "warn",
+          message: hint.message,
+        }),
+    });
+  } finally {
+    movedEngineRefreshing = false;
+  }
+}
+
+function startMovedEngineWatch() {
+  if (movedEngineWatchTimer) return;
+  movedEngineWatchTimer = setInterval(() => void refreshMovedEngineHints(), 30_000);
+  movedEngineWatchTimer.unref?.();
+  setTimeout(() => void refreshMovedEngineHints(), 5_000).unref?.();
+}
+
+/** Attach the current hint (if any) to a head's snapshot. Display-only. */
+function withMovedEngineHint(snap) {
+  const hint = movedEngineHints.get(snap?.id);
+  return hint ? { ...snap, llmMovedTo: hint } : snap;
+}
+
 function startBroadcast() {
   const interval = getSettings().pollIntervalMs;
   broadcastTimer = setInterval(() => {
@@ -2890,6 +3008,7 @@ logStartupPreflight(startupPreflight, BIND_HOST, PORT);
 
 if (!startupPreflight.fatal) {
   startBroadcast();
+  startMovedEngineWatch();
   if (isLoopbackBind(BIND_HOST)) {
     // Learn this machine's MagicDNS name (via the host namespace in Docker) so Tailscale Serve
     // needs no SPARKDASH_ALLOWED_HOSTS entry; re-checked now and then in case tailscaled starts later.
@@ -2898,18 +3017,44 @@ if (!startupPreflight.fatal) {
     learnTailscaleName();
     setInterval(learnTailscaleName, 10 * 60 * 1000).unref();
   }
-  // A failed listen (port in use, address not available) must end the process.
-  // The WebSocket server's own error handler only logs it, and the broadcast
-  // timer would keep a process alive that never serves a request.
+  // A failed bind must be diagnosed, not blindly fatal. On a unit whose
+  // container restarts unconditionally, binding the Tailscale address can win
+  // the race against tailscale0 and fail with EADDRNOTAVAIL; exiting under
+  // `node --watch` parks the process until a file changes, which kept the
+  // dashboard dead forever after a fast reboot. Transient bind errors are
+  // retried for ~2 minutes (policy in server/listenRetry.js); everything
+  // else (port in use, bad address) is a real misconfiguration and still
+  // ends the process — the WebSocket server's own handler only logs, and the
+  // broadcast timer would keep a process alive that never serves a request.
+  let listenAttempts = 0;
+  let listenRetryTimer = null;
   server.on("error", (err) => {
     if (server.listening) {
       console.error("[sparkDash] server error:", err?.message);
       return;
     }
+    const plan = planListenRetry({ code: err?.code, attempt: listenAttempts });
+    if (plan.retry && !listenRetryTimer) {
+      listenAttempts = plan.attempt + 1;
+      console.log(`[sparkDash] ${BIND_HOST} is not bindable yet (${err?.code}); retry ${listenAttempts} in ${plan.delayMs / 1000}s — waiting for the network interface.`);
+      listenRetryTimer = setTimeout(() => {
+        listenRetryTimer = null;
+        // No callback here: listen(..., cb) adds cb as a fresh once("listening") listener and a
+        // failed bind never consumes it, so passing it per attempt would run the whole startup
+        // block once per attempt on eventual success (and warn about a listener leak at 11).
+        server.listen(PORT, BIND_HOST);
+      }, plan.delayMs);
+      return;
+    }
     console.error(`[sparkDash] cannot listen on ${BIND_HOST}:${PORT}: ${err?.message}`);
     process.exit(1);
   });
-  server.listen(PORT, BIND_HOST, () => {
+  server.once("listening", onListening);
+  server.listen(PORT, BIND_HOST);
+  // Monitors and runtimes start ONLY on a successful bind — never on the
+  // not-listening path. (Declared after the listen call so the source order
+  // stays listen → start, which the occupancy wiring test pins.)
+  function onListening() {
     console.log(`[sparkDash] server listening on http://${BIND_HOST}:${PORT}`);
     console.log(`[sparkDash] WebSocket endpoint ws://${BIND_HOST}:${PORT}/ws`);
     const { authMode } = inspectHealth(BIND_HOST);
@@ -2928,7 +3073,7 @@ if (!startupPreflight.fatal) {
     // AutoPower shares the "night shift" rationale: it must run with zero tabs
     // open — but only while the feature switch (AUTOPOWER_FEATURE) is on.
     if (AUTOPOWER_FEATURE) autoPower.start();
-  });
+  }
 } else {
   process.exitCode = 1;
 }
