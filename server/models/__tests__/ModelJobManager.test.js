@@ -12,6 +12,8 @@ const SPARK_B = { id: "sparkB", name: "sparkB.lan", lanIp: "10.0.0.11", isLocal:
 const QWEN = { id: "qwen", name: "Qwen", dir: "/repos/qwen", startScript: "start.sh", stopScript: "stop.sh", restartScript: null, logsScript: null, startArgs: [], container: "vllm-fn", port: 8000, sparkId: "sparkA" };
 const DS = { id: "ds", name: "DeepSeek", dir: "/repos/ds", startScript: "start-ds.sh", stopScript: "stop-ds.sh", restartScript: null, logsScript: "logs-ds.sh", startArgs: [], container: "ds-head", port: 8000, sparkId: "sparkB" };
 const ORPHAN = { id: "orphan", name: "Orphan", dir: "/repos/orphan", startScript: "start.sh", stopScript: "stop.sh", startArgs: [], container: "o", port: 8000 }; // no sparkId
+// Second model on sparkA — for the same-Spark conflict assertions.
+const GLM = { id: "glm", name: "GLM", dir: "/repos/glm", startScript: "start.sh", stopScript: "stop.sh", restartScript: null, logsScript: null, startArgs: [], container: "glm-head", port: 8000, sparkId: "sparkA" };
 
 /** Manager with the real routing logic and a captured spawn list. */
 function makeManager(models, sparks = { sparkA: SPARK_A, sparkB: SPARK_B }) {
@@ -40,7 +42,7 @@ test("start refuses a model whose Spark was deleted, naming both", () => {
   assert.throws(() => m.start("qwen", "start"), /Spark "sparkA" assigned to model qwen is not registered/);
 });
 
-// ─── stop preempts a stuck slot-holder ─────────────────────
+// ─── stop preempts a stuck job on its own Sparks ───────────
 test("a stop preempts a still-running mutating job instead of 409ing — a hung start must be stoppable from the UI", () => {
   const { m, spawned } = makeManager([QWEN]);
   const hung = m.start("qwen", "start");
@@ -52,10 +54,51 @@ test("a stop preempts a still-running mutating job instead of 409ing — a hung 
   assert.match(String(m.getJob(stop.jobId).append ?? ""), /\[preempt\]/);
 });
 
-test("a start still refuses while another mutating job holds the slot", () => {
-  const { m } = makeManager([QWEN, DS]);
+// ─── concurrency is per Spark, not a global slot ───────────
+test("two clusters on disjoint Sparks start side by side", () => {
+  const { m, spawned } = makeManager([QWEN, DS]);
   m.start("qwen", "start");
-  assert.throws(() => m.start("ds", "start"), /already running for/);
+  const b = m.start("ds", "start");
+  assert.equal(m.getJob(b.jobId).status, "running");
+  assert.equal(spawned.length, 2);
+  assert.deepEqual(m.getJob(b.jobId).nodes, ["sparkB"]);
+});
+
+test("a start refuses while a mutating job claims one of its Sparks — model and Spark are named", () => {
+  const { m, spawned } = makeManager([QWEN, GLM]);
+  m.start("qwen", "start");
+  assert.throws(() => m.start("glm", "start"), /already running for Qwen on sparkA/);
+  assert.equal(spawned.length, 1);
+});
+
+test("a cluster job claims every unit it occupies — a head elsewhere is still free", () => {
+  const tp2OnAB = { ...GLM, id: "tp2", name: "TP2", container: "tp2", nodes: ["sparkA", "sparkB"] };
+  const { m } = makeManager([tp2OnAB, DS]);
+  const r = m.start("tp2", "start");
+  assert.deepEqual(m.getJob(r.jobId).nodes, ["sparkA", "sparkB"]);
+  // sparkB is inside the claim — the second cluster may not boot yet…
+  assert.throws(() => m.start("ds", "start"), /already running for TP2 on sparkB/);
+  // …while a model on its own Spark outside the claim acts freely.
+  const solo = { ...QWEN, id: "solo", name: "Solo", sparkId: "sparkC" };
+  const { m: m2, spawned: sp2 } = makeManager(
+    [tp2OnAB, solo],
+    {
+      sparkA: SPARK_A,
+      sparkB: SPARK_B,
+      sparkC: { id: "sparkC", name: "sparkC.lan", lanIp: "10.0.0.12", isLocal: false, ssh: { host: "10.0.0.12", user: "u", auth: "pass", password: "sekretC" } },
+    }
+  );
+  m2.start("tp2", "start");
+  m2.start("solo", "start");
+  assert.equal(sp2.length, 2, "the launch outside the claim proceeds");
+});
+
+test("a stop on one Spark does not preempt a running job on another", () => {
+  const { m } = makeManager([QWEN, DS]);
+  const a = m.start("qwen", "start");
+  m.start("ds", "stop");
+  assert.equal(m.getJob(a.jobId).killed, false, "the other cluster's job is untouched");
+  assert.equal(m.getJob(a.jobId).status, "running");
 });
 
 // ─── single action routes to the model's own Spark ─────────
@@ -142,4 +185,30 @@ test("an exclusive start fails the chain when an incumbent has no stop script (f
   const { m, spawned } = makeManager([glm, nostop]);
   assert.throws(() => m.startExclusive("glm", ["nostop"]), /no stop script/);
   assert.equal(spawned.length, 0);
+});
+
+test("a takeover chain claims the union of Sparks and preempts the in-flight incumbent", () => {
+  // TP2-A loads across sparkA+sparkB; Qwen (sparkA) takes the unit over.
+  const tp2a = { ...GLM, id: "tp2a", name: "TP2-A", container: "tp2a", nodes: ["sparkA", "sparkB"] };
+  const solo = { ...DS, id: "solo", name: "Solo", sparkId: "sparkC" };
+  const { m, spawned } = makeManager(
+    [QWEN, tp2a, solo, { ...GLM }],
+    {
+      sparkA: SPARK_A,
+      sparkB: SPARK_B,
+      sparkC: { id: "sparkC", name: "sparkC.lan", lanIp: "10.0.0.12", isLocal: false, ssh: { host: "10.0.0.12", user: "u", auth: "pass", password: "sekretC" } },
+    }
+  );
+  const loading = m.start("tp2a", "start");
+  assert.equal(m.getJob(loading.jobId).status, "running");
+  const r = m.startExclusive("qwen", ["tp2a"], { source: "manual" });
+  assert.equal(m.getJob(loading.jobId).killed, true, "the in-flight incumbent was cancelled");
+  assert.deepEqual(m.getJob(r.jobId).nodes, ["sparkA", "sparkB"], "chain claims target ∪ incumbent");
+  assert.match(String(m.getJob(r.jobId).append ?? ""), /\[preempt\]/);
+  // The chain holds sparkA+sparkB — a launch on those still waits…
+  assert.throws(() => m.start("glm", "start"), /already running for/);
+  // …while a cluster on an untouched Spark proceeds alongside it.
+  const d = m.start("solo", "start");
+  assert.equal(m.getJob(d.jobId).status, "running");
+  assert.equal(spawned.length, 3);
 });

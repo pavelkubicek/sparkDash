@@ -13,11 +13,17 @@
  *    `docker compose restart` mid-start leaves the modal something to read
  *    instead of a 404.
  *
- * Concurrency: exactly one *mutating* job (start/stop/restart) at a time across
- * all models — the whole point of the panel is one-model-at-a-time, and two
- * `start.sh` racing over the same GPU/port is unrecoverable. A `logs` job is
- * read-only and runs concurrently; cancelling one kills only its own process
- * group (the `docker logs -f` tail), never the model.
+ * Concurrency: a *mutating* job (start/stop/restart) claims the Sparks its
+ * model occupies; two jobs may run at once only when their claim sets are
+ * disjoint — so two clusters on separate Sparks start together (2×TP2) while
+ * jobs touching the same Spark serialize (1×TP4 takeover). A stop preempts
+ * (cancels) jobs sharing its Sparks — stop.sh is the remedy for a hung start.
+ * A `logs` job is read-only and runs concurrently; cancelling one kills only
+ * its own process group (the `docker logs -f` tail), never the model.
+ *
+ * A takeover start claims the union of the target's and every incumbent's
+ * Sparks (its chain runs stop.sh on all of them before the target's
+ * start.sh), so a cross-Spark swap is one atomic, cancellable job.
  *
  * Job status is NOT derived from the exit code: `start.sh` ends in
  * `docker logs -f` and therefore never exits on its own. Completion of the
@@ -43,6 +49,7 @@ import {
   spawnOnTarget,
   shQuote,
 } from "./hostExec.js";
+import { modelOccupancy } from "./ModelRegistry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -125,6 +132,11 @@ function publicJob(job, opts = {}) {
     modelId: job.modelId,
     model: job.modelName,
     action: job.action,
+    /**
+     * Sparks this job claims while it runs. Disjoint claim sets run in
+     * parallel; overlapping ones serialize (or the stop preempts).
+     */
+    nodes: Array.isArray(job.nodes) ? [...job.nodes] : null,
     status: job.status,
     script: job.script,
     dir: job.dir,
@@ -180,10 +192,9 @@ export class ModelJobManager {
     this.jobs = new Map();
     /** @type {Map<string, string>} modelId → newest job id (any action) */
     this.latestByModel = new Map();
-    /** @type {string|null} jobId holding the single mutating slot */
-    this._mutating = null;
-    /** @type {AbortController|null} */
-    this._mutatingAbort = null;
+    /** @type {Set<string>} jobIds of running mutating jobs; each carries its
+     *  claimed Spark set on job.nodes — disjoint claims run concurrently. */
+    this._mutating = new Set();
     this._recoverInterruptedActive();
   }
 
@@ -218,10 +229,35 @@ export class ModelJobManager {
     return job ? publicJob(job) : null;
   }
 
-  activeJob() {
-    if (!this._mutating) return null;
-    const job = this.jobs.get(this._mutating);
-    return job && job.status === "running" ? publicJob(job) : null;
+  /** Running mutating jobs (start/stop/restart, any model), newest first. */
+  activeJobs() {
+    return this._runningMutating().map((j) => publicJob(j));
+  }
+
+  /** Is a mutating job (start/stop/restart) in flight for this model? */
+  hasRunningMutating(modelId) {
+    return this._runningMutating().some((j) => j.modelId === modelId);
+  }
+
+  _runningMutating() {
+    const out = [];
+    for (const id of this._mutating) {
+      const job = this.jobs.get(id);
+      if (job && job.status === "running") out.push(job);
+    }
+    return out.sort((a, b) => b.startedAt - a.startedAt);
+  }
+
+  /**
+   * Running mutating jobs claiming at least one of `nodes`. A job with no
+   * claim set (a checkpoint written before claims existed) conflicts with
+   * everything — an unknown claim may still be holding a GPU.
+   */
+  _conflicting(nodes) {
+    const set = new Set(nodes || []);
+    return this._runningMutating().filter(
+      (j) => !Array.isArray(j.nodes) || j.nodes.some((s) => set.has(s))
+    );
   }
 
   /** Running logs job for a model, if any. */
@@ -271,25 +307,33 @@ export class ModelJobManager {
       throw e;
     }
 
-    const active = this.activeJob();
-    let preempted = null;
+    // Concurrency is per Spark, not global: two clusters on disjoint Sparks
+    // start side by side; jobs touching the same Spark serialize behind each
+    // other — except a stop, which preempts (its stop.sh is exactly the
+    // remedy for a hung start holding the GPU/port). Cancelling kills the
+    // script's process group; containers already handed to dockerd keep
+    // running (the stop.sh itself then removes the one that matters).
+    const nodes = modelOccupancy(model);
+    let preempted = [];
     if (MUTATING.has(action)) {
-      if (active && action !== "stop") {
+      const conflicts = this._conflicting(nodes);
+      if (conflicts.length && action !== "stop") {
+        const c = conflicts[0];
+        const shared = (Array.isArray(c.nodes) ? c.nodes : nodes).filter((s) =>
+          nodes.includes(s)
+        );
         throw err409(
-          `A ${active.action} job is already running for ${active.model} — wait for it to finish or cancel it first`
+          `A ${c.action} job is already running for ${c.modelName || c.modelId}${
+            shared.length ? ` on ${shared.join(", ")}` : ""
+          } — wait for it to finish or cancel it first`
         );
       }
-      if (active) {
-        // A stop preempts even a live slot holder: the running job may be a
-        // hung start whose script still holds the GPU/port, and stop.sh is
-        // exactly the remedy. Cancelling kills the script's process group;
-        // containers already handed to dockerd keep running (the stop.sh
-        // itself then removes the one that matters).
-        this.cancel(active.jobId);
-        preempted = active;
+      for (const c of conflicts) {
+        this.cancel(c.jobId);
+        preempted.push(c);
       }
     } else {
-      // logs: one tail per model, no global lock.
+      // logs: one tail per model, no lock.
       const existing = this.activeLogs(modelId);
       if (existing) return { jobId: existing.jobId, status: "running", stoppingJobId: null };
     }
@@ -307,9 +351,9 @@ export class ModelJobManager {
         ? `$ ${job.script}\n`
         : `$ ./${script}${args.length ? ` ${args.join(" ")}` : ""}   [${model.dir}]\n`
     );
-    if (preempted) {
+    for (const p of preempted) {
       job.transcript.append(
-        `[preempt] cancelled the still-running ${preempted.action} job for ${preempted.model} (job ${String(preempted.jobId).slice(0, 8)})\n`
+        `[preempt] cancelled the still-running ${p.action} job for ${p.modelName || p.modelId} (job ${String(p.jobId).slice(0, 8)})\n`
       );
     }
 
@@ -321,8 +365,8 @@ export class ModelJobManager {
           : MODEL_JOB_TIMEOUT_MS;
 
     if (MUTATING.has(action)) {
-      this._mutating = job.jobId;
-      this._mutatingAbort = job._abort;
+      job.nodes = nodes;
+      this._mutating.add(job.jobId);
     }
     job.timeoutMs = timeoutMs;
     this._checkpointActive();
@@ -472,10 +516,7 @@ export class ModelJobManager {
     job.finishedAt = Date.now();
     if (res.error) job.transcript.append(`\n[hostExec] ${res.error}\n`);
     job._resolveDone?.();
-    if (this._mutating === job.jobId) {
-      this._mutating = null;
-      this._mutatingAbort = null;
-    }
+    this._mutating.delete(job.jobId);
     this._checkpointActive();
     this._notify(true);
   }
@@ -524,8 +565,7 @@ export class ModelJobManager {
       job.transcript.append(`\n[sparkDash] ${reason}\n`);
       job._resolveDone?.();
     }
-    this._mutating = null;
-    this._mutatingAbort = null;
+    this._mutating.clear();
     this._writeActiveFile([]);
     this._notify(true);
   }
@@ -620,31 +660,35 @@ export class ModelJobManager {
   }
 
   /**
-   * Run a start/restart of one model while others may hold the GPU/port: run
-   * every incumbent's stop.sh first, then the target's script, in ONE job so
-   * the transcript tells the whole story ("Qwen's stop.sh, then GLM's
-   * start.sh") and the single-mutating slot is never released between the two
-   * steps. When the two live on different Sparks the chain becomes one
-   * command per machine, run in order.
+   * Run a takeover start/restart: stop the incumbents that share Sparks with
+   * the target, then the target's script, in ONE job so the transcript tells
+   * the whole story ("Qwen's stop.sh, then GLM's start.sh") and the claim is
+   * never released between the two steps. When the machines differ the chain
+   * becomes one command per Spark, run in order. The job claims the UNION of
+   * the target's and every incumbent's Sparks, so a concurrent launch of an
+   * unrelated cluster never queues behind this one — and never races it.
    *
-   * The caller picks stopFirstIds fail-closed (everything not PROVEN down), so
-   * a listed model that cannot be stopped — unregistered, no stop script,
-   * unplaceable Spark — must fail the WHOLE job, not be skipped: silently not
-   * stopping an incumbent double-books the GPU/port and surfaces as the new
-   * kit's own port validation, the only guard left standing.
+   * The caller picks stopFirstIds fail-closed (everything on the target's
+   * Sparks not PROVEN down), so a listed model that cannot be stopped —
+   * unregistered, no stop script, unplaceable Spark — must fail the WHOLE
+   * job, not be skipped: silently not stopping an incumbent double-books the
+   * GPU/port and surfaces as the new kit's own port validation, the only
+   * guard left standing. A running job that touches the claim is preempted
+   * (cancelled) like a stop would — the chain is about to stop that model
+   * anyway.
    * @param {string} targetId
    * @param {string[]} stopFirstIds
    * @param {{ source?: string, action?: "start"|"restart" }} [meta]
    */
   startExclusive(targetId, stopFirstIds = [], meta = {}) {
     const action = meta.action === "restart" ? "restart" : "start";
-    const active = this.activeJob();
-    if (active) throw err409(`A ${active.action} job is already running for ${active.model}`);
     const target = this.getModel(targetId);
     if (!target) throw err400(`Model ${targetId} not found`);
     const targetScript = action === "restart" ? target.restartScript : target.startScript;
     if (!targetScript) throw err400(`Model ${targetId} has no ${action} script configured`);
 
+    // Everything this chain will touch — the lock the job holds while it runs.
+    const claims = new Set(modelOccupancy(target));
     const steps = [];
     for (const id of stopFirstIds) {
       const m = this.getModel(id);
@@ -654,6 +698,7 @@ export class ModelJobManager {
           `Model ${m.name || id} may be running but has no stop script — stop it by hand or configure its stop script before starting on top of it`
         );
       }
+      for (const s of modelOccupancy(m)) claims.add(s);
       const t = resolveRunTarget(m, this.getSpark);
       if (t.kind === null) throw err400(t.error);
       steps.push({
@@ -687,12 +732,19 @@ export class ModelJobManager {
       if (last && last.target.key === s.target.key) last.steps.push(s);
       else chunks.push({ target: s.target, steps: [s] });
     }
+    const conflictList = this._conflicting([...claims]);
     const job = this._createJob(target, action, { ...meta, chained: stopFirstIds.length > 0 });
     job.transcript.append(
       steps.map((s) => `$ ${s.label}: ./${s.script}${s.args?.length ? ` ${s.args.join(" ")}` : ""}   [${s.dir}]`).join("\n") + "\n"
     );
-    this._mutating = job.jobId;
-    this._mutatingAbort = job._abort;
+    for (const c of conflictList) {
+      this.cancel(c.jobId);
+      job.transcript.append(
+        `[preempt] cancelled the still-running ${c.action} job for ${c.modelName || c.model} (job ${String(c.jobId).slice(0, 8)})\n`
+      );
+    }
+    job.nodes = [...claims];
+    this._mutating.add(job.jobId);
     this._checkpointActive();
     this._notify();
     job.timeoutMs = MODEL_JOB_TIMEOUT_MS;
@@ -710,8 +762,8 @@ export class ModelJobManager {
   /**
    * A model just became ready (container up / port answering). `start.sh`
    * (and a chained `restart.sh`) normally ends in `docker logs -f` and would
-   * otherwise hold the single mutating slot until the job timeout, blocking
-   * every other model and the scheduler. Readiness is the real end-of-job
+   * otherwise hold its Spark claims until the job timeout, blocking other
+   * launches on those Sparks and the scheduler. Readiness is the real
    * signal, so stop the tail: containers are owned by dockerd and survive the
    * kill.
    *

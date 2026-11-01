@@ -43,6 +43,10 @@ interface Draft {
   id: string;
   name: string;
   sparkId: string;
+  /** Sparks the model occupies (ticked freely — the script host need not be among them). */
+  nodes: string[];
+  /** Cluster head among nodes (radio); "" = server default. */
+  headSparkId: string;
   dir: string;
   description: string;
   startScript: string;
@@ -59,6 +63,8 @@ const BLANK: Draft = {
   id: "",
   name: "",
   sparkId: "",
+  nodes: [],
+  headSparkId: "",
   dir: "",
   description: "",
   startScript: "start.sh",
@@ -76,6 +82,8 @@ function toDraft(m: ModelConfig): Draft {
     id: m.id,
     name: m.name ?? m.id,
     sparkId: m.sparkId ?? "",
+    nodes: m.nodes ?? [],
+    headSparkId: m.headSparkId ?? "",
     dir: m.dir,
     description: m.description ?? "",
     startScript: m.startScript ?? "",
@@ -223,21 +231,31 @@ export function ModelEditDialog() {
 
   const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
 
-  const buildBody = (): Partial<ModelConfig> & Pick<ModelConfig, "id" | "dir" | "startScript" | "stopScript"> => ({
-    id: draft.id.trim(),
-    name: draft.name.trim() || draft.id.trim(),
-    dir: draft.dir.trim(),
-    sparkId: draft.sparkId || null,
-    description: orNull(draft.description),
-    startScript: draft.startScript.trim(),
-    stopScript: draft.stopScript.trim(),
-    restartScript: orNull(draft.restartScript),
-    logsScript: orNull(draft.logsScript),
-    container: orNull(draft.container),
-    port: draft.port.trim() ? Number(draft.port) : null,
-    startArgs: draft.startArgs.trim() ? draft.startArgs.trim().split(/\s+/) : [],
-    repoUrl: orNull(draft.repoUrl),
-  });
+  const buildBody = (): Partial<ModelConfig> & Pick<ModelConfig, "id" | "dir" | "startScript" | "stopScript"> => {
+    // Occupancy is the operator's tick list, deduped — the script Spark is
+    // NOT auto-added (remote-launch kits run elsewhere). Head must be one of
+    // them; an unset/foreign pick falls back to the server default.
+    const nodes: string[] = [];
+    for (const s of draft.nodes) if (s && !nodes.includes(s)) nodes.push(s);
+    const head = nodes.includes(draft.headSparkId) ? draft.headSparkId : null;
+    return {
+      id: draft.id.trim(),
+      name: draft.name.trim() || draft.id.trim(),
+      dir: draft.dir.trim(),
+      sparkId: draft.sparkId || null,
+      nodes: nodes.length ? nodes : null,
+      headSparkId: head,
+      description: orNull(draft.description),
+      startScript: draft.startScript.trim(),
+      stopScript: draft.stopScript.trim(),
+      restartScript: orNull(draft.restartScript),
+      logsScript: orNull(draft.logsScript),
+      container: orNull(draft.container),
+      port: draft.port.trim() ? Number(draft.port) : null,
+      startArgs: draft.startArgs.trim() ? draft.startArgs.trim().split(/\s+/) : [],
+      repoUrl: orNull(draft.repoUrl),
+    };
+  };
 
   const handleSave = async () => {
     setError(null);
@@ -333,6 +351,75 @@ export function ModelEditDialog() {
                     </option>
                   ))}
                 </select>
+              </Field>
+              <Field
+                label="occupies Sparks (cluster)"
+                hint="Tick every unit this model's cluster runs on — the machine whose scripts run (⇄) need not be among them: a remote-launch kit boots its cluster elsewhere. Pick the head (⌂) — where the model leads and the API is served; liveness is probed there. Concurrency is decided on this set: models on different Sparks run together, a Start that shares a unit asks before stopping the incumbent, and Stop frees exactly these Sparks."
+              >
+                {sparks.length === 0 ? (
+                  <p className="mt-1 text-[11px] text-muted">No Sparks registered.</p>
+                ) : (
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {(() => {
+                      const headSel = draft.nodes.includes(draft.headSparkId)
+                        ? draft.headSparkId
+                        : draft.nodes[0] ?? "";
+                      return sparks.map((s) => {
+                        const on = draft.nodes.includes(s.id);
+                        const isScriptHost = s.id === draft.sparkId;
+                        return (
+                          <div
+                            key={s.id}
+                            className={`flex items-center rounded border text-[11px] ${
+                              on ? "border-accent/40 text-text" : "border-border text-muted"
+                            }`}
+                            title={
+                              isScriptHost
+                                ? "Runs this model's start/stop scripts"
+                                : "Cluster unit"
+                            }
+                          >
+                            <label className="flex cursor-pointer items-center gap-1.5 px-2 py-1">
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={(e) =>
+                                  patch({
+                                    nodes: e.target.checked
+                                      ? [...draft.nodes, s.id]
+                                      : draft.nodes.filter((n) => n !== s.id),
+                                    headSparkId:
+                                      !e.target.checked && draft.headSparkId === s.id
+                                        ? ""
+                                        : draft.headSparkId,
+                                  })
+                                }
+                              />
+                              {s.name}
+                              {isScriptHost ? " · scripts" : ""}
+                            </label>
+                            {on ? (
+                              <label
+                                className={`flex cursor-pointer items-center gap-1 border-l border-border px-2 py-1 text-[10px] ${
+                                  headSel === s.id ? "text-accent" : "text-muted hover:text-text"
+                                }`}
+                                title="Cluster head — where the model leads and the API is served"
+                              >
+                                <input
+                                  type="radio"
+                                  name="model-head"
+                                  checked={headSel === s.id}
+                                  onChange={() => patch({ headSparkId: s.id })}
+                                />
+                                ⌂ head
+                              </label>
+                            ) : null}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                )}
               </Field>
 
               <Field label="Repo directory" hint="Path on the selected Spark — absolute, or relative to the configured repos base.">

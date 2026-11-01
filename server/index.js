@@ -2595,6 +2595,19 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
 const modelLauncher = initModelLauncher({
   onStatusChange: () => forceBroadcast(),
   getSpark: (id) => registry.getSpark(id),
+  // The role coordinator configures Spark cards (Head/Worker/Standalone) to
+  // match what is actually running. Applying a patch restarts that unit's
+  // monitor so the collectors follow the new role, exactly like the Spark
+  // edit route does.
+  updateSpark: (id, patch) => {
+    registry.updateSpark(id, patch);
+    const unit = registry.getSpark(id);
+    if (unit) {
+      stopMonitor(id);
+      startMonitor(unit);
+    }
+    forceBroadcast();
+  },
 });
 registerModelRoutes(app, modelLauncher, { forceBroadcast });
 // ─── Spark AutoPower (idle shutdown + scheduled wake) ───

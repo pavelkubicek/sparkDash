@@ -19,6 +19,7 @@ import { HermesUpdateDialog } from "./components/SparkPage/HermesUpdateDialog";
 import { ModelCommandDialog } from "./components/OverviewPage/ModelLauncher/ModelCommandDialog";
 import { ModelScheduleDialog } from "./components/OverviewPage/ModelLauncher/ModelScheduleDialog";
 import { ModelEditDialog } from "./components/OverviewPage/ModelLauncher/ModelEditDialog";
+import { ModelTakeoverDialog } from "./components/OverviewPage/ModelLauncher/ModelTakeoverDialog";
 import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
 import { ShowcaseView } from "./components/ShowcasePage/ShowcaseView";
@@ -674,6 +675,7 @@ function DashboardApp() {
       <ModelCommandDialog />
       <ModelScheduleDialog />
       <ModelEditDialog />
+      <ModelTakeoverDialog />
       <AddSparkDialog
         open={showAdd}
         onClose={() => setShowAdd(false)}

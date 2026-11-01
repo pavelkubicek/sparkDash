@@ -201,6 +201,54 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
     }
   }
 
+  // Sparks this model OCCUPIES — every unit its cluster runs on, head
+  // included. This is the unit of the concurrency decision: a start must not
+  // silently stop a model that lives on *other* Sparks, and it says exactly
+  // what a Stop frees. The script host (sparkId) need not be among them —
+  // a remote-launch kit runs start.sh from wherever its repo lives. Empty =
+  // the model occupies only its assigned Spark.
+  let nodes = [];
+  if (config.nodes != null && !(Array.isArray(config.nodes) && config.nodes.length === 0)) {
+    if (!Array.isArray(config.nodes)) {
+      errors.push("nodes must be an array of Spark ids");
+    } else {
+      const cleaned = [];
+      const seen = new Set();
+      let bad = null;
+      for (const n of config.nodes) {
+        const s = typeof n === "string" ? n.trim() : "";
+        if (!s || !MODEL_ID_RE.test(s)) {
+          bad = JSON.stringify(n);
+          break;
+        }
+        if (!seen.has(s)) {
+          seen.add(s);
+          cleaned.push(s);
+        }
+      }
+      if (bad != null) errors.push(`nodes entries must be Spark ids matching [A-Za-z0-9._-]{1,64} (got ${bad})`);
+      else if (cleaned.length > 16) errors.push("nodes may hold at most 16 Sparks");
+      else nodes = cleaned;
+    }
+  }
+
+  // The cluster's head — where the model leads and its API is served, and
+  // therefore where liveness is probed. Deliberately separate from sparkId:
+  // "GLM on 3+4 started from spark1's repo" has sparkId spark1, nodes
+  // [spark3, spark4], head spark3. Omitted → the assigned Spark when it is
+  // part of the cluster, else the first occupied Spark.
+  let headSparkId = null;
+  if (config.headSparkId != null && config.headSparkId !== "") {
+    if (typeof config.headSparkId === "string" && MODEL_ID_RE.test(config.headSparkId.trim())) {
+      headSparkId = config.headSparkId.trim();
+    } else {
+      errors.push("headSparkId must be a spark id matching [A-Za-z0-9._-]{1,64}");
+    }
+  }
+  if (nodes.length && headSparkId && !nodes.includes(headSparkId)) {
+    errors.push("headSparkId must be one of the Sparks the model occupies");
+  }
+
   if (errors.length) throw new Error(errors.join("; "));
 
   const description =
@@ -222,6 +270,13 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
     port,
     position,
     description,
+    /** Declared cluster membership in the operator's order, head included.
+     *  [] = occupies only `sparkId` (see modelOccupancy). The unit of every
+     *  concurrency decision. */
+    nodes,
+    /** Which occupied Spark leads the cluster and serves the API (see
+     *  modelHead). For a head-less card this is just the assigned Spark. */
+    headSparkId: nodes.length ? headSparkId || (nodes.includes(sparkId) ? sparkId : nodes[0]) : sparkId,
     /** Optional deep-link the card can offer (e.g. the model's OpenAI base). */
     apiPath: typeof config.apiPath === "string" && config.apiPath.startsWith("/")
       ? config.apiPath.slice(0, 120)
@@ -232,6 +287,39 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
     schedule: scheduleCheck.schedule,
     schedulerEligible: scheduleIsUsable(scheduleCheck.schedule),
   };
+}
+
+/**
+ * The Spark a model leads from: its declared cluster head, or — for a model
+ * without one — the Spark its scripts run on. Liveness (the head container
+ * and the serving port) is probed HERE, which is not necessarily the script
+ * host: a remote-launch kit boots its cluster elsewhere while start.sh runs
+ * where the repo lives.
+ * @param {{ nodes?: string[]|null, headSparkId?: string|null, sparkId?: string|null }|null|undefined} model
+ * @returns {string|null}
+ */
+export function modelHead(model) {
+  if (!model) return null;
+  if (Array.isArray(model.nodes) && model.nodes.length) {
+    if (model.headSparkId && model.nodes.includes(model.headSparkId)) return model.headSparkId;
+    return model.nodes[0];
+  }
+  return model.sparkId ?? null;
+}
+
+/**
+ * The Sparks a model occupies: its declared cluster when it has one, else
+ * just the Spark its scripts run on. Every concurrency decision — can two
+ * models run at once, what does a Stop free, which Spark cards does a run
+ * own — reads through here so the head-only default and a real cluster are
+ * the same question.
+ * @param {{ nodes?: string[]|null, sparkId?: string|null }|null|undefined} model
+ * @returns {string[]}
+ */
+export function modelOccupancy(model) {
+  if (!model) return [];
+  if (Array.isArray(model.nodes) && model.nodes.length) return [...model.nodes];
+  return model.sparkId ? [model.sparkId] : [];
 }
 
 export class ModelRegistry {

@@ -129,9 +129,14 @@ export function buildChainedCommand(steps) {
 
 /**
  * Decide where a model's scripts run: on the Spark assigned to the card, not
- * on the machine the dashboard happens to be hosted by. Both Sparks are SSH
- * configured (password auth today, keys after the migration — the builder in
- * collectors/ssh.js handles both), so the normal verdict is `kind: "ssh"`.
+ * on the machine the dashboard happens to be hosted by. Remote Sparks run
+ * everything over their SSH connection (password auth today, keys after the
+ * migration — the builder in collectors/ssh.js handles both), so the normal
+ * verdict for them is `kind: "ssh"`. A Spark marked `isLocal` is executed on
+ * this machine no matter what lanIp/ssh fields it carries — the same
+ * isLocal-wins convention the collectors follow (SparkMonitor), and the only
+ * sane one: ssh'ing from a host to itself as a default `root` would silently
+ * reroute the local unit whenever a form fills `lanIp` in.
  *
  * @param {{ id?: string, sparkId?: string }} model
  * @param {(id: string) => object|null} getSpark SparkRegistry lookup — MUST
@@ -154,6 +159,9 @@ export function resolveRunTarget(model, getSpark) {
       error: `Spark "${model.sparkId}" assigned to model ${id} is not registered — add the Spark or reassign the model.`,
     };
   }
+  if (spark.isLocal) {
+    return { kind: "local", spark, key: `local:${spark.id}`, label: "local host" };
+  }
   const host = spark.ssh?.host || spark.lanIp;
   const user = spark.ssh?.user;
   if (host && user) {
@@ -164,9 +172,6 @@ export function resolveRunTarget(model, getSpark) {
       key: `ssh:${spark.id}`,
       label: `${name} (${user}@${host})`,
     };
-  }
-  if (spark.isLocal) {
-    return { kind: "local", spark, key: `local:${spark.id}`, label: "local host" };
   }
   return {
     kind: null,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { WsSnapshot } from "../../../api/types";
-import type { ModelInfo, SchedulerStatus } from "../../../api/modelTypes";
+import type { ModelInfo, ModelJob, SchedulerStatus } from "../../../api/modelTypes";
 import {
   clearSchedulerOverride,
   refreshModels,
@@ -49,9 +49,21 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
     ? rawList
     : [...rawList].sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9));
   const scheduler: SchedulerStatus | null = models?.scheduler ?? null;
-  const activeJob = models?.activeJob ?? null;
+  // One entry per cluster being started/stopped — concurrent launches are
+  // visible (and cancellable) at the same time.
+  const activeJobs: ModelJob[] = models?.activeJobs ?? [];
   const runningModels = list.filter((m) => m.status.running);
-  const runningName = runningModels[0]?.name;
+
+  // Sparks claimed by running jobs. Only cards overlapping a claim lock;
+  // a card on disjoint units stays fully clickable, so a second cluster can
+  // be started while the first still loads.
+  const claimedSparks = new Set<string>();
+  for (const j of activeJobs) {
+    const nodes = j.nodes?.length ? j.nodes : list.find((l) => l.id === j.modelId)?.nodes;
+    for (const s of nodes ?? []) claimedSparks.add(s);
+  }
+  const nodesOf = (m: ModelInfo): string[] =>
+    m.nodes?.length ? m.nodes : m.sparkId ? [m.sparkId] : [];
 
   /**
    * Move one card a single slot up (-1) or down (1) and persist the new order
@@ -165,17 +177,19 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
       icon={
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
-            activeJob
+            activeJobs.length > 0
               ? "animate-pulse bg-warning"
               : runningModels.length > 0
                 ? "bg-success dot-glow-success"
                 : "bg-muted"
           }`}
           title={
-            activeJob
-              ? `${activeJob.action} job running`
-              : runningName
-                ? `${runningName} is running`
+            activeJobs.length > 0
+              ? activeJobs.map((j) => `${j.action} ${j.model}`).join(", ")
+              : runningModels.length > 0
+                ? runningModels
+                    .map((m) => `${m.name} (${(m.nodeNames ?? []).join(", ") || "unassigned"})`)
+                    .join(", ")
                 : "Idle"
           }
         />
@@ -185,13 +199,25 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
       bodyClassName="flex flex-1 flex-col space-y-3"
       collapsible={{
         key: "models",
-        summary: activeJob ? (
+        summary: activeJobs.length > 0 ? (
           <>
-            <span className="text-warning">{activeJob.action}</span> {activeJob.model}
+            <span className="text-warning">{activeJobs[0].action}</span> {activeJobs[0].model}
+            {activeJobs.length > 1 ? (
+              <span className="text-muted"> +{activeJobs.length - 1}</span>
+            ) : null}
           </>
-        ) : runningName ? (
+        ) : runningModels.length > 0 ? (
           <>
-            <span className="text-success">●</span> {runningName}
+            <span className="text-success">●</span> {runningModels[0].name}
+            {runningModels.length > 1 ? (
+              <span
+                className="text-muted"
+                title={runningModels.map((m) => m.name).join(", ")}
+              >
+                {" "}
+                +{runningModels.length - 1}
+              </span>
+            ) : null}
           </>
         ) : (
           <>
@@ -201,13 +227,21 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
       }}
       actions={
         <div className="flex flex-wrap items-center justify-end gap-1.5">
-          {activeJob && (
+          {activeJobs.slice(0, 3).map((j) => (
             <span
+              key={j.jobId}
               className="inline-flex items-center gap-1 rounded border border-warning/40 px-1.5 py-0.5 text-[11px] text-warning"
-              title={`Running ./${activeJob.script || "?"} for ${activeJob.model}`}
+              title={`Running ./${j.script || "?"} for ${j.model}${
+                j.nodes?.length ? ` on ${j.nodes.join(", ")}` : ""
+              }`}
             >
               <RotateIcon className="h-3 w-3 animate-spin" />
-              {activeJob.action} {activeJob.model}
+              {j.action} {j.model}
+            </span>
+          ))}
+          {activeJobs.length > 3 && (
+            <span className="inline-flex items-center rounded border border-warning/40 px-1.5 py-0.5 text-[11px] text-warning">
+              +{activeJobs.length - 3}
             </span>
           )}
 
@@ -317,8 +351,8 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
             <ModelCard
               key={m.id}
               model={m}
-              busy={activeJob != null}
-              busyHere={activeJob?.modelId === m.id}
+              busy={nodesOf(m).some((s) => claimedSparks.has(s))}
+              busyHere={activeJobs.some((j) => j.modelId === m.id)}
               scheduledNow={scheduledNowId === m.id}
               canMoveUp={i > 0}
               canMoveDown={i < list.length - 1}
@@ -333,7 +367,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         className="pointer-events-none flex flex-wrap items-center gap-x-4 border-t border-border/60 pt-2 text-[9px] leading-none text-muted/60"
         style={{ left: "var(--density-panel-pad)", right: "var(--density-panel-pad)" }}
       >
-        <span>one model at a time — starting one stops the other first</span>
+        <span>clusters on different Sparks run together — a start that shares units asks first</span>
         <span>actions run the repo&apos;s own script on the host</span>
         <span>closing a transcript never stops a model</span>
         <span>reorder with a card&apos;s ↑ / ↓ buttons</span>

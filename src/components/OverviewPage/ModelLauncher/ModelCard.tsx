@@ -1,6 +1,13 @@
 import { useState } from "react";
 import type { ModelInfo } from "../../../api/modelTypes";
-import { restartModel, startModel, stopModel, tailModelLogs } from "../../../api/modelClient";
+import {
+  ModelTakeoverRequired,
+  restartModel,
+  startModel,
+  stopModel,
+  tailModelLogs,
+} from "../../../api/modelClient";
+import { openModelTakeoverDialog } from "../../../hooks/useModelTakeoverDialog";
 import { openModelCommandDialog } from "../../../hooks/useModelCommandDialog";
 import { openModelScheduleDialog } from "../../../hooks/useModelScheduleDialog";
 import { openModelEditDialog } from "../../../hooks/useModelEditDialog";
@@ -91,15 +98,30 @@ export function ModelCard({
       });
       onActionStarted?.();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : `${kind} failed`);
-      setTimeout(() => setError(null), 8000);
+      // A refusal that needs the operator's choice is not an error line —
+      // it opens the dialog naming exactly which models would be stopped.
+      if (err instanceof ModelTakeoverRequired && kind !== "stop") {
+        openModelTakeoverDialog({
+          modelId: model.id,
+          modelName: model.name,
+          action: kind,
+          incumbents: err.incumbents,
+          targetSparks: (model.nodes ?? []).map((id, i) => ({
+            id,
+            name: model.nodeNames?.[i] ?? id,
+          })),
+        });
+      } else {
+        setError(err instanceof Error ? err.message : `${kind} failed`);
+        setTimeout(() => setError(null), 8000);
+      }
     } finally {
       setPending(null);
     }
   }
 
   // Tail a running container's logs in the transcript modal. Read-only job —
-  // it does not take the single mutating slot, so it isn't gated by `busy`.
+  // it claims no Sparks, so it isn't gated by `busy`.
   async function runLogs() {
     setError(null);
     try {
@@ -125,6 +147,14 @@ export function ModelCard({
 
   // Probe confidence: "down" is only certain when at least one signal said no.
   const downCertain = model.status.containerUp === false || model.status.portUp === false;
+
+  // The units this model occupies — what a Stop frees, and what a Start may
+  // need cleared. Head first (registry guarantees the order).
+  const clusterNames = model.nodeNames?.length
+    ? model.nodeNames
+    : model.sparkName
+      ? [model.sparkName]
+      : [];
 
   // Brief one-line view of this model's enabled windows, e.g.
   // "weekday 18:00–08:00 · weekend 00:00–23:59" — no "sched" prefix, the card
@@ -215,7 +245,7 @@ export function ModelCard({
           {model.sparkId ? (
             <span
               className="rounded bg-border/60 px-1.5 py-0.5 font-tabular"
-              title={`scripts and probes run over SSH on ${model.sparkName} (${model.sparkId})`}
+              title={`scripts run over SSH on ${model.sparkName} (${model.sparkId})`}
             >
               ⇄ {model.sparkName}
             </span>
@@ -227,6 +257,22 @@ export function ModelCard({
               no spark
             </span>
           )}
+          {model.headSparkId && model.headSparkId !== model.sparkId ? (
+            <span
+              className="rounded bg-border/60 px-1.5 py-0.5 font-tabular"
+              title={`cluster head — the API is served from ${model.headSparkName}; scripts run on ${model.sparkName}`}
+            >
+              ⌂ {model.headSparkName}
+            </span>
+          ) : null}
+          {clusterNames.length > 1 ? (
+            <span
+              className="rounded bg-border/60 px-1.5 py-0.5 font-tabular"
+              title={`occupies ${clusterNames.join(", ")} — Stop frees all ${clusterNames.length}`}
+            >
+              {clusterNames.length} Sparks
+            </span>
+          ) : null}
           {model.container && (
             <span
               className={`rounded px-1.5 py-0.5 font-tabular ${
@@ -250,7 +296,7 @@ export function ModelCard({
                   ? "bg-success/15 text-success"
                   : "bg-border/60 text-muted"
               }`}
-              title={`:${model.port}/v1/models on ${model.sparkName || "the dashboard host"}: ${
+              title={`:${model.port}/v1/models on the head ${model.headSparkName || model.sparkName || "the dashboard host"}: ${
                 model.status.portChecked === false
                   ? model.status.portUp
                     ? "held by this model's container (not probed)"
@@ -322,16 +368,16 @@ export function ModelCard({
       {/* Actions */}
       <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
         {/* Colour-swapped power toggle (SparkActions geometry). A stop stays
-            clickable while a job holds the mutating slot — the server
-            preempts it; only the in-flight click disables it. */}
+            clickable while jobs claim Sparks — the server preempts jobs on
+            those units; only the in-flight click disables it. */}
         <button
           type="button"
           onClick={() => void run(isStop ? "stop" : "start")}
           disabled={powerDisabled}
           title={
             isStop
-              ? `Run ./${model.name} stop.sh on the host`
-              : `Run ./${model.name} start.sh on the host (stops any other running model first)`
+              ? `Run ./${model.name} stop.sh — stops serving and frees ${clusterNames.join(", ") || "its Spark"}`
+              : `Run ./${model.name} start.sh — models on other Sparks keep running; anything holding these units is stopped only after you confirm`
           }
           className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[11px] font-medium text-white transition-colors disabled:opacity-50 ${
             isStop ? "border-danger bg-danger hover:bg-danger/80" : "border-accent bg-accent hover:bg-accent-hover"

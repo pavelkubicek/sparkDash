@@ -41,6 +41,19 @@ test("a local Spark without SSH config keeps the nsenter transport", () => {
   assert.match(t.key, /^local:/);
 });
 
+test("isLocal wins over ssh fields — a local Spark is never ssh'ed to itself", () => {
+  // The registry defaults ssh.user to "root" for every Spark, so lanIp alone
+  // must not reroute the local unit through `ssh root@<lanIp>` (which fails
+  // auth and leaves container liveness unknown — fail-closed reads it as an
+  // incumbent blocking every Start). Collectors use the same isLocal-first
+  // convention.
+  const get = (id) =>
+    id === "me" ? { id: "me", name: "me", isLocal: true, lanIp: "10.0.0.99", ssh: { host: "", user: "root" } } : null;
+  const t = resolveRunTarget({ id: "glm", sparkId: "me" }, get);
+  assert.equal(t.kind, "local");
+  assert.match(t.key, /^local:/);
+});
+
 test("a Spark that is neither SSH-configured nor local is refused", () => {
   const get = (id) => (id === "ghost" ? { id: "ghost", isLocal: false } : null);
   const t = resolveRunTarget({ id: "glm", sparkId: "ghost" }, get);

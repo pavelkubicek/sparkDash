@@ -19,9 +19,10 @@
  * with zero browser tabs open, and a model that comes up at 02:00 needs to be
  * reported as up at 02:00.
  */
-import { ModelRegistry, normalizeRepoUrl } from "./ModelRegistry.js";
+import { ModelRegistry, normalizeRepoUrl, modelHead, modelOccupancy } from "./ModelRegistry.js";
 import { ModelJobManager } from "./ModelJobManager.js";
 import { ModelScheduler } from "./ModelScheduler.js";
+import { ClusterRoleCoordinator } from "./ClusterRoleCoordinator.js";
 import { execOnTarget, resolveRunTarget, shQuote } from "./hostExec.js";
 import { probeModels, buildModelStatus, containersKnown } from "./ModelProbe.js";
 import { getSchedulerConfig, updateSchedulerConfig } from "./schedulerStore.js";
@@ -39,15 +40,39 @@ export class ModelLauncher {
     this.getSpark = hooks.getSpark || (() => null);
     /** A model's run target is its assigned Spark — never the dashboard's box. */
     this._targetFor = (model) => resolveRunTarget(model, this.getSpark);
+    /** Liveness follows the cluster HEAD, not the script host: the head
+     *  container and the serving port live there. A remote-launch kit (repo
+     *  on spark1, cluster on 3+4 with head 3) is probed on spark3. */
+    this._probeTargetFor = (model) => {
+      const head = modelHead(model);
+      if (!head || head === model.sparkId) return this._targetFor(model);
+      return resolveRunTarget({ ...model, sparkId: head }, this.getSpark);
+    };
     this.registry = new ModelRegistry();
     this.jobs = new ModelJobManager({
       getModel: (id) => this.registry.getModel(id),
       getSpark: (id) => this.getSpark(id),
-      onChange: () => this._notify(),
+      onChange: () => {
+        // A job starting/settling changes both the payload and who owns the
+        // Sparks — refresh roles the moment the job state flips, not on the
+        // next probe tick, so the Spark cards follow the click.
+        this._notify();
+        this._reconcileRoles();
+      },
       afterSettle: async () => {
         // A stop/start changes liveness immediately — don't wait for the tick.
         await this.refresh();
       },
+    });
+    // Spark cards follow the running fleet: the model that is up decides who
+    // is Head, which units are its Workers, and which units stand alone.
+    this.coordinator = new ClusterRoleCoordinator({
+      getModels: () => this.registry.models,
+      status: () => this._status,
+      jobRunning: (modelId) => this.jobs.hasRunningMutating(modelId),
+      getSpark: (id) => this.getSpark(id),
+      updateSpark: hooks.updateSpark || null,
+      log: (m) => console.log(`[ModelLauncher] ${m}`),
     });
     this.scheduler = new ModelScheduler({
       registry: this.registry,
@@ -64,9 +89,11 @@ export class ModelLauncher {
     /** @type {Promise<unknown>} the in-flight (or last) refresh pass */
     this._pass = Promise.resolve();
     this._lastProbeOkAt = null;
-    // Registry edits change both the card list and the scheduler's windows.
+    // Registry edits change both the card list and the scheduler's windows —
+    // and which Sparks are claimed at all.
     this.registry.onChange(() => {
       this._notify();
+      this._reconcileRoles();
     });
   }
 
@@ -167,15 +194,17 @@ export class ModelLauncher {
         return this._status;
       }
       const forced = new Set();
-      const active = this.jobs.activeJob();
-      if (active?.modelId) {
-        const m = this.registry.getModel(active.modelId);
+      // Readiness is a port flipping up while a job runs — force every model
+      // with a mutating job in flight, however many clusters launch at once.
+      for (const job of this.jobs.activeJobs()) {
+        if (!job.modelId) continue;
+        const m = this.registry.getModel(job.modelId);
         if (m?.port != null) forced.add(String(m.port));
       }
       if (opts.forcePorts === "all") {
         for (const m of models) if (m.port != null) forced.add(String(m.port));
       }
-      const result = await probeModels(models, { forcePorts: forced, targetFor: this._targetFor });
+      const result = await probeModels(models, { forcePorts: forced, targetFor: this._probeTargetFor });
       const next = buildModelStatus(models, { ...result, checkedAt: undefined });
       const changed = JSON.stringify(next) !== JSON.stringify(this._status);
       this._status = next;
@@ -199,6 +228,9 @@ export class ModelLauncher {
         if (readySignal === true) this.jobs.releaseReadyStart(m.id);
       }
       if (changed) this._notify();
+      // Roles follow reality on every verdict, not just changed ones — the
+      // diff against the SparkRegistry is pure and no-ops when aligned.
+      this._reconcileRoles();
     } catch (err) {
       console.warn("[ModelLauncher] probe failed:", err?.message || err);
     }
@@ -207,6 +239,19 @@ export class ModelLauncher {
 
   status() {
     return this._status;
+  }
+
+  /**
+   * Align the Spark cards' Head/Worker/Standalone roles with the running
+   * models. No-op when no updateSpark hook was injected (tests, standalone
+   * use); every failure inside is per-unit and logged, never fatal.
+   */
+  _reconcileRoles() {
+    try {
+      this.coordinator.reconcile();
+    } catch (err) {
+      console.warn("[ModelLauncher] role reconcile failed:", err?.message || err);
+    }
   }
 
   // ─── WS payload ─────────────────────────────────────────
@@ -219,7 +264,9 @@ export class ModelLauncher {
    * absolute epoch ms which is stable until the boundary itself moves.
    */
   snapshotPayload() {
-    const models = this.registry.models.map((m) => ({
+    const models = this.registry.models.map((m) => {
+      const headId = modelHead(m);
+      return {
       id: m.id,
       name: m.name,
       dir: m.dir,
@@ -227,6 +274,15 @@ export class ModelLauncher {
       /** Display name of the assigned Spark (its id if the Spark was removed —
        *  the status error tells the whole story in that case). */
       sparkName: m.sparkId ? this.getSpark(m.sparkId)?.name ?? m.sparkId : null,
+      /** Every Spark this model occupies (operator order, head included). The
+       *  unit of every concurrency decision, and the answer to "what will
+       *  this Stop kill". */
+      nodes: modelOccupancy(m),
+      nodeNames: modelOccupancy(m).map((s) => this.getSpark(s)?.name ?? s),
+      /** Which of those units leads and serves (see modelHead) — it can be a
+       *  different Spark than the one the scripts run on. */
+      headSparkId: headId,
+      headSparkName: headId ? this.getSpark(headId)?.name ?? headId : null,
       description: m.description,
       container: m.container,
       port: m.port,
@@ -245,10 +301,11 @@ export class ModelLauncher {
         error: null,
       },
       job: this.jobs.getLatest(m.id) || null,
-    }));
+      };
+    });
     return {
       models,
-      activeJob: this.jobs.activeJob(),
+      activeJobs: this.jobs.activeJobs(),
       scheduler: this.scheduler.statusBlock(),
     };
   }

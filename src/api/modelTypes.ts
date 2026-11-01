@@ -17,8 +17,9 @@ export interface ModelStatus {
   portUp: boolean | null;
   /**
    * false when :port was deliberately NOT asked this tick — a confirmed
-   * container already settles the answer (only one model can run, so the
-   * owner's container proves both who is up and who is not).
+   * container on that machine already settles the answer (one serving model
+   * per Spark, so the owner's container proves both who is up and who is
+   * not; models on other Sparks are a different question).
    */
   portChecked?: boolean;
   modelId: string | null;
@@ -34,6 +35,16 @@ export interface ModelInfo {
   sparkId: string | null;
   /** Display name of the assigned Spark; equals sparkId when it was removed. */
   sparkName: string | null;
+  /** Every Spark this model occupies, head first — its declared cluster.
+   *  A model without one occupies just `sparkId`. Concurrency is decided on
+   *  these sets, and a Stop frees exactly these units. */
+  nodes: string[];
+  /** Display names for `nodes`, same order (id when the Spark was removed). */
+  nodeNames: string[];
+  /** Which occupied Spark leads the cluster and serves the API — it can be
+   *  a different Spark than the one the scripts run on (remote-launch kits). */
+  headSparkId: string | null;
+  headSparkName: string | null;
   description: string | null;
   container: string | null;
   port: number | null;
@@ -58,6 +69,10 @@ export interface ModelConfig {
   dir: string;
   /** Target Spark id for scripts/probes — set in the card's edit dialog. */
   sparkId?: string | null;
+  /** Sparks the model occupies (head included, operator order). Omit/[] = head only. */
+  nodes?: string[] | null;
+  /** Cluster head among `nodes`; omitted = script Spark when a member, else first. */
+  headSparkId?: string | null;
   description?: string | null;
   startScript: string;
   stopScript: string;
@@ -84,6 +99,8 @@ export interface ModelJob {
   modelId: string;
   model: string;
   action: ModelAction;
+  /** Sparks the job claims while it runs (publicJob mirrors modelOccupancy). */
+  nodes?: string[] | null;
   status: ModelJobStatus;
   script: string | null;
   dir: string | null;
@@ -137,15 +154,28 @@ export interface SchedulerConfig {
 /** The `models` block on every WS snapshot. */
 export interface ModelsSnapshot {
   models: ModelInfo[];
-  activeJob: ModelJob | null;
+  /** Running mutating jobs — one per cluster being started/stopped, so
+   *  concurrent launches are all visible at once. */
+  activeJobs: ModelJob[] | null;
   scheduler: SchedulerStatus;
 }
 
 export interface ModelActionResponse {
   jobId: string;
   status: string;
+  /** Model ids stopped first as part of a takeover start. */
   stopping?: string[];
   stoppingJobIds?: string[];
+}
+
+/** A running model the operator must approve killing before a Start proceeds. */
+export interface ModelTakeoverIncumbent {
+  id: string;
+  name: string;
+  /** Sparks it shares with the target (why it is in the way). */
+  sparks: string[];
+  /** Display names for `sparks`, same order. */
+  sparkNames?: string[];
 }
 
 export interface SchedulerPreview {

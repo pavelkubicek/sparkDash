@@ -11,7 +11,7 @@
  * registry also rejects the reserved id set, belt and braces).
  */
 import { isValidModelId } from "./ModelRegistry.js";
-import { certainlyDown } from "./ModelProbe.js";
+import { planTakeover } from "./takeover.js";
 import {
   scheduleWindows,
   resolveActiveWindow,
@@ -220,8 +220,8 @@ export function registerModelRoutes(app, launcher, hooks = {}) {
   });
 
   app.delete("/api/models/:id", (req, res) => {
-    const running = launcher.jobs.activeJob();
-    if (running && running.modelId === req.params.id) {
+    const running = launcher.jobs.activeJobs().find((j) => j.modelId === req.params.id);
+    if (running) {
       return res.status(409).json({ error: `Cannot remove a model while its ${running.action} job is running` });
     }
     const removed = models().removeModel(req.params.id);
@@ -243,19 +243,22 @@ export function registerModelRoutes(app, launcher, hooks = {}) {
 
   // ─── Actions ────────────────────────────────────────────
   /**
-   * Start / restart — exclusive. Returns 202 { jobId } and stops any *other*
-   * model first, in the same job, so the transcript shows the incumbent's
-   * stop.sh followed by the target's script and exactly one container ends up
-   * running. Restart gets the same treatment: a restart.sh that runs while
-   * another kit holds :8000 dies on that kit's port validation instead of
-   * doing its job.
+   * Start / restart. The fleet may run several clusters at once (2×TP2 on
+   * separate Sparks), so a launch is exclusive ONLY against models that
+   * occupy one of the target's Sparks. Those incumbents are stopped first,
+   * in the same job, so the transcript shows their stop.sh followed by the
+   * target's script and no GPU/port is ever double-booked. Models on other
+   * Sparks are nobody's business and keep running.
    *
-   * The incumbent list is fail-closed and computed from a FRESH probe: a
-   * cached tick can be stale by the whole probe interval, and a model whose
-   * verdict is merely unknown (docker ps died, LAN probe timed out,
-   * container-name drift) still holds the GPU and the port. Unless the probe
-   * PROVED a model down, its stop.sh runs first — idempotent and cheap; a
-   * skipped live incumbent is the double-book this path exists to prevent.
+   * Killing a running model is never silent: without `confirmTakeover` a
+   * launch that has incumbents answers 409 { code: "takeover-confirm",
+   * incumbents } and the UI asks the operator — Cancel runs nothing,
+   * Confirm re-posts with the flag and the swap begins.
+   *
+   * The incumbent list is fail-closed within the overlap and computed from a
+   * FRESH probe: a cached tick can be stale by the whole probe interval, and
+   * a model whose verdict is merely unknown (docker ps died, LAN probe timed
+   * out, container-name drift) still holds the GPU and the port — it counts.
    */
   function exclusiveAction(action) {
     return async (req, res) => {
@@ -263,18 +266,29 @@ export function registerModelRoutes(app, launcher, hooks = {}) {
       if (!model) return res.status(404).json({ error: "Model not found" });
       try {
         await launcher.refresh({ forcePorts: "all" });
-        const status = launcher.status();
-        const others = models()
-          .models.filter((m) => m.id !== model.id && !certainlyDown(status[m.id], m))
-          .map((m) => m.id);
-        const result = launcher.jobs.startExclusive(model.id, others, {
+        const { incumbents } = planTakeover(models().models, launcher.status(), model);
+        if (incumbents.length && req.body?.confirmTakeover !== true) {
+          const sparkName = (id) => launcher.getSpark(id)?.name ?? id;
+          const detailed = incumbents.map((i) => ({
+            ...i,
+            sparkNames: i.sparks.map(sparkName),
+          }));
+          const who = detailed.map((i) => `${i.name} (${i.sparkNames.join(", ")})`).join(", ");
+          return res.status(409).json({
+            error: `Starting ${model.name || model.id} must first stop ${who} — they hold Sparks the target needs.`,
+            code: "takeover-confirm",
+            incumbents: detailed,
+          });
+        }
+        const stopFirstIds = incumbents.map((i) => i.id);
+        const result = launcher.jobs.startExclusive(model.id, stopFirstIds, {
           source: req.body?.source || "manual",
           action,
         });
         // A human clicked: the choice outranks the schedule until the next boundary.
         launcher.scheduler.noteManual(model.id);
         broadcast();
-        res.status(202).json({ jobId: result.jobId, status: "running", stopping: others });
+        res.status(202).json({ jobId: result.jobId, status: "running", stopping: stopFirstIds });
       } catch (e) {
         err(res, e);
       }

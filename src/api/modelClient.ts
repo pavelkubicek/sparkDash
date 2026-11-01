@@ -8,9 +8,24 @@ import type {
   ModelActionResponse,
   ModelConfig,
   ModelJob,
+  ModelTakeoverIncumbent,
   SchedulerConfig,
   SchedulerPreview,
 } from "./modelTypes";
+
+/**
+ * A Start/Restart that would stop running models on the target's Sparks and
+ * the operator has not confirmed it yet. The UI shows who/where and asks:
+ * confirm re-posts with `confirmTakeover`, cancel runs nothing.
+ */
+export class ModelTakeoverRequired extends Error {
+  incumbents: ModelTakeoverIncumbent[];
+  constructor(message: string, incumbents: ModelTakeoverIncumbent[]) {
+    super(message);
+    this.name = "ModelTakeoverRequired";
+    this.incumbents = incumbents;
+  }
+}
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {};
@@ -21,6 +36,9 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (res.status === 409 && body?.code === "takeover-confirm" && Array.isArray(body.incumbents)) {
+      throw new ModelTakeoverRequired(body.error || "Takeover confirmation required", body.incumbents);
+    }
     throw new Error(body.error || `HTTP ${res.status}`);
   }
   return res.json();
@@ -88,10 +106,13 @@ export function toggleModelSchedule(
 }
 
 // ─── Actions ───────────────────────────────────────────────
-export function startModel(id: string): Promise<ModelActionResponse> {
+export function startModel(
+  id: string,
+  opts?: { confirmTakeover?: boolean }
+): Promise<ModelActionResponse> {
   return apiFetch(`/api/models/${encodeURIComponent(id)}/start`, {
     method: "POST",
-    body: JSON.stringify({ source: "manual" }),
+    body: JSON.stringify({ source: "manual", confirmTakeover: opts?.confirmTakeover === true }),
   });
 }
 
@@ -102,10 +123,13 @@ export function stopModel(id: string): Promise<ModelActionResponse> {
   });
 }
 
-export function restartModel(id: string): Promise<ModelActionResponse> {
+export function restartModel(
+  id: string,
+  opts?: { confirmTakeover?: boolean }
+): Promise<ModelActionResponse> {
   return apiFetch(`/api/models/${encodeURIComponent(id)}/restart`, {
     method: "POST",
-    body: JSON.stringify({ source: "manual" }),
+    body: JSON.stringify({ source: "manual", confirmTakeover: opts?.confirmTakeover === true }),
   });
 }
 

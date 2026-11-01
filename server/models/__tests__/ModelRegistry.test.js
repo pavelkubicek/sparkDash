@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { ModelRegistry, validateModelConfig, resolveRepoDir, isValidModelId, normalizeRepoUrl } from "../ModelRegistry.js";
+import {
+  ModelRegistry,
+  validateModelConfig,
+  resolveRepoDir,
+  isValidModelId,
+  normalizeRepoUrl,
+  modelOccupancy,
+  modelHead,
+} from "../ModelRegistry.js";
 
 const BASE = "/cluster/docker";
 
@@ -49,6 +57,65 @@ test("sparkId: optional, allowlisted, and trimmed into storage", () => {
   assert.throws(() => validateModelConfig({ ...VALID, sparkId: "../etc" }, BASE), /sparkId/);
   assert.throws(() => validateModelConfig({ ...VALID, sparkId: "spark 1" }, BASE), /sparkId/);
   assert.throws(() => validateModelConfig({ ...VALID, sparkId: 42 }, BASE), /sparkId/);
+});
+
+test("nodes: declared cluster is allowlisted, order-kept and deduped", () => {
+  assert.deepEqual(validateModelConfig(VALID, BASE).nodes, []);
+  assert.deepEqual(validateModelConfig({ ...VALID, nodes: [] }, BASE).nodes, []);
+  // The operator's order is kept (position carries no head meaning) and
+  // dupes fold; the script Spark is NOT auto-added — a cluster may live
+  // entirely elsewhere (remote-launch kits).
+  assert.deepEqual(
+    validateModelConfig({ ...VALID, sparkId: "spark1", nodes: ["spark2", "spark1", "spark2"] }, BASE).nodes,
+    ["spark2", "spark1"]
+  );
+  // Without an assigned Spark the declared order is the occupancy.
+  assert.deepEqual(validateModelConfig({ ...VALID, nodes: ["spark3", "spark4"] }, BASE).nodes, [
+    "spark3",
+    "spark4",
+  ]);
+  assert.throws(() => validateModelConfig({ ...VALID, nodes: ["spark2", "spark 2"] }, BASE), /nodes/);
+  assert.throws(() => validateModelConfig({ ...VALID, nodes: "spark2" }, BASE), /nodes/);
+  assert.throws(
+    () => validateModelConfig({ ...VALID, nodes: Array.from({ length: 17 }, (_, i) => `s${i}`) }, BASE),
+    /at most 16/
+  );
+});
+
+test("modelOccupancy: declared cluster, else the head alone", () => {
+  assert.deepEqual(modelOccupancy({ sparkId: "spark1", nodes: ["spark1", "spark2"] }), [
+    "spark1",
+    "spark2",
+  ]);
+  assert.deepEqual(modelOccupancy({ sparkId: "spark1", nodes: [] }), ["spark1"]);
+  assert.deepEqual(modelOccupancy({ sparkId: null, nodes: [] }), []);
+  assert.deepEqual(modelOccupancy(null), []);
+});
+
+test("headSparkId: the cluster head is independent of the script host", () => {
+  // The GLM case: repo on spark1, cluster boots on 3+4 with 3 leading.
+  const glm = validateModelConfig(
+    { ...VALID, sparkId: "spark1", nodes: ["spark3", "spark4"], headSparkId: "spark3" },
+    BASE
+  );
+  assert.deepEqual(glm.nodes, ["spark3", "spark4"]);
+  assert.equal(glm.headSparkId, "spark3");
+  assert.deepEqual(modelOccupancy(glm), ["spark3", "spark4"]);
+  assert.equal(modelHead(glm), "spark3");
+  // Omitted head: the script Spark when a member, else the first occupied unit.
+  assert.equal(validateModelConfig({ ...VALID, sparkId: "spark1", nodes: ["spark1", "spark2"] }, BASE).headSparkId, "spark1");
+  assert.equal(validateModelConfig({ ...VALID, sparkId: "spark1", nodes: ["spark3", "spark4"] }, BASE).headSparkId, "spark3");
+  // A head outside the cluster is refused; a bad id is refused.
+  assert.throws(
+    () => validateModelConfig({ ...VALID, sparkId: "spark1", nodes: ["spark3"], headSparkId: "spark1" }, BASE),
+    /headSparkId/
+  );
+  assert.throws(() => validateModelConfig({ ...VALID, headSparkId: "bad id" }, BASE), /headSparkId/);
+  // Solo model: the head is the script host, and occupancy matches.
+  const solo = validateModelConfig({ ...VALID, sparkId: "spark1" }, BASE);
+  assert.equal(solo.headSparkId, "spark1");
+  assert.equal(modelHead(solo), "spark1");
+  assert.deepEqual(modelOccupancy(solo), ["spark1"]);
 });
 
 test("startArgs are restricted to single flag tokens", () => {

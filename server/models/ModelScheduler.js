@@ -263,9 +263,11 @@ export class ModelScheduler {
 
   // ─── Helpers ────────────────────────────────────────────
   /**
-   * Start/stop through the job manager, waiting for the mutating slot to be
-   * free. The job manager serializes mutating jobs globally, so "wait" here is
-   * just: retry on 409 until the incumbent's job settles.
+   * Start/stop through the job manager and wait for it. The scheduler's own
+   * swap is already one-model-at-a-time (it stops the incumbent before
+   * starting the target); the job manager adds the Spark-level guarantee —
+   * nothing else touching those units mutates while the swap runs, while a
+   * cluster on other Sparks may launch freely.
    */
   async _enqueueStop(modelId, source) {
     try {
