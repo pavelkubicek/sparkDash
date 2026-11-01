@@ -352,7 +352,7 @@
 }
 .ov .ov-modelrow code {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 auto; /* grow to fill for one name; two names shrink toward their content, each ellipsizing */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

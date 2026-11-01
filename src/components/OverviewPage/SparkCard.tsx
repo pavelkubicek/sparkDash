@@ -311,9 +311,10 @@ function SparkCardImpl({
         ...(spark.metrics.residentModels ?? []).map((entry) => entry.modelId),
       ])].filter((name) => name !== modelText)
     : [];
-  // The first row is the monitored model, or the first alias when no endpoint
-  // names one. The toggle lives on that row, so a head reads as one entry like
-  // a worker does; expanding adds every remaining alias below it.
+  // Two names read as a list, not a fold (the fleet runs at most two); a third
+  // and beyond collapse behind a +N toggle on the first row, which expands into
+  // one row per remaining alias below.
+  const loadedTitle = (name: string) => `${name} · loaded model; throughput shown for the monitored endpoint above`;
   const hiddenModels = modelText ? loadedModels : loadedModels.slice(1);
 
   return (
@@ -538,7 +539,10 @@ function SparkCardImpl({
           {modelText ? (
             <div className="ov-modelrow" title={modelTitle}>
               <code>{modelText}</code>
-              {hiddenModels.length > 0 ? (
+              {hiddenModels.length === 1 ? (
+                // Two is a list, not a fold: show both names (each ellipsizes on overflow).
+                <code title={loadedTitle(hiddenModels[0])}>{hiddenModels[0]}</code>
+              ) : hiddenModels.length > 1 ? (
                 <button
                   type="button"
                   className="ov-modelrow__more"
@@ -551,9 +555,11 @@ function SparkCardImpl({
               {modelEyebrowRight ? <span className="ov-modelrow__ctx">{modelEyebrowRight}</span> : null}
             </div>
           ) : loadedModels.length > 0 ? (
-            <div className="ov-modelrow" title={`${loadedModels[0]} · loaded model; throughput shown for the monitored endpoint above`}>
+            <div className="ov-modelrow" title={loadedTitle(loadedModels[0])}>
               <code>{loadedModels[0]}</code>
-              {hiddenModels.length > 0 ? (
+              {loadedModels.length === 2 ? (
+                <code title={loadedTitle(loadedModels[1])}>{loadedModels[1]}</code>
+              ) : loadedModels.length > 2 ? (
                 <button
                   type="button"
                   className="ov-modelrow__more"
@@ -573,7 +579,7 @@ function SparkCardImpl({
           )}
           {showAllLoaded
             ? hiddenModels.map((name) => (
-                <div className="ov-modelrow" key={name} title={`${name} · loaded model; throughput shown for the monitored endpoint above`}>
+                <div className="ov-modelrow" key={name} title={loadedTitle(name)}>
                   <code>{name}</code>
                   <span className="ov-modelrow__ctx">Loaded</span>
                 </div>

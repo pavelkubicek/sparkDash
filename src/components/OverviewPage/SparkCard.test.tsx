@@ -103,7 +103,7 @@ describe("SparkCard", () => {
     expect(text).toContain("2 running · 1 queued");
     expect(text).not.toContain("slots");
   });
-  it("lists private loaded models under the monitored model without duplicates", () => {
+  it("shows both loaded model names inline when only two are loaded", () => {
     const spark = head(true);
     spark.metrics.residentModels = [
       { modelId: "big-model", container: "primary-vllm" },
@@ -111,12 +111,9 @@ describe("SparkCard", () => {
     ];
     const { container } = render(<SparkCard spark={spark} temperatureUnit="celsius" />);
     const rows = () => [...container.querySelectorAll(".ov-modelrow code")].map((row) => row.textContent);
-    expect(rows()).toEqual(["big-model"]);
-    const button = container.querySelector(".ov-modelrow__more") as HTMLButtonElement;
-    expect(button.textContent).toBe("+1 more");
-    act(() => button.click());
+    // No fold at two: both names sit in the row (each ellipsizes on overflow via CSS).
     expect(rows()).toEqual(["big-model", "datalab-to/surya-ocr-2"]);
-    expect(container.querySelectorAll(".ov-modelrow")[1].textContent).toContain("Loaded");
+    expect(container.querySelector(".ov-modelrow__more")).toBeNull();
   });
 
   it("keeps the head card to one entry and folds every loaded alias behind its button", () => {
