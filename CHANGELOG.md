@@ -9,6 +9,10 @@ Format: version sections are listed newest first.
 
 ## [Unreleased]
 
+### Added
+
+- **Kiosk for the NZXT Kraken LCD: `/kiosk-kraken`.** The wall for a round screen: the whole glass is tiles — no brand, minimal padding — sized in `vmin` for the Kraken's square 480 × 480 viewport. The static row's content hugs its bottom edge and the carousel's its top, so the rows meet in the middle with no dead band between them. The top row is static — fleet decode tok/s as whole tok/s (no unit suffix) and requests inside the AI proxy as `running / waiting` on one line. The bottom row is a carousel cycling three groups every 3 s with a slide-in fade: hottest GPU temperature (`65°`, no unit letter) beside proxy tokens for the current day (from the AI-proxy statistics day bucket, in the configured time zone, compact with no unit), then orchestrator running tasks beside auditor analyzing, each with its queued count (plans / reviews) as a small `/N` suffix in the text colour, then the models the launcher is serving — full-width, by their short kiosk names. **Model cards carry an editable "Kiosk name"** (Model Launcher → edit dialog; stored in the registry, empty falls back to the display name), and the fleet's models were seeded `DS41` (both DeepSeek variants), `Qwen38` (all three Qwen variants) and `GLM53`. The proxy, orchestrator and auditor tiles wear their repos' favicon marks and there are no labels; counters poll the existing bridge routes every 5 s (tokens every minute) and hold the last reading when a poll fails. Esc returns to the dashboard.
+
 ### Changed
 
 - **Overview card shows both model names; the fold returns at three.** Two loaded models read as **name + “+1 more”** — a fold for a list of two, and the fleet never runs more. Both names now sit in the row (each truncating with an ellipsis when the card is narrow); the **+N** toggle appears only from a third name on (served-alias lists on a head).

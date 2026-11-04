@@ -57,6 +57,8 @@ export function makeSpark(id = "spark-1", online = true): SparkSnapshot {
         perStreamTps: 18.5,
         perStreamPrefillTps: 2813,
         prefillTps: 200,
+        requestsWaiting: 0,
+        requestsRunning: 2,
       }] : [],
       comfy: null,
       tailscale: null,

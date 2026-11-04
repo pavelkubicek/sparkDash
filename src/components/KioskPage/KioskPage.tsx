@@ -15,7 +15,7 @@ import { activeTimeZone, setConfiguredTimeZone } from "../../shared/timeZone";
 import { vramContextFor, type VramBreakdownContext } from "../../shared/vramBreakdown";
 import { computeFleetTotals } from "../OverviewPage/fleetStats";
 import { BoltIcon } from "../ui/icons";
-import { kioskCard, kioskColumns, kioskFleetStats, parseKioskOptions, smoothPath, type KioskTraces } from "./kioskModel";
+import { kioskCard, kioskColumns, kioskFleetStats, parseKioskOptions, rateText, smoothPath, type KioskTraces } from "./kioskModel";
 import { useKioskTraces } from "./useKioskTraces";
 
 type TempUnit = "celsius" | "fahrenheit";
@@ -71,11 +71,6 @@ function rateScale(values: ReadonlyArray<number | null>, floor = 10): number {
   const peak = Math.max(floor, ...values.map((v) => v ?? 0));
   const mag = 10 ** Math.floor(Math.log10(peak));
   return Math.ceil(peak / mag) * mag;
-}
-
-function rateText(v: number | null): string {
-  if (v == null) return "—";
-  return v >= 100 ? v.toFixed(0) : v.toFixed(1);
 }
 
 /** A unit's 30-minute trace inside its card. */

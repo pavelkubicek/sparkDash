@@ -420,6 +420,14 @@ URL flags choose the layout without touching settings:
 | `?cols=N` | A fixed number of columns (1–8) instead of the layout that gives the largest cards |
 | `?theme=oled` | A theme for this screen only (`white`, `light`, `dark`, `oled`); it is not saved |
 
+### Kiosk for the NZXT Kraken LCD (`/kiosk-kraken`)
+
+The same wall reduced to a round screen: on the Kraken AIO's LCD (a square 480 × 480 viewport, cropped to a circle by the bezel) **`/kiosk-kraken`** turns the whole glass into tiles — no brand, minimal padding — with icon-above-number tiles sized in `vmin`. The **top row is static**: fleet decode tok/s as whole tok/s (no unit suffix) and requests inside the AI proxy as `running / waiting` on one line. The **bottom row is a carousel** cycling three groups every 3 s with a slide-in fade: hottest GPU temperature (`65°`) beside proxy tokens today, then orchestrator running tasks beside auditor analyzing, each with its queued count as a small `/N` suffix, then **the models the launcher is serving** — full width, by their short kiosk names (`DS41 · Qwen38`).
+
+Those kiosk names are editable on the Model Launcher: each card's edit dialog carries a **Kiosk name** field (stored in the model registry; empty falls back to the display name).
+
+The service icons are the repos' own favicon marks; waiting requests come from the LLM queues on the spark snapshot, the in-flight/analyzing/running counters and queued plans/reviews from the AI-proxy, orchestrator and auditor bridges (the Overview panels' sources) polled every 5 s, today's token total every minute, and the models from the WS snapshot's models block — the same one the Model Launcher cards render from. Like the big wall it holds its last frame when a poll fails, hides the cursor, keeps the screen awake, and **Esc** returns to the dashboard.
+
 ## Glance integration
 
 [Glance](https://github.com/glanceapp/glance) can show the cluster on a self-hosted dashboard with the community widget [`sparkdash-dgx-cluster`](https://github.com/glanceapp/community-widgets/tree/main/widgets/sparkdash-dgx-cluster) (contributed by [@linxichen](https://github.com/linxichen)). One `custom-api` card renders GPU temperature and usage, VRAM, generation tok/s, KV-cache usage, and uptime for a head node plus one worker, reading `/api/sparks/:id/metrics` directly:

@@ -29,6 +29,8 @@ export interface ModelStatus {
 export interface ModelInfo {
   id: string;
   name: string;
+  /** Short name for the round-screen kiosks ("DS41"); null falls back to `name`. */
+  kioskName: string | null;
   /** Absolute path of the repo ON `sparkId` (validated inside the repos base). */
   dir: string;
   /** Spark whose machine runs the scripts (null = unassigned → no actions). */
@@ -66,6 +68,8 @@ export interface ModelInfo {
 export interface ModelConfig {
   id: string;
   name?: string;
+  /** Short name for the round-screen kiosks ("DS41"); omit/empty falls back to `name`. */
+  kioskName?: string | null;
   dir: string;
   /** Target Spark id for scripts/probes — set in the card's edit dialog. */
   sparkId?: string | null;

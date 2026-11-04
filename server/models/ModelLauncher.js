@@ -269,6 +269,8 @@ export class ModelLauncher {
       return {
       id: m.id,
       name: m.name,
+      /** Short name for the round-screen kiosks; null falls back to `name`. */
+      kioskName: m.kioskName ?? null,
       dir: m.dir,
       sparkId: m.sparkId ?? null,
       /** Display name of the assigned Spark (its id if the Spark was removed —

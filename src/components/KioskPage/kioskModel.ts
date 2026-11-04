@@ -99,6 +99,12 @@ export function kioskFleetStats(sparks: readonly SparkSnapshot[]): KioskFleetSta
   return s;
 }
 
+/** A fleet decode rate as text: one decimal below 100 tok/s, none above; "—" when nothing is measured. */
+export function rateText(v: number | null): string {
+  if (v == null) return "—";
+  return v >= 100 ? v.toFixed(0) : v.toFixed(1);
+}
+
 export interface KioskCardMemory {
   /** "Unified memory" on a Spark or Mac, "VRAM" on a discrete card. */
   label: string;

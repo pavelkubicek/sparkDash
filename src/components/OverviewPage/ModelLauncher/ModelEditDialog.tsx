@@ -42,6 +42,8 @@ function useBodyScrollLock(locked: boolean) {
 interface Draft {
   id: string;
   name: string;
+  /** Short name for the round-screen kiosks; empty falls back to the display name. */
+  kioskName: string;
   sparkId: string;
   /** Sparks the model occupies (ticked freely — the script host need not be among them). */
   nodes: string[];
@@ -62,6 +64,7 @@ interface Draft {
 const BLANK: Draft = {
   id: "",
   name: "",
+  kioskName: "",
   sparkId: "",
   nodes: [],
   headSparkId: "",
@@ -81,6 +84,7 @@ function toDraft(m: ModelConfig): Draft {
   return {
     id: m.id,
     name: m.name ?? m.id,
+    kioskName: m.kioskName ?? "",
     sparkId: m.sparkId ?? "",
     nodes: m.nodes ?? [],
     headSparkId: m.headSparkId ?? "",
@@ -241,6 +245,7 @@ export function ModelEditDialog() {
     return {
       id: draft.id.trim(),
       name: draft.name.trim() || draft.id.trim(),
+      kioskName: orNull(draft.kioskName),
       dir: draft.dir.trim(),
       sparkId: draft.sparkId || null,
       nodes: nodes.length ? nodes : null,
@@ -332,6 +337,15 @@ export function ModelEditDialog() {
                     onChange={(e) => patch({ name: e.target.value })}
                     className={INPUT}
                     placeholder="GLM-5.3 Flash"
+                  />
+                </Field>
+                <Field label="Kiosk name" hint="Short name for the round-screen kiosks (/kiosk-kraken). Empty = display name.">
+                  <input
+                    type="text"
+                    value={draft.kioskName}
+                    onChange={(e) => patch({ kioskName: e.target.value })}
+                    className={INPUT}
+                    placeholder="GLM53"
                   />
                 </Field>
               </div>

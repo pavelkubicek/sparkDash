@@ -136,7 +136,9 @@ describe("kioskFleetStats", () => {
   });
 
   it("reports an unknown queue as null, not 0", () => {
-    expect(kioskFleetStats([makeSpark("a")]).queued).toBeNull();
+    const s = makeSpark("a");
+    delete (s.metrics.llm as unknown as Array<Record<string, unknown>>)[0].requestsWaiting;
+    expect(kioskFleetStats([s]).queued).toBeNull();
   });
 });
 

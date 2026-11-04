@@ -32,6 +32,7 @@ const UP = { running: true, containerUp: true, portUp: true, portChecked: true, 
 
 function model(patch: Partial<ModelInfo> & Pick<ModelInfo, "id" | "name">): ModelInfo {
   return {
+    kioskName: null,
     dir: `/repos/${patch.id}`,
     sparkId: "spark1",
     sparkName: "spark-1",

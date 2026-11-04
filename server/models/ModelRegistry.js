@@ -116,6 +116,12 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
       ? config.name.trim().slice(0, LABEL_MAX)
       : config.id;
 
+  /** Short name for the round-screen kiosks ("DS41"); falls back to `name`. */
+  const kioskName =
+    typeof config.kioskName === "string" && config.kioskName.trim()
+      ? config.kioskName.trim().slice(0, LABEL_MAX)
+      : null;
+
   let dir = null;
   if (typeof config.dir !== "string" || !config.dir.trim()) {
     errors.push("dir is required (repo directory under the models base)");
@@ -259,6 +265,7 @@ export function validateModelConfig(config, base = MODEL_REPOS_BASE) {
   return {
     id: config.id,
     name,
+    kioskName,
     dir,
     sparkId,
     startScript: scripts.startScript,

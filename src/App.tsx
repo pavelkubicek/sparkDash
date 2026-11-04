@@ -24,6 +24,7 @@ import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
 import { ShowcaseView } from "./components/ShowcasePage/ShowcaseView";
 import { KioskPage } from "./components/KioskPage/KioskPage";
+import { KioskKrakenPage } from "./components/KioskKrakenPage/KioskKrakenPage";
 import { ThemeSwitch } from "./components/ThemeSwitch";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { HarnessWizard } from "./components/HarnessWizard";
@@ -745,6 +746,8 @@ function App() {
         <ShowcasePage sparkId={route.showcaseSparkId} />
       ) : route.mode === "kiosk" ? (
         <KioskPage />
+      ) : route.mode === "kiosk-kraken" ? (
+        <KioskKrakenPage />
       ) : (
         <DashboardApp />
       )}

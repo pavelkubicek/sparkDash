@@ -1,8 +1,8 @@
 import { withPageTransition } from "./pageTransition";
 import { useEffect, useCallback, useMemo, useState } from "react";
-import { KIOSK_ID, idToPath, pathToId } from "../constants";
+import { KIOSK_ID, KIOSK_KRAKEN_ID, idToPath, pathToId } from "../constants";
 
-export type RouteMode = "app" | "showcase" | "kiosk";
+export type RouteMode = "app" | "showcase" | "kiosk" | "kiosk-kraken";
 
 export interface AppRoute {
   mode: RouteMode;
@@ -12,6 +12,7 @@ export interface AppRoute {
 
 function parsePath(pathname: string): AppRoute {
   if (pathToId(pathname) === KIOSK_ID) return { mode: "kiosk", showcaseSparkId: null };
+  if (pathToId(pathname) === KIOSK_KRAKEN_ID) return { mode: "kiosk-kraken", showcaseSparkId: null };
   const showcase = pathname.match(/^\/showcase\/([^/]+)/);
   if (showcase) {
     return {
