@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "../../styles/kiosk-kraken.css";
 import {
-  fetchAiProxyActiveRequests,
   fetchAiProxyStats,
-  fetchAiProxyStreams,
   fetchAuditorStatus,
   fetchOrchestratorPlans,
   fetchOrchestratorRunningTasks,
@@ -134,7 +132,7 @@ function useWakeLock() {
 
 /**
  * /kiosk-kraken: the wall for the round NZXT Kraken LCD. Four big tiles — the top row is
- * static (fleet tok/s, requests in the AI proxy), the bottom row is a carousel that cycles
+ * static (fleet tok/s, requests the serving engines run and wait on), the bottom row is a carousel that cycles
  * temperature, proxy tokens today, orchestrator running and auditor analyzing every 2 s
  * with a fade. Icon on the left, number on the right, nothing else; the sparkDash brand
  * sits above. Sized in vmin so it fills any square viewport. Like the big wall it holds
@@ -188,14 +186,6 @@ export function KioskKrakenPage() {
   const totals = useMemo(() => computeFleetTotals(sparks), [sparks]);
   const stats = useMemo(() => kioskFleetStats(sparks), [sparks]);
 
-  // Requests inside the AI proxy: streaming + non-streaming in flight. The fleet's waiting queue
-  // is a subset of those (they are in flight but not yet decoding), so the tile shows the
-  // difference — running requests — and the queue as its own small count.
-  const inProxy = usePolled(async () => {
-    const [streams, requests] = await Promise.all([fetchAiProxyStreams(), fetchAiProxyActiveRequests()]);
-    return streams.length + requests.length;
-  }, BRIDGE_REFRESH_MS);
-  const proxyRunning = inProxy == null ? null : stats.queued == null ? inProxy : Math.max(0, inProxy - stats.queued);
   const orchestratorRunning = usePolled(async () => (await fetchOrchestratorRunningTasks()).length, BRIDGE_REFRESH_MS);
   // Queued work: open tickets + plans still being generated (the Overview panel's active count).
   const orchestratorQueued = usePolled(async () => {
@@ -296,7 +286,7 @@ export function KioskKrakenPage() {
               <span className="kk-value">{totals.decodeTps == null ? "—" : Math.round(totals.decodeTps).toLocaleString("en-US")}</span>
             </span>
           </section>
-          <section className="kk-tile" aria-label="Requests in the AI proxy, waiting requests">
+          <section className="kk-tile" aria-label="Requests the serving engines run, and waiting">
             {/* AI proxy mark — its repo favicon (blue target on the dark app tile). */}
             <svg className="kk-icon" viewBox="0 0 32 32" aria-hidden>
               <rect width="32" height="32" rx="6" fill="#0d1117" />
@@ -306,8 +296,8 @@ export function KioskKrakenPage() {
             </svg>
             <span className="kk-read">
               <span className="kk-value">
-                {proxyRunning ?? "—"}
-                {proxyRunning != null && stats.queued != null ? <small className="kk-waiting">/{stats.queued}</small> : null}
+                {stats.running ?? "—"}
+                {stats.running != null && stats.queued != null ? <small className="kk-waiting">/{stats.queued}</small> : null}
               </span>
             </span>
           </section>

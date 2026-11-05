@@ -24,8 +24,6 @@ vi.mock("../../hooks/useSnapshot", () => ({
 
 vi.mock("../../api/client", () => ({
   fetchSettings: () => Promise.resolve({ temperatureUnit: "celsius", alertsEnabled: false, hideWorkers: false, timeZone: null }),
-  fetchAiProxyStreams: () => (bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve([{ id: "s1" }, { id: "s2" }])),
-  fetchAiProxyActiveRequests: () => (bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve([{ id: "r1" }])),
   fetchOrchestratorRunningTasks: () =>
     bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve([{ task_id: "t1" }, { task_id: "t2" }, { task_id: "t3" }]),
   fetchOrchestratorPlans: () =>
@@ -58,12 +56,12 @@ describe("KioskKrakenPage", () => {
     // The brand is gone from the round glass; the whole face is tiles.
     expect(container.querySelector(".kk-brand")).toBeNull();
 
-    // Top row: two units at 20 tok/s each (integers). The proxy reports 2 streaming + 1 active = 3
-    // in flight; the fixture's units report a 2-request waiting queue, so running reads 1 (/2).
+    // Top row: two units at 20 tok/s each (integers). The request numbers are the engines' own
+    // gauges, as the dashboard's AI-proxy panel shows them: 2 running on each unit, 2 waiting.
     const row = [...container.querySelectorAll(".kk-row .kk-tile")];
     expect(row).toHaveLength(2);
     expect(row[0].textContent).toContain("40");
-    expect(row[1].querySelector(".kk-value")!.textContent).toBe("1/2");
+    expect(row[1].querySelector(".kk-value")!.textContent).toBe("4/2");
 
     // Bottom carousel: five slides mounted — (temp, tokens) active first.
     const slides = [...container.querySelectorAll(".kk-slide")];
@@ -115,7 +113,8 @@ describe("KioskKrakenPage", () => {
     await flush();
 
     const row = [...container.querySelectorAll(".kk-row .kk-tile")].map((t) => t.textContent);
-    expect(row[1]).toContain("—");
+    // The request numbers come from the snapshot, so they survive a bridge outage.
+    expect(row[1]).toContain("2/0");
     const slides = [...container.querySelectorAll(".kk-slide")].map((t) => t.textContent);
     // Temperature comes from the snapshot, the bridges' slides read "—".
     expect(slides[0]).toContain("55°");
