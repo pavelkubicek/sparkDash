@@ -37,6 +37,8 @@ import type {
   OrchestratorWebuiUrl,
   AuditorReviewStatus,
   AuditorReviewsResponse,
+  AuditorFindingsResponse,
+  AuditorTierCScansResponse,
   AuditorSlotsConfig,
   AuditorSlotsPatch,
   AuditorStats,
@@ -895,6 +897,31 @@ export function fetchAuditorReviews(query: {
   if (query.offset != null) search.set("offset", String(query.offset));
   const qs = search.toString();
   return apiFetch(`/api/auditor/reviews${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * Flat findings, worst-first (verdict/limit/offset server-side).
+ * The card polls `verdict=pending` to count open findings per report.
+ */
+export function fetchAuditorFindings(query: {
+  verdict?: "pending" | "flagged" | "ok" | "dismissed";
+  limit?: number;
+  offset?: number;
+} = {}): Promise<AuditorFindingsResponse> {
+  const search = new URLSearchParams();
+  if (query.verdict) search.set("verdict", query.verdict);
+  if (query.limit != null) search.set("limit", String(query.limit));
+  if (query.offset != null) search.set("offset", String(query.offset));
+  const qs = search.toString();
+  return apiFetch(`/api/auditor/findings${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * Recent Tier-C vulnhunt scans, newest first (`vuln_scan` rows — running
+ * hunts occupy auditor slots but are NOT review rows).
+ */
+export function fetchAuditorTierCScans(limit = 30): Promise<AuditorTierCScansResponse> {
+  return apiFetch(`/api/auditor/tier-c/scans?limit=${limit}`);
 }
 
 /** Dashboard counters (by_status buckets, severities, verdicts). */

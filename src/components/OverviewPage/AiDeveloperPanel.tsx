@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  fetchAuditorFindings,
   fetchAuditorReviews,
   fetchAuditorSlotsConfig,
   fetchAuditorStats,
   fetchAuditorStatus,
+  fetchAuditorTierCScans,
   fetchAuditorWebuiUrl,
   fetchOrchestratorPlans,
   fetchOrchestratorRunningTasks,
@@ -14,11 +16,13 @@ import {
 } from "../../api/client";
 import type { OrchestratorLive } from "../../shared/idleCounts";
 import type {
+  AuditorFinding,
   AuditorReview,
   AuditorReviewStatus,
   AuditorSlotsConfig,
   AuditorStats,
   AuditorStatus,
+  AuditorTierCScan,
   OrchestratorPlan,
   OrchestratorRunningTask,
   OrchestratorSlotsConfig,
@@ -31,8 +35,29 @@ import { SlotSettingsDialog } from "./SlotSettingsDialog";
 
 const POLL_MS = 5000;
 
-/** How many rows each auditor list section fetches (page through the bridge). */
+/** Rows per auditor list section; the rest collapses into a "…" row. */
 const LIST_LIMIT = 8;
+
+/** Poll windows: enough reviews to cover active + ready-to-triage, enough
+ *  pending findings to count every report's open items, enough scans to
+ *  list the running vulnhunts plus a recent history strip. */
+const REVIEWS_POLL_LIMIT = 60;
+const FINDINGS_POLL_LIMIT = 500;
+const SCANS_POLL_LIMIT = 10;
+
+/** Review statuses where the model is still working (auditor-ui's
+ *  in-progress definition): pass 1 running, candidates written, pass 2 checking. */
+const IN_PROGRESS_STATUSES: Record<string, true> = {
+  analyzing: true,
+  candidates_ready: true,
+  checking: true,
+};
+
+/** vuln_scan statuses where a Tier-C hunt still occupies an auditor slot. */
+const RUNNING_SCAN_STATUSES: Record<string, true> = {
+  running: true,
+  stopping: true,
+};
 
 /** Max pending-PR rows on the card; the rest collapses into a "…" row. */
 const PENDING_PR_LIMIT = 12;
@@ -139,6 +164,8 @@ const PLAN_STATUS_LABEL: Record<string, string> = {
 const STATUS_BADGE: Record<AuditorReviewStatus, string> = {
   queued: "bg-[#374151] text-[#e5e7eb]", // gray-700 / gray-200
   analyzing: "bg-[#f59e0b] text-[#111827] animate-pulse", // amber-500 / gray-900
+  candidates_ready: "bg-[#f97316] text-[#111827] animate-pulse", // orange-500 / gray-900
+  checking: "bg-[#0ea5e9] text-white animate-pulse", // sky-500
   findings_ready: "bg-[#0891b2] text-white", // cyan-600
   duplicate: "bg-[#0d9488] text-white", // teal-600
   failed: "bg-[#dc2626] text-white", // red-600
@@ -148,6 +175,8 @@ const STATUS_BADGE: Record<AuditorReviewStatus, string> = {
 const STATUS_LABEL: Record<AuditorReviewStatus, string> = {
   queued: "Queued",
   analyzing: "Analyzing",
+  candidates_ready: "Candidates",
+  checking: "Checking",
   findings_ready: "Ready",
   duplicate: "Duplicate",
   failed: "Failed",
@@ -170,7 +199,7 @@ function prBadge(prUrl: string | null, prState: string): { text: string; cls: st
   return { text: "PR", cls: "bg-accent/15 text-accent border-accent/40" };
 }
 
-function ageLabel(iso: string | null): string {
+function ageLabel(iso: string | null | undefined): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return "—";
@@ -373,7 +402,7 @@ function PartialChip() {
   );
 }
 
-/** One "analyzing now" row: pulsing amber dot + title + branch/tier/age. */
+/** One in-progress report row (analyzing/candidates_ready/checking): pulsing amber dot + title + branch/tier/age. */
 function AnalyzingRow({ review, onOpen }: { review: AuditorReview; onOpen: () => void }) {
   return (
     <button
@@ -385,7 +414,7 @@ function AnalyzingRow({ review, onOpen }: { review: AuditorReview; onOpen: () =>
       <span
         className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#f59e0b]"
         style={{ boxShadow: "0 0 6px #f59e0b" }}
-        title={STATUS_LABEL.analyzing}
+        title={STATUS_LABEL[review.status] ?? review.status}
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs text-text">
@@ -402,8 +431,62 @@ function AnalyzingRow({ review, onOpen }: { review: AuditorReview; onOpen: () =>
   );
 }
 
-/** One finished ("Ready") row: cyan status dot (orchestrator-row style) + findings count, severity + seen state.
- *  Clean reports (0 findings) are not listed — only rows with actual findings. */
+/**
+ * One Tier-C vulnhunt row (`vuln_scan` — running hunts hold auditor slots but
+ * are not review rows). `running` renders the Active-tab compact variant
+ * ("Vulnhunt — {repo ?? partition ?? scan_id}", muted branch/partition_path),
+ * otherwise the Auditor-tab history variant ("{repo ?? 'vulnhunt'} —
+ * {partition ?? scan_id}", muted branch + confirmed findings + minutes).
+ */
+function ScanRow({ scan, running, onOpen }: { scan: AuditorTierCScan; running: boolean; onOpen: () => void }) {
+  const isRunning = RUNNING_SCAN_STATUSES[scan.status] === true;
+  const color = isRunning
+    ? "#f59e0b"
+    : scan.status === "failed"
+      ? "#f87171"
+      : scan.status === "done"
+        ? "#0891b2"
+        : "#6b7280";
+  const title = running
+    ? `Vulnhunt — ${scan.repo ?? scan.partition ?? scan.scan_id}`
+    : `${scan.repo ?? "vulnhunt"} — ${scan.partition ?? scan.scan_id}`;
+  const minutes =
+    typeof scan.agent_minutes === "number" ? `${scan.agent_minutes.toFixed(1)} min` : null;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-center gap-2 text-left transition-colors hover:text-accent"
+      title={`Open vulnhunt ${scan.scan_id} in the auditor${scan.error ? ` — ${scan.error}` : ""}`}
+    >
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunning ? "animate-pulse" : ""}`}
+        style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }}
+        title={scan.status}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs text-text">{title}</span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+          {scan.branch && <span className="truncate">{scan.branch}</span>}
+          {running
+            ? scan.partition_path && <span className="truncate">{scan.partition_path}</span>
+            : (scan.findings_confirmed ?? 0) > 0 && (
+                <span className="font-tabular">
+                  {scan.findings_confirmed} finding{scan.findings_confirmed === 1 ? "" : "s"}
+                </span>
+              )}
+          {minutes && <span className="font-tabular">{minutes}</span>}
+          <span className="font-tabular">
+            {ageLabel(running ? scan.started_at : scan.finished_at ?? scan.started_at)}
+          </span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** One ready-to-triage row: cyan status dot (orchestrator-row style) + findings count, severity + seen state.
+ *  Used for findings_ready reports still holding open (pending, non-stale) findings. */
 function FinishedRow({ review, onOpen }: { review: AuditorReview; onOpen: () => void }) {
   const sev = review.findings_by_severity ?? {};
   const critical = sev.critical ?? 0;
@@ -440,11 +523,7 @@ function FinishedRow({ review, onOpen }: { review: AuditorReview; onOpen: () => 
 
 type Tab = "active" | "orchestrator" | "auditor";
 
-const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
-  { id: "active", label: "Active" },
-  { id: "orchestrator", label: "Orchestrator" },
-  { id: "auditor", label: "Auditor" },
-];
+const TAB_IDS: ReadonlyArray<Tab> = ["active", "orchestrator", "auditor"];
 
 const CHIP_CLS =
   "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent";
@@ -452,8 +531,9 @@ const CHIP_CLS =
 /**
  * The merged "AI developer" card: the Orchestrator scheduler and the Auditor
  * reviewer in one Panel with three tabs — Active (both services' running
- * work), Orchestrator (running tasks, plans, tickets, pending PRs) and Auditor
- * (analyzing, ready reports, pipeline). The two services now SHARE one slot
+ * work: orchestrator tasks, in-progress reports and running vulnhunts),
+ * Orchestrator (running tasks, plans, tickets, pending PRs) and Auditor
+ * (ready-to-triage reports, vulnhunt history, pipeline). The two services now SHARE one slot
  * pool, so a single footer shows the combined usage. Same chrome as before:
  * one slots settings dialog managing the shared pool, both "open web UI" jump links, one 5 s bridge
  * poll with independent per-endpoint degradation, and a graceful offline state
@@ -477,13 +557,13 @@ export function AiDeveloperPanel({
   // Auditor state (was AuditorPanel).
   const [aStatus, setAStatus] = useState<AuditorStatus | null>(null);
   const [aStats, setAStats] = useState<AuditorStats | null>(null);
-  const [analyzing, setAnalyzing] = useState<AuditorReview[]>([]);
-  const [analyzingCount, setAnalyzingCount] = useState(0);
-  const [finished, setFinished] = useState<AuditorReview[]>([]);
-  // Count of ready reports WITH findings (has_findings filter, same query as
-  // the list below). Null until the first successful fetch; the pipeline strip
-  // then falls back to the raw engine counter.
-  const [readyCount, setReadyCount] = useState<number | null>(null);
+  // One unfiltered review window + pending findings + vulnhunt scans: the
+  // in-progress / ready-to-triage splits are derived client-side (running
+  // vulnhunts are vuln_scan rows, never review rows, and the daemon's
+  // `count` is a page length — never a query total).
+  const [reviews, setReviews] = useState<AuditorReview[]>([]);
+  const [pendingFindings, setPendingFindings] = useState<AuditorFinding[]>([]);
+  const [scans, setScans] = useState<AuditorTierCScan[]>([]);
   const [aSlots, setASlots] = useState<AuditorSlotsConfig | null>(null);
   const [audError, setAudError] = useState<string | null>(null);
   const [auditorUrl, setAuditorUrl] = useState<string | null>(null);
@@ -501,7 +581,7 @@ export function AiDeveloperPanel({
       // Each endpoint degrades independently: a single upstream failure must
       // not clear the other sections' data, but total failure per service =
       // that service down.
-      const [s, t, p, r, sc, aS, aSt, an, fin, aSc] = await Promise.all([
+      const [s, t, p, r, sc, aS, aSt, rv, fd, tcs, aSc] = await Promise.all([
         fetchOrchestratorStatus().catch(() => null),
         fetchOrchestratorTickets().catch(() => null),
         fetchOrchestratorPlans().catch(() => null),
@@ -509,16 +589,13 @@ export function AiDeveloperPanel({
         fetchOrchestratorSlotsConfig().catch(() => null),
         fetchAuditorStatus().catch(() => null),
         fetchAuditorStats().catch(() => null),
-        fetchAuditorReviews({ status: "analyzing", limit: LIST_LIMIT })
-          .then((res) => res)
-          .catch(() => null),
-        // The auditor's own UI pulls a WINDOW_LIMIT=1000 feed and renders
-        // count == len(items) — the daemon's `count` is the filtered page
-        // length, NOT the query total. Fetch the same window so the header
-        // count matches auditor.lan; the list shows only the first page.
-        fetchAuditorReviews({ status: "findings_ready", has_findings: true, limit: 1000 })
-          .then((res) => res)
-          .catch(() => null),
+        fetchAuditorReviews({ limit: REVIEWS_POLL_LIMIT }).catch(() => null),
+        // Open items per report: everything still awaiting triage. The 500
+        // window covers the daemon's worst case for a normal evening.
+        fetchAuditorFindings({ verdict: "pending", limit: FINDINGS_POLL_LIMIT }).catch(() => null),
+        // vuln_scan rows — running hunts occupy auditor slots without
+        // being review rows; the same window doubles as recent history.
+        fetchAuditorTierCScans(SCANS_POLL_LIMIT).catch(() => null),
         fetchAuditorSlotsConfig().catch(() => null),
       ]);
       if (cancelled) return;
@@ -553,15 +630,17 @@ export function AiDeveloperPanel({
         sawAud = true;
         setAStats(aSt);
       }
-      if (an) {
+      if (rv) {
         sawAud = true;
-        setAnalyzing(an.reviews);
-        setAnalyzingCount(an.count);
+        setReviews(rv.reviews);
       }
-      if (fin) {
+      if (fd) {
         sawAud = true;
-        setFinished(fin.reviews.slice(0, LIST_LIMIT));
-        setReadyCount(fin.count);
+        setPendingFindings(fd.findings);
+      }
+      if (tcs) {
+        sawAud = true;
+        setScans(tcs.scans);
       }
       if (aSc) {
         sawAud = true;
@@ -625,11 +704,40 @@ export function AiDeveloperPanel({
   const slotsTotal =
     (orchOnline ? orchTotal : undefined) ?? (audOnline ? audTotal : undefined) ?? 0;
   const slotPct = slotsTotal > 0 ? Math.round((slotsUsed / slotsTotal) * 100) : 0;
-  const analyzingShown = analyzingCount || (aStatus?.analyzing ?? 0);
-  const activeJobs = runningTasks.length + analyzingShown;
+  // ── Auditor derivations — auditor-ui semantics over the polled windows ──
+  // The model is still working on these reports (pass 1 / candidates / pass 2).
+  const inProgress = reviews.filter((rv) => IN_PROGRESS_STATUSES[rv.status] === true);
+  // Open items per report: verdict=pending is filtered server-side; stale
+  // stamps (refactored_away / gone) no longer describe the tip → not open.
+  const openCounts = new Map<string, number>();
+  for (const f of pendingFindings) {
+    if (f.currency === "refactored_away" || f.currency === "gone") continue;
+    openCounts.set(f.review_id, (openCounts.get(f.review_id) ?? 0) + 1);
+  }
+  // Reports whose pass-2 results still hold open findings, oldest first.
+  const readyToTriage = reviews
+    .filter((rv) => rv.status === "findings_ready" && (openCounts.get(rv.id) ?? 0) > 0)
+    .sort((a, b) =>
+      String(a.finished_at ?? a.started_at ?? "").localeCompare(
+        String(b.finished_at ?? b.started_at ?? "")
+      )
+    );
+  // Tier-C hunts: running/stopping occupy auditor slots (Active tab); the
+  // polled window doubles as the Auditor tab's recent-history strip.
+  const runningScans = scans.filter((sc) => RUNNING_SCAN_STATUSES[sc.status] === true);
+  const recentScans = [...scans].sort((a, b) =>
+    String(b.started_at ?? "").localeCompare(String(a.started_at ?? ""))
+  );
+  const shownScans = recentScans.slice(0, LIST_LIMIT);
+  const moreScans = recentScans.length - shownScans.length;
+  const auditorBusy = inProgress.length + runningScans.length;
+  const activeJobs = runningTasks.length + auditorBusy;
 
   const openReviews = (report: AuditorReview) => {
     if (auditorUrl) window.open(`${auditorUrl}/reports/${encodeURIComponent(report.id)}`, "_blank", "noreferrer");
+  };
+  const openScan = (scan: AuditorTierCScan) => {
+    if (auditorUrl) window.open(`${auditorUrl}/tier-c/scans/${encodeURIComponent(scan.scan_id)}`, "_blank", "noreferrer");
   };
 
   return (
@@ -693,20 +801,30 @@ export function AiDeveloperPanel({
     >
       {/* Tab switcher — header-chip styling, active tab in accent colors. */}
       <div className="flex items-center gap-1.5">
-        {TABS.map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={`rounded border px-2 py-0.5 text-[11px] transition-colors ${
-              tab === id
-                ? "border-accent text-accent"
-                : "border-border text-muted hover:border-accent hover:text-accent"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+        {TAB_IDS.map((id) => {
+          const count =
+            id === "active"
+              ? activeJobs
+              : id === "orchestrator"
+                ? withPendingPrs.length
+                : readyToTriage.length + scans.length;
+          const label =
+            id === "active" ? "Active" : id === "orchestrator" ? "Orchestrator" : "Auditor";
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={`rounded border px-2 py-0.5 text-[11px] transition-colors ${
+                tab === id
+                  ? "border-accent text-accent"
+                  : "border-border text-muted hover:border-accent hover:text-accent"
+              }`}
+            >
+              {label} ({count})
+            </button>
+          );
+        })}
       </div>
 
       {tab === "active" && (
@@ -718,7 +836,7 @@ export function AiDeveloperPanel({
                 {orchError} · {audError}
               </p>
             </div>
-          ) : runningTasks.length === 0 && analyzing.length === 0 ? (
+          ) : runningTasks.length === 0 && auditorBusy === 0 ? (
             <div className="space-y-1">
               <p className="text-xs text-muted">No active jobs.</p>
               {!orchOnline && (
@@ -758,14 +876,22 @@ export function AiDeveloperPanel({
                   </p>
                 )}
               </div>
+              {/* Auditor's live slot consumers: reports mid-model AND running
+                  Tier-C hunts — vulnhunts occupy slots without being review
+                  rows, so the old analyzing-only feed never showed them. */}
               <div className="flex min-h-[4.5rem] flex-1 flex-col space-y-1">
                 <p className="text-xs uppercase tracking-wide text-muted">
-                  Auditor — analyzing ({analyzingShown})
+                  Auditor — in progress ({auditorBusy})
                 </p>
-                {analyzing.length > 0 ? (
-                  analyzing.map((review) => (
-                    <AnalyzingRow key={review.id} review={review} onOpen={() => openReviews(review)} />
-                  ))
+                {auditorBusy > 0 ? (
+                  <>
+                    {inProgress.map((review) => (
+                      <AnalyzingRow key={review.id} review={review} onOpen={() => openReviews(review)} />
+                    ))}
+                    {runningScans.map((scan) => (
+                      <ScanRow key={scan.scan_id} scan={scan} running onOpen={() => openScan(scan)} />
+                    ))}
+                  </>
                 ) : (
                   <p className="text-xs text-muted">
                     {audOnline ? "Nothing is analyzing right now." : "Auditor unreachable."}
@@ -922,28 +1048,18 @@ export function AiDeveloperPanel({
             </div>
           ) : (
             <>
-              {/* Analyzing now — the auditor's live slot consumers */}
-              <div className="min-h-[4.5rem] space-y-1">
-                <p className="text-xs uppercase tracking-wide text-muted">
-                  Analyzing now ({analyzingShown})
-                </p>
-                {analyzing.length > 0 ? (
-                  analyzing.map((review) => (
-                    <AnalyzingRow key={review.id} review={review} onOpen={() => openReviews(review)} />
-                  ))
-                ) : (
-                  <p className="text-xs text-muted">Nothing is analyzing right now.</p>
-                )}
-              </div>
-
-              {/* Finished — most recent findings-ready reports with actual findings.
-                  This section is the tab's flex-grow region: when the card is
+              {/* Ready to triage — findings-ready reports still holding open
+                  findings (pending verdicts, stale currencies excluded). This
+                  section is the tab's flex-grow region: when the card is
                   taller than the natural content, the list absorbs the spare
                   height and scrolls instead of leaving a dead gap above the
-                  footer. */}
+                  footer. (In-progress work — reports mid-model and running
+                  vulnhunts — lives on the Active tab.) */}
               <div className="flex min-h-[7rem] flex-1 flex-col space-y-1">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs uppercase tracking-wide text-muted">Finished — Ready</p>
+                  <p className="text-xs uppercase tracking-wide text-muted">
+                    Ready to triage ({readyToTriage.length})
+                  </p>
                   {auditorUrl && (
                     <a
                       href={`${auditorUrl}/reports`}
@@ -953,18 +1069,48 @@ export function AiDeveloperPanel({
                       className={CHIP_CLS}
                     >
                       <ExternalLinkIcon className="h-3 w-3" />
-                      Show all {readyCount ?? 0} ready reports
+                      Show all {readyToTriage.length} ready reports
                     </a>
                   )}
                 </div>
-                {finished.length > 0 ? (
+                {readyToTriage.length > 0 ? (
                   <div className="nice-scroll -mx-1 flex-1 space-y-1 overflow-y-auto px-1">
-                    {finished.map((review) => (
+                    {readyToTriage.map((review) => (
                       <FinishedRow key={review.id} review={review} onOpen={() => openReviews(review)} />
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-muted">No ready reports with findings.</p>
+                  <p className="text-xs text-muted">No reports ready to triage.</p>
+                )}
+              </div>
+
+              {/* Vulnhunts — recent Tier-C scans (vuln_scan rows), newest
+                  first; the cap collapses the tail into one "…" row. */}
+              <div className="space-y-1">
+                <p className="text-xs uppercase tracking-wide text-muted">
+                  Vulnhunts ({scans.length})
+                </p>
+                {recentScans.length > 0 ? (
+                  <>
+                    {shownScans.map((scan) => (
+                      <ScanRow key={scan.scan_id} scan={scan} running={false} onOpen={() => openScan(scan)} />
+                    ))}
+                    {moreScans > 0 && auditorUrl ? (
+                      <a
+                        href={`${auditorUrl}/tier-c`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`${moreScans} older ${moreScans === 1 ? "scan" : "scans"} — open the Tier-C list`}
+                        className="flex items-center gap-2 text-xs text-muted transition-colors hover:text-accent"
+                      >
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#6b7280]/40" />
+                        <span className="min-w-0 flex-1 truncate">… and {moreScans} more</span>
+                        <ExternalLinkIcon className="h-2.5 w-2.5 shrink-0" />
+                      </a>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted">No vulnhunts yet.</p>
                 )}
               </div>
 
@@ -972,25 +1118,32 @@ export function AiDeveloperPanel({
               <div className="space-y-1">
                 <p className="text-xs uppercase tracking-wide text-muted">Pipeline</p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted">
-                  {(["queued", "analyzing", "findings_ready", "duplicate", "failed", "cancelled"] as const).map(
-                    (key) => {
-                      // Ready carries the list's filter: an empty ready report is
-                      // not a finding, so the strip counts the same set as the
-                      // "Finished — Ready" section and the pill.
+                  {(
+                    [
+                      "queued",
+                      "analyzing",
+                      "candidates_ready",
+                      "checking",
+                      "findings_ready",
+                      "duplicate",
+                      "failed",
+                      "cancelled",
+                    ] as const
+                  ).map((key) => {
+                      // Raw engine buckets from /stats (full lifecycle now,
+                      // including the pass-1/pass-2 intermediate states).
                       const n =
-                        key === "findings_ready"
-                          ? readyCount ?? aStats?.by_status?.[key]
-                          : aStats?.by_status?.[key] ?? (key === "analyzing" ? aStatus?.analyzing : undefined);
+                        aStats?.by_status?.[key] ??
+                        (key === "analyzing" ? aStatus?.analyzing : undefined);
                       if (n == null) return null;
                       return (
                         <span
                           key={key}
-                          title={key === "findings_ready" ? "Ready reports with findings" : undefined}
                           className="inline-flex items-center gap-1"
                         >
                           <span
                             className={`inline-block h-1.5 w-1.5 rounded-full ${
-                              key === "analyzing" ? "animate-pulse" : ""
+                              key === "analyzing" || key === "candidates_ready" || key === "checking"
                             } ${STATUS_BADGE[key].split(" ")[0]}`}
                           />
                           <span className="font-tabular text-text">{n}</span>

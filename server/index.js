@@ -909,6 +909,16 @@ app.get("/api/auditor/reviews", (req, res) => {
   void auditor.get(req, res, "/api/reviews");
 });
 
+/** Flat findings, worst-first — verdict/limit/offset query passes through. */
+app.get("/api/auditor/findings", (req, res) => {
+  void auditor.get(req, res, "/api/findings");
+});
+
+/** Recent Tier-C vulnhunt scans (vuln_scan rows) — limit/scan_id pass through. */
+app.get("/api/auditor/tier-c/scans", (req, res) => {
+  void auditor.get(req, res, "/api/tier-c/scans");
+});
+
 /** Dashboard counters (by_status buckets, severities, verdicts). */
 app.get("/api/auditor/stats", (req, res) => {
   void auditor.get(req, res, "/api/stats");

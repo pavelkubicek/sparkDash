@@ -2008,6 +2008,8 @@ export interface AuditorStatus {
 export type AuditorReviewStatus =
   | "queued"
   | "analyzing"
+  | "candidates_ready"
+  | "checking"
   | "findings_ready"
   | "duplicate"
   | "failed"
@@ -2043,6 +2045,54 @@ export interface AuditorReviewsResponse {
   count: number;
   limit: number;
   offset: number;
+}
+
+/** One flat finding row as reported by GET /api/findings (subset of `models.Finding`). */
+export interface AuditorFinding {
+  id?: string;
+  review_id: string;
+  verdict?: "pending" | "flagged" | "ok" | "dismissed";
+  severity?: "critical" | "major" | "minor" | "info";
+  /** Staleness stamp; null/undefined = not evaluated. `refactored_away`/`gone` = closed. */
+  currency?: "current" | "refactored_away" | "gone" | "unknown" | null;
+  category?: string;
+  summary?: string;
+  file_path?: string | null;
+  line?: number | null;
+}
+
+/** Response envelope of GET /api/findings. */
+export interface AuditorFindingsResponse {
+  findings: AuditorFinding[];
+  count: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * One Tier-C vulnhunt run (`vuln_scan` row + joined partition/repo names).
+ * Running hunts live here, NOT in the review table; `status` is the DB's own
+ * value (running | stopping | done | failed).
+ */
+export interface AuditorTierCScan {
+  scan_id: string;
+  partition?: string | null;
+  partition_path?: string | null;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  agent_minutes?: number | null;
+  findings_confirmed?: number | null;
+  error?: string | null;
+  repo_id?: string | null;
+  /** tier_c_repo preset name (null when the row has no repo join). */
+  repo?: string | null;
+  branch?: string | null;
+}
+
+/** Response envelope of GET /api/tier-c/scans. */
+export interface AuditorTierCScansResponse {
+  scans: AuditorTierCScan[];
 }
 
 /** `GET /stats` — dashboard counters; only the keys the panel reads are spelled out. */

@@ -186,6 +186,18 @@ function RequestRow({
 }
 
 /**
+ * Per-tier admission-priority chip styles: colored text + border + tinted
+ * background. Index = tier (0 priorityless/first, 1–3 deferred); raw hex so
+ * each tier reads as a distinct color. Literal strings for Tailwind's scanner.
+ */
+const TIER_CHIP_STYLES = [
+  "border-white/20 bg-white/10 text-white",
+  "border-[#34d399]/30 bg-[#34d399]/10 text-[#34d399]",
+  "border-[#fbbf24]/30 bg-[#fbbf24]/10 text-[#fbbf24]",
+  "border-[#f87171]/30 bg-[#f87171]/10 text-[#f87171]",
+] as const;
+
+/**
  * One waiter in the proxy's admission queue. Mirrors RequestRow's visual
  * language, minus the kill button: the proxy exposes no verified cancel
  * endpoint for queued ids.
@@ -193,12 +205,12 @@ function RequestRow({
 function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?: number }) {
   const overdue = item.overdue === true;
   const waited = waitedLabel(item.waitedMs);
-  const dotColor = "var(--color-warning)";
+  const tier = Math.max(0, Math.min(TIER_CHIP_STYLES.length - 1, Math.trunc(item.tier ?? 0)));
   return (
     <div className="flex items-center gap-2">
       <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${overdue ? "animate-pulse" : ""}`}
-        style={{ backgroundColor: dotColor, boxShadow: `0 0 6px ${dotColor}` }}
+        className={`h-1.5 w-1.5 shrink-0 rounded-full bg-white ${overdue ? "animate-pulse" : ""}`}
+        style={{ boxShadow: "0 0 6px rgba(255,255,255,0.75)" }}
         title={
           overdue
             ? maxWaitSec
@@ -207,6 +219,16 @@ function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?:
             : "Waiting in the proxy's admission queue"
         }
       />
+      <span
+        className={`shrink-0 rounded border px-1 font-tabular text-[10px] tabular-nums ${TIER_CHIP_STYLES[tier]}`}
+        title={
+          tier === 0
+            ? `Proxy admission priority #${tier} · admitted first`
+            : `Proxy admission priority #${tier} · deferred behind lower-tier demand`
+        }
+      >
+        #{tier}
+      </span>
       <span
         className={`min-w-0 flex-1 truncate text-xs ${overdue ? "text-warning" : "text-text"}`}
         title={item.model ?? item.url ?? "queued request"}
