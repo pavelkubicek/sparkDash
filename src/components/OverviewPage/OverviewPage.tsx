@@ -14,8 +14,7 @@ import { SparkCard } from "./SparkCard";
 import { ActivityFeed } from "./ActivityFeed";
 import { ActivityIcon, PowerOnIcon, RotateIcon } from "../ui/icons";
 import { AiProxyPanel } from "./AiProxyPanel";
-import { OrchestratorPanel } from "./OrchestratorPanel";
-import { AuditorPanel } from "./AuditorPanel";
+import { AiDeveloperPanel } from "./AiDeveloperPanel";
 import { ModelLauncherPanel } from "./ModelLauncher/ModelLauncherPanel";
 import { AutoPowerPanel } from "./AutoPowerPanel";
 import { formatMb } from "../../shared/formatBytes";
@@ -122,8 +121,8 @@ export function OverviewPage({
   const [batchMsg, setBatchMsg] = useState<{ text: string; tone: "ok" | "err" } | null>(null);
   /** Spark ids we started a batch Hermes update on; drives the live progress bar. */
   const [batchRun, setBatchRun] = useState<string[] | null>(null);
-  // Live idle counts published by the AI Proxy / Orchestrator panels on their own
-  // 5 s poll (AiProxyPanel / OrchestratorPanel call these every cycle). AutoPower
+  // Live idle counts published by the AI Proxy / AI Developer panels on their own
+  // 5 s poll (AiProxyPanel / AiDeveloperPanel call these every cycle). AutoPower
   // displays THESE — the same numbers, the same cadence, never a third query.
   const [proxyIdle, setProxyIdle] = useState<ProxyLive | null>(null);
   const [orchestratorIdle, setOrchestratorIdle] = useState<OrchestratorLive | null>(null);
@@ -235,12 +234,11 @@ export function OverviewPage({
         : "Click the + tab to add a DGX Spark unit.";
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-        {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
+        {/* Integration cards — AI Proxy + AI Developer / Models */}
         <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 16 }}>
           <AiProxyPanel onIdleCounts={setProxyIdle} />
-          <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
+          <AiDeveloperPanel onIdleCounts={setOrchestratorIdle} />
           {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
-          <AuditorPanel />
         </div>
         <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
         <div className="panel ov mx-auto mt-16 max-w-md p-8 text-center">
@@ -260,12 +258,11 @@ export function OverviewPage({
   return (
     <div className="ov">
       <FleetKpis sparks={sparks} snapshotKey={sparks} show={kpis} />
-      {/* Integration cards — AI Proxy + Orchestrator / Auditor + Model Launcher */}
+      {/* Integration cards — AI Proxy + AI Developer / Models */}
       <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 16 }}>
         <AiProxyPanel llmMetrics={aggregateLlm(sparks)} onIdleCounts={setProxyIdle} />
-        <OrchestratorPanel onIdleCounts={setOrchestratorIdle} />
+        <AiDeveloperPanel onIdleCounts={setOrchestratorIdle} />
         {showModelLauncher && <ModelLauncherPanel models={models} connected={connected} />}
-        <AuditorPanel />
       </div>
       <AutoPowerPanel proxyIdle={proxyIdle} orchestratorIdle={orchestratorIdle} />
       <div className="ov-title">

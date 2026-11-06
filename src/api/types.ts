@@ -1827,6 +1827,48 @@ export interface AiProxyStats {
   daily: AiProxyDailyStat[];
 }
 
+/** One request waiting in the proxy's admission queue. Fields absent on older proxy builds. */
+export interface AiProxyQueueWaiter {
+  id: string;
+  backendId?: string;
+  backendName?: string;
+  backendUrl?: string;
+  model?: string | null;
+  url?: string;
+  streaming?: boolean;
+  tier?: number;
+  /** Milliseconds the waiter has been queued. */
+  waitedMs?: number;
+  /** When the request entered the queue (ms epoch). */
+  queuedAt?: number;
+  /** True once the wait exceeds the proxy's maxWaitSec. */
+  overdue?: boolean;
+}
+
+/** Queue depth + in-flight counters for one proxy backend. */
+export interface AiProxyQueueBackend {
+  id: string;
+  queued?: number;
+  /** Wait of the longest-queued waiter (ms). */
+  oldestWaitMs?: number;
+  tier0InFlight?: number;
+  deferredInFlight?: number;
+}
+
+/** Snapshot of the proxy's admission queue (waiting requests). */
+export interface AiProxyQueue {
+  enabled?: boolean;
+  maxQueuePerBackend?: number;
+  /** Seconds a waiter may stay queued before the proxy drops it. */
+  maxWaitSec?: number;
+  retryAfterSec?: number;
+  /** Requests currently waiting for a free backend slot. */
+  waiting?: number;
+  waiters?: AiProxyQueueWaiter[];
+  backends?: AiProxyQueueBackend[];
+  tierPolicy?: unknown[];
+}
+
 /** Response for the observer-url helper. */
 export interface AiProxyObserverUrl {
   url: string;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchAiProxyActiveRequests,
   fetchAiProxyObserverUrl,
+  fetchAiProxyQueue,
   fetchAiProxyStats,
   fetchAiProxyStreams,
   killAiProxyRequest,
@@ -9,6 +10,8 @@ import {
 } from "../../api/client";
 import type {
   AiProxyActiveRequest,
+  AiProxyQueue,
+  AiProxyQueueWaiter,
   AiProxyStats,
   AiProxyStream,
 } from "../../api/types";
@@ -56,6 +59,15 @@ function formatTokens(n: number): string {
 
 function ageLabel(startTime: number): string {
   const sec = Math.max(0, Math.round((Date.now() - startTime) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const rem = sec - m * 60;
+  return `${m}m ${rem}s`;
+}
+
+/** Duration label for a proxy queue wait, same shape as ageLabel's output. */
+function waitedLabel(waitedMs: number | undefined): string {
+  const sec = Math.max(0, Math.round((waitedMs ?? 0) / 1000));
   if (sec < 60) return `${sec}s`;
   const m = Math.floor(sec / 60);
   const rem = sec - m * 60;
@@ -174,6 +186,49 @@ function RequestRow({
 }
 
 /**
+ * One waiter in the proxy's admission queue. Mirrors RequestRow's visual
+ * language, minus the kill button: the proxy exposes no verified cancel
+ * endpoint for queued ids.
+ */
+function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?: number }) {
+  const overdue = item.overdue === true;
+  const waited = waitedLabel(item.waitedMs);
+  const dotColor = "var(--color-warning)";
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${overdue ? "animate-pulse" : ""}`}
+        style={{ backgroundColor: dotColor, boxShadow: `0 0 6px ${dotColor}` }}
+        title={
+          overdue
+            ? maxWaitSec
+              ? `Waiting past the proxy's ${maxWaitSec}s max wait`
+              : "Waiting past the proxy's max wait"
+            : "Waiting in the proxy's admission queue"
+        }
+      />
+      <span
+        className={`min-w-0 flex-1 truncate text-xs ${overdue ? "text-warning" : "text-text"}`}
+        title={item.model ?? item.url ?? "queued request"}
+      >
+        {item.model ?? item.url ?? "queued request"}
+      </span>
+      {item.backendName && (
+        <span className="truncate text-xs text-muted" title={item.backendUrl ?? item.backendName}>
+          {item.backendName}
+        </span>
+      )}
+      <span
+        className={`w-16 shrink-0 whitespace-nowrap text-right font-tabular text-xs tabular-nums ${overdue ? "text-warning" : "text-muted"}`}
+        title={`Waiting ${waited}`}
+      >
+        {waited}
+      </span>
+    </div>
+  );
+}
+
+/**
  * Compact "AI Proxy" box below the spark grid. Shows live running requests
  * (with kill buttons), a jump-to-observer link, and today's statistics.
  * Polls the bridge every POLL_MS. Offline/graceful when the proxy is down.
@@ -193,6 +248,7 @@ export function AiProxyPanel({
   const [streams, setStreams] = useState<AiProxyStream[]>([]);
   const [requests, setRequests] = useState<AiProxyActiveRequest[]>([]);
   const [stats, setStats] = useState<AiProxyStats | null>(null);
+  const [queue, setQueue] = useState<AiProxyQueue | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [killingId, setKillingId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -210,10 +266,11 @@ export function AiProxyPanel({
     async function poll() {
       // Each endpoint degrades independently: a single upstream failure must
       // not clear the other panels' data, but total failure = proxy down.
-      const [s, r, st] = await Promise.all([
+      const [s, r, st, q] = await Promise.all([
         fetchAiProxyStreams().catch(() => null),
         fetchAiProxyActiveRequests().catch(() => null),
         fetchAiProxyStats(todayStr(), todayStr()).catch(() => null),
+        fetchAiProxyQueue().catch(() => null),
       ]);
       if (cancelled) return;
       let saw = false;
@@ -228,6 +285,10 @@ export function AiProxyPanel({
       if (st) {
         saw = true;
         setStats(st);
+      }
+      if (q) {
+        saw = true;
+        setQueue(q);
       }
       setError(saw ? null : "AI proxy unreachable — no data");
       // Publish for AutoPower: exact numbers this widget is showing right now.
@@ -286,6 +347,17 @@ export function AiProxyPanel({
   const totals = stats?.totals ?? null;
   const tps = llmThroughput(llmMetrics);
   const online = !error;
+  // Proxy admission queue: the header count prefers the waiter list, falling
+  // back to the scalar count when the proxy omits it.
+  const queueWaiters = queue?.waiters ?? [];
+  const queuedCount = queue ? (queue.waiters ? queue.waiters.length : (queue.waiting ?? 0)) : 0;
+  // Engine wait gauges and the proxy's admission queue are disjoint (verified
+  // against the live observer), so summing never double-counts.
+  const proxyWaiting = queue?.waiting ?? null;
+  const combinedWaiting =
+    tps.requestsWaiting !== null || proxyWaiting !== null
+      ? (tps.requestsWaiting ?? 0) + (proxyWaiting ?? 0)
+      : null;
 
   return (
     <>
@@ -335,6 +407,16 @@ export function AiProxyPanel({
           /* Same floor in both states — the panel must not resize when a
              request appears or finishes between 2 s polls. */
           <div className="min-h-[10rem] space-y-1">
+            {queuedCount > 0 && (
+              <>
+                <p className="text-xs uppercase tracking-wide text-muted">
+                  Queued ({queuedCount})
+                </p>
+                {queueWaiters.map((w) => (
+                  <QueueRow key={w.id} item={w} maxWaitSec={queue?.maxWaitSec} />
+                ))}
+              </>
+            )}
             {allRunning.length > 0 ? (
               <>
                 <p className="text-xs uppercase tracking-wide text-muted">
@@ -388,19 +470,19 @@ export function AiProxyPanel({
               </div>
               <div
                 className="border-l border-border text-center"
-                title="Requests the serving engines are running right now, and waiting for admission (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
+                title="Requests the serving engines are running right now, and waiting for admission — the wait count includes requests queued at the proxy's admission queue (vLLM/SGLang/TensorFold gauges; backends without a wait gauge show the run count only)"
               >
                 <span className="max-phone:block font-tabular text-[28px] font-bold leading-none text-text-strong">
-                  {tps.requestsRunning ?? (tps.requestsWaiting !== null ? tps.requestsWaiting : "—")}
+                  {tps.requestsRunning ?? (combinedWaiting !== null ? combinedWaiting : "—")}
                 </span>
                 <span className="max-phone:mt-1 max-phone:block text-sm font-normal leading-none text-muted">
-                  {tps.requestsRunning === null && tps.requestsWaiting !== null
-                    ? "wait"
-                    : tps.requestsWaiting !== null
-                      ? `run / ${tps.requestsWaiting} wait`
-                      : tps.requestsRunning !== null
-                        ? "run"
-                        : "requests"}
+                  {combinedWaiting !== null
+                    ? tps.requestsRunning !== null
+                      ? `run / ${combinedWaiting} wait`
+                      : "wait"
+                    : tps.requestsRunning !== null
+                      ? "run"
+                      : "requests"}
                 </span>
               </div>
             </div>

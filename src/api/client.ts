@@ -1,6 +1,7 @@
 import type {
   AiProxyActiveRequest,
   AiProxyObserverUrl,
+  AiProxyQueue,
   AiProxyStats,
   AiProxyStream,
   AutoPowerConfig,
@@ -785,6 +786,11 @@ export function fetchAiProxyStats(
 ): Promise<AiProxyStats> {
   const q = new URLSearchParams({ startDate, endDate });
   return apiFetch(`/api/ai-proxy/statistics?${q.toString()}`);
+}
+
+/** Proxy admission queue snapshot (requests waiting for a free backend slot). */
+export function fetchAiProxyQueue(): Promise<AiProxyQueue> {
+  return apiFetch("/api/ai-proxy/queue");
 }
 
 /** Kill a streaming request by id. */

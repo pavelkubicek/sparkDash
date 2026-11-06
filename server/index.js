@@ -706,6 +706,10 @@ app.get("/api/ai-proxy/statistics", (req, res) => {
   void aiProxyGet(req, res, "/observer/api/statistics");
 });
 
+app.get("/api/ai-proxy/queue", (req, res) => {
+  void aiProxyGet(req, res, "/observer/api/queue");
+});
+
 /** Kill a streaming request by id. */
 app.post("/api/ai-proxy/cancel/:id", async (req, res) => {
   try {

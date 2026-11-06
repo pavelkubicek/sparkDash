@@ -8,7 +8,7 @@ import {
   updateSchedulerConfig,
 } from "../../../api/modelClient";
 import { Panel } from "../../ui/Panel";
-import { BoltIcon, CalendarIcon, PlusIcon, RotateIcon } from "../../ui/icons";
+import { BoltIcon, CalendarIcon, ChevronDownIcon, PlusIcon, RotateIcon } from "../../ui/icons";
 import { ModelCard } from "./ModelCard";
 import { openNewModelDialog } from "../../../hooks/useModelEditDialog";
 
@@ -27,11 +27,19 @@ function countdown(epochMs: number, nowMs: number): string {
 }
 
 /**
- * Half-width Overview card: one card per model repo, each with a
- * colour-swapped Start/Stop, Restart, and (running-only) Logs. It is the 4th
- * child of the integration-cards grid (AI Proxy + Orchestrator / Auditor +
- * Model Launcher), so it is ~50% wide; the model list is a single column
- * capped at ~2 cards tall and scrolls (slim themed scrollbar).
+ * Full-width Overview card: one card per model repo, each with a
+ * colour-swapped Start/Stop, Restart, and (running-only) Logs. It is the
+ * 2nd row of the integration-cards grid — AI Proxy + AI Developer sit side by
+ * side above it — so it spans both columns (`sm:col-span-2`) and is a single
+ * column again on phones.
+ *
+ * The list defaults to the models that matter right now: the running ones
+ * plus everything an in-flight job references. The rest sit behind a
+ * "Show inactive models (N)" disclosure; opening it renders the whole
+ * registry again, so ↑/↓ still reorder across every card. The list runs two
+ * cards per row from `sm` up (stacked on phones) and is content-driven tall —
+ * no fixed height floor — scrolling only when its own content outgrows the
+ * card (slim themed scrollbar).
  *
  * Data path: the `models` block rides the existing WS snapshot — no second
  * socket and no polling loop here. Actions just POST and then let the next
@@ -41,6 +49,7 @@ function countdown(epochMs: number, nowMs: number): string {
 export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [showInactive, setShowInactive] = useState(false);
   const rawList: ModelInfo[] = models?.models ?? [];
   // The registry already stores the array in `position` order; sort again so a
   // stale/hand-edited payload still renders qwen → deepseek → glm rather than
@@ -64,6 +73,21 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
   }
   const nodesOf = (m: ModelInfo): string[] =>
     m.nodes?.length ? m.nodes : m.sparkId ? [m.sparkId] : [];
+
+  /**
+   * Collapsed-list membership: a model is shown when it runs, or when a job
+   * references it — by `modelId`, or through the Sparks that job claims. A
+   * start in flight has not flipped `status.running` yet and a takeover's
+   * incumbent shares the unit set, so both stay on screen while the job lives.
+   */
+  const jobModelIds = new Set(activeJobs.map((j) => j.modelId));
+  const isActive = (m: ModelInfo): boolean =>
+    m.status.running || jobModelIds.has(m.id) || nodesOf(m).some((s) => claimedSparks.has(s));
+  const activeOnly = list.filter(isActive);
+  const inactiveCount = list.length - activeOnly.length;
+  const shown = showInactive ? list : activeOnly;
+  /** Registry index per id — ↑/↓ bounds follow the full list even when the collapsed view hides the neighbours. */
+  const indexById = new Map(list.map((m, i) => [m.id, i]));
 
   /**
    * Move one card a single slot up (-1) or down (1) and persist the new order
@@ -146,6 +170,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         title="Models"
         icon={<BoltIcon className="h-3.5 w-3.5 shrink-0 text-muted" />}
         accent
+        className="ov-models flex flex-col sm:col-span-2"
         actions={addButton}
       >
         {models == null ? (
@@ -195,7 +220,7 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         />
       }
       accent
-      className="ov-models flex flex-col"
+      className="ov-models flex flex-col sm:col-span-2"
       bodyClassName="flex flex-1 flex-col space-y-3"
       collapsible={{
         key: "models",
@@ -338,29 +363,56 @@ export function ModelLauncherPanel({ models, connected }: ModelLauncherPanelProp
         </div>
       }
     >
-      {/* Single-column list: fills the card and scrolls when its own content
-          is taller (slim nice-scrollbar). The card stretches to its grid-row
-          partner (the Auditor is usually the taller one), so bottoms align —
-          this list absorbs the difference instead of leaving dead space under
-          the footer. min-height floors it at exactly 3 compact cards
-          (--density-models-cap per density) when the row is short. Cards
-          reorder with their ↑/↓ buttons. */}
-      <div className="nice-scroll min-h-[var(--density-models-cap)] flex-1 overflow-y-auto pr-1">
-        <div className="model-list-compact grid" style={{ gap: "var(--density-card-gap)" }}>
-          {list.map((m, i) => (
-            <ModelCard
-              key={m.id}
-              model={m}
-              busy={nodesOf(m).some((s) => claimedSparks.has(s))}
-              busyHere={activeJobs.some((j) => j.modelId === m.id)}
-              scheduledNow={scheduledNowId === m.id}
-              canMoveUp={i > 0}
-              canMoveDown={i < list.length - 1}
-              onMove={handleMove}
-            />
-          ))}
-        </div>
+      {/* The card list: two cards per row from `sm` up, stacked again on
+          phones. Height follows the cards — no min-height floor, the panel is
+          exactly as tall as its content — so the container only scrolls once
+          its own list outgrows it (slim nice-scrollbar). Collapsed it holds
+          only the running/starting cards; expanding renders the whole
+          registry so ↑/↓ still reach every slot. */}
+      <div className="nice-scroll flex-1 overflow-y-auto pr-1">
+        {shown.length === 0 ? (
+          <p className="text-xs text-muted">No models running — {list.length} registered</p>
+        ) : (
+          <div className="model-list-compact grid grid-cols-1 sm:grid-cols-2" style={{ gap: "var(--density-card-gap)" }}>
+            {shown.map((m) => {
+              const i = indexById.get(m.id) ?? 0;
+              return (
+                <ModelCard
+                  key={m.id}
+                  model={m}
+                  busy={nodesOf(m).some((s) => claimedSparks.has(s))}
+                  busyHere={activeJobs.some((j) => j.modelId === m.id)}
+                  scheduledNow={scheduledNowId === m.id}
+                  canMoveUp={i > 0}
+                  canMoveDown={i < list.length - 1}
+                  onMove={handleMove}
+                />
+              );
+            })}
+          </div>
+        )}
       </div>
+
+      {inactiveCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => setShowInactive((v) => !v)}
+          aria-expanded={showInactive}
+          className="inline-flex items-center gap-1 self-start rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent"
+          title={
+            showInactive
+              ? `Collapse back to the ${activeOnly.length} running or starting model${activeOnly.length === 1 ? "" : "s"}`
+              : `Reveal the ${inactiveCount} registered model${inactiveCount === 1 ? "" : "s"} that are not running`
+          }
+        >
+          <ChevronDownIcon
+            className={`h-3 w-3 transition-transform ${showInactive ? "" : "-rotate-90"}`}
+          />
+          {showInactive
+            ? `Hide inactive models (${inactiveCount})`
+            : `Show inactive models (${inactiveCount})`}
+        </button>
+      ) : null}
 
       {/* Whisper hints tucked under card bottom padding. */}
       <footer

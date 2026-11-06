@@ -144,6 +144,91 @@ describe("ModelLauncherPanel concurrency", () => {
   });
 });
 
+describe("ModelLauncherPanel active-only list", () => {
+  it("lists running and starting models; the disclosure reveals the idle ones", async () => {
+    const runner = model({ id: "runner", name: "Runner", status: UP });
+    // Booter is mid-start: status.running has not flipped yet — only the job
+    // references it, and it must still be on screen.
+    const booter = model({
+      id: "booter",
+      name: "Booter",
+      sparkId: "spark5",
+      sparkName: "spark-5",
+      nodes: ["spark5"],
+      nodeNames: ["spark-5"],
+    });
+    const resting = model({
+      id: "resting",
+      name: "Resting",
+      sparkId: "spark6",
+      sparkName: "spark-6",
+      nodes: ["spark6"],
+      nodeNames: ["spark-6"],
+    });
+    const dormant = model({
+      id: "dormant",
+      name: "Dormant",
+      sparkId: "spark7",
+      sparkName: "spark-7",
+      nodes: ["spark7"],
+      nodeNames: ["spark-7"],
+    });
+    const job = mutatingJob({ modelId: "booter", model: "Booter", nodes: ["spark5"] });
+    const { container } = render(
+      <ModelLauncherPanel models={snapshot([runner, booter, resting, dormant], [job])} connected />
+    );
+    await flush();
+
+    // The card owns the full width of the integration grid's 2nd row.
+    expect(container.querySelector(".ov-models")?.className).toContain("sm:col-span-2");
+
+    // Two cards per row from `sm` up (stacked on phones), and the panel is
+    // content-driven tall — the list carries no min-height floor any more.
+    const grid = container.querySelector(".model-list-compact")!;
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("sm:grid-cols-2");
+    expect(grid.parentElement?.className).not.toContain("min-h-");
+
+    // Collapsed by default: the two active clusters only.
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(container.textContent).toContain("Runner");
+    expect(container.textContent).toContain("Booter");
+    expect(container.textContent).not.toContain("Resting");
+    expect(container.textContent).not.toContain("Dormant");
+
+    await act(async () => {
+      named(container, "Show inactive models (2)")!.click();
+    });
+    await flush();
+
+    // Expanded: the whole registry again, so ↑/↓ still cover every slot.
+    expect(container.querySelectorAll("article")).toHaveLength(4);
+    expect(container.textContent).toContain("Resting");
+    expect(container.textContent).toContain("Dormant");
+    expect(named(container, "Hide inactive models (2)")?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("keeps the list reachable with nothing running", async () => {
+    const alpha = model({ id: "alpha", name: "Alpha", nodes: ["spark1"], nodeNames: ["spark-1"] });
+    const beta = model({ id: "beta", name: "Beta", nodes: ["spark2"], nodeNames: ["spark-2"] });
+    const { container } = render(<ModelLauncherPanel models={snapshot([alpha, beta], [])} connected />);
+    await flush();
+
+    expect(container.querySelectorAll("article")).toHaveLength(0);
+    expect(container.textContent).toContain("No models running — 2 registered");
+    expect(container.textContent).not.toContain("Alpha");
+
+    await act(async () => {
+      named(container, "Show inactive models (2)")!.click();
+    });
+    await flush();
+
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(container.textContent).toContain("Alpha");
+    expect(container.textContent).toContain("Beta");
+  });
+});
+
 describe("ModelCard takeover choice", () => {
   it("a start refused for takeover asks the operator — Cancel runs nothing, Confirm re-posts", async () => {
     const tp2a = model({
@@ -180,6 +265,13 @@ describe("ModelCard takeover choice", () => {
         <ModelTakeoverDialog />
       </>
     );
+    await flush();
+
+    // TP2-B is idle, so the collapsed list hides it — the takeover has to
+    // reach a card that is not running, so open the disclosure first.
+    await act(async () => {
+      named(container, "Show inactive models (1)")!.click();
+    });
     await flush();
 
     const tp2bCard = Array.from(container.querySelectorAll("article"))[1];

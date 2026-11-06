@@ -955,7 +955,6 @@ html {
   --density-card-gap: 8px;
   --density-overview-rhythm: 16px;
   --density-overview-title: 24px;
-  --density-models-cap: 489px;
   --radius-panel: 14px;
   --radius-sm: 8px;
 }
@@ -971,7 +970,6 @@ html {
   --density-card-gap: 12px;
   --density-overview-rhythm: 24px;
   --density-overview-title: 32px;
-  --density-models-cap: 533px;
   --radius-panel: 22px;
   --radius-sm: 12px;
 }
