@@ -2004,7 +2004,8 @@ export interface AuditorStatus {
   version: string;
 }
 
-/** The full review lifecycle (`models.ReviewStatus`). */
+/** The full review lifecycle (`models.ReviewStatus`; `done` is the Tier-C
+ *  scan anchor's terminal-on-arrival state, per auditor-ui `isTriageable`). */
 export type AuditorReviewStatus =
   | "queued"
   | "analyzing"
@@ -2013,14 +2014,15 @@ export type AuditorReviewStatus =
   | "findings_ready"
   | "duplicate"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "done";
 
 /** One review row as reported by GET /api/reviews (`stats.review_dict` + counters). */
 export interface AuditorReview {
   id: string;
   repo_id: string;
   branch: string;
-  scope_kind: "commit" | "feature" | "delta";
+  scope_kind: "commit" | "feature" | "delta" | "scan";
   scope_key: string;
   status: AuditorReviewStatus;
   title: string | null;

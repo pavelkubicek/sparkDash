@@ -191,8 +191,8 @@ function RequestRow({
  * each tier reads as a distinct color. Literal strings for Tailwind's scanner.
  */
 const TIER_CHIP_STYLES = [
-  "border-white/20 bg-white/10 text-white",
   "border-[#34d399]/30 bg-[#34d399]/10 text-[#34d399]",
+  "border-[#60a5fa]/30 bg-[#60a5fa]/10 text-[#60a5fa]",
   "border-[#fbbf24]/30 bg-[#fbbf24]/10 text-[#fbbf24]",
   "border-[#f87171]/30 bg-[#f87171]/10 text-[#f87171]",
 ] as const;

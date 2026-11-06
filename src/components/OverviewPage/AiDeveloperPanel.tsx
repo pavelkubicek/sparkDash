@@ -35,13 +35,12 @@ import { SlotSettingsDialog } from "./SlotSettingsDialog";
 
 const POLL_MS = 5000;
 
-/** Rows per auditor list section; the rest collapses into a "…" row. */
-const LIST_LIMIT = 8;
-
-/** Poll windows: enough reviews to cover active + ready-to-triage, enough
- *  pending findings to count every report's open items, enough scans to
- *  list the running vulnhunts plus a recent history strip. */
-const REVIEWS_POLL_LIMIT = 60;
+/** Poll windows: the review window stays wide so ready reports — especially
+ *  older vulnhunt anchors — never fall out of the join with the pending-
+ *  findings map (auditor-ui itself pulls a 1000 window; 200 keeps the card
+ *  bounded while covering the realistic open set). Scans only need to catch
+ *  the currently running hunts on the Active tab. */
+const REVIEWS_POLL_LIMIT = 200;
 const FINDINGS_POLL_LIMIT = 500;
 const SCANS_POLL_LIMIT = 10;
 
@@ -170,6 +169,7 @@ const STATUS_BADGE: Record<AuditorReviewStatus, string> = {
   duplicate: "bg-[#0d9488] text-white", // teal-600
   failed: "bg-[#dc2626] text-white", // red-600
   cancelled: "bg-[#4b5563] text-[#9ca3af]", // gray-600 / gray-400
+  done: "bg-[#6d28d9] text-[#f3f4f6]", // violet-700 / gray-100 — Tier-C scan anchor
 };
 
 const STATUS_LABEL: Record<AuditorReviewStatus, string> = {
@@ -181,6 +181,7 @@ const STATUS_LABEL: Record<AuditorReviewStatus, string> = {
   duplicate: "Duplicate",
   failed: "Failed",
   cancelled: "Cancelled",
+  done: "Scanned",
 };
 
 /** Resolve the display tone for a ticket's PR badge. */
@@ -432,24 +433,12 @@ function AnalyzingRow({ review, onOpen }: { review: AuditorReview; onOpen: () =>
 }
 
 /**
- * One Tier-C vulnhunt row (`vuln_scan` — running hunts hold auditor slots but
- * are not review rows). `running` renders the Active-tab compact variant
- * ("Vulnhunt — {repo ?? partition ?? scan_id}", muted branch/partition_path),
- * otherwise the Auditor-tab history variant ("{repo ?? 'vulnhunt'} —
- * {partition ?? scan_id}", muted branch + confirmed findings + minutes).
+ * One compact running Tier-C vulnhunt row for the Active tab (`vuln_scan` —
+ * running hunts hold auditor slots but are not review rows). Finished hunts
+ * leave this list; their report anchors surface in the ready-to-triage
+ * section instead.
  */
-function ScanRow({ scan, running, onOpen }: { scan: AuditorTierCScan; running: boolean; onOpen: () => void }) {
-  const isRunning = RUNNING_SCAN_STATUSES[scan.status] === true;
-  const color = isRunning
-    ? "#f59e0b"
-    : scan.status === "failed"
-      ? "#f87171"
-      : scan.status === "done"
-        ? "#0891b2"
-        : "#6b7280";
-  const title = running
-    ? `Vulnhunt — ${scan.repo ?? scan.partition ?? scan.scan_id}`
-    : `${scan.repo ?? "vulnhunt"} — ${scan.partition ?? scan.scan_id}`;
+function ScanRow({ scan, onOpen }: { scan: AuditorTierCScan; onOpen: () => void }) {
   const minutes =
     typeof scan.agent_minutes === "number" ? `${scan.agent_minutes.toFixed(1)} min` : null;
   return (
@@ -460,25 +449,19 @@ function ScanRow({ scan, running, onOpen }: { scan: AuditorTierCScan; running: b
       title={`Open vulnhunt ${scan.scan_id} in the auditor${scan.error ? ` — ${scan.error}` : ""}`}
     >
       <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunning ? "animate-pulse" : ""}`}
-        style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }}
+        className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#f59e0b]"
+        style={{ boxShadow: "0 0 6px #f59e0b" }}
         title={scan.status}
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs text-text">{title}</span>
+        <span className="block truncate text-xs text-text">
+          Vulnhunt — {scan.repo ?? scan.partition ?? scan.scan_id}
+        </span>
         <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
           {scan.branch && <span className="truncate">{scan.branch}</span>}
-          {running
-            ? scan.partition_path && <span className="truncate">{scan.partition_path}</span>
-            : (scan.findings_confirmed ?? 0) > 0 && (
-                <span className="font-tabular">
-                  {scan.findings_confirmed} finding{scan.findings_confirmed === 1 ? "" : "s"}
-                </span>
-              )}
+          {scan.partition_path && <span className="truncate">{scan.partition_path}</span>}
           {minutes && <span className="font-tabular">{minutes}</span>}
-          <span className="font-tabular">
-            {ageLabel(running ? scan.started_at : scan.finished_at ?? scan.started_at)}
-          </span>
+          <span className="font-tabular">{ageLabel(scan.started_at)}</span>
         </span>
       </span>
     </button>
@@ -533,7 +516,7 @@ const CHIP_CLS =
  * reviewer in one Panel with three tabs — Active (both services' running
  * work: orchestrator tasks, in-progress reports and running vulnhunts),
  * Orchestrator (running tasks, plans, tickets, pending PRs) and Auditor
- * (ready-to-triage reports, vulnhunt history, pipeline). The two services now SHARE one slot
+ * (ready-to-triage reports, pipeline). The two services now SHARE one slot
  * pool, so a single footer shows the combined usage. Same chrome as before:
  * one slots settings dialog managing the shared pool, both "open web UI" jump links, one 5 s bridge
  * poll with independent per-endpoint degradation, and a graceful offline state
@@ -714,22 +697,23 @@ export function AiDeveloperPanel({
     if (f.currency === "refactored_away" || f.currency === "gone") continue;
     openCounts.set(f.review_id, (openCounts.get(f.review_id) ?? 0) + 1);
   }
-  // Reports whose pass-2 results still hold open findings, oldest first.
+  // Triageable reports whose flagged rows still await a verdict, oldest first
+  // — auditor-ui `isTriageable`: pass-2 done (`findings_ready`) OR a Tier-C
+  // scan anchor (`scope_kind === "scan"`, terminal `done`), each with open>0.
   const readyToTriage = reviews
-    .filter((rv) => rv.status === "findings_ready" && (openCounts.get(rv.id) ?? 0) > 0)
+    .filter(
+      (rv) =>
+        (rv.status === "findings_ready" ||
+          (rv.scope_kind === "scan" && rv.status === "done")) &&
+        (openCounts.get(rv.id) ?? 0) > 0
+    )
     .sort((a, b) =>
       String(a.finished_at ?? a.started_at ?? "").localeCompare(
         String(b.finished_at ?? b.started_at ?? "")
       )
     );
-  // Tier-C hunts: running/stopping occupy auditor slots (Active tab); the
-  // polled window doubles as the Auditor tab's recent-history strip.
+  // Tier-C hunts still occupying an auditor slot — Active tab only.
   const runningScans = scans.filter((sc) => RUNNING_SCAN_STATUSES[sc.status] === true);
-  const recentScans = [...scans].sort((a, b) =>
-    String(b.started_at ?? "").localeCompare(String(a.started_at ?? ""))
-  );
-  const shownScans = recentScans.slice(0, LIST_LIMIT);
-  const moreScans = recentScans.length - shownScans.length;
   const auditorBusy = inProgress.length + runningScans.length;
   const activeJobs = runningTasks.length + auditorBusy;
 
@@ -807,7 +791,7 @@ export function AiDeveloperPanel({
               ? activeJobs
               : id === "orchestrator"
                 ? withPendingPrs.length
-                : readyToTriage.length + scans.length;
+                : readyToTriage.length;
           const label =
             id === "active" ? "Active" : id === "orchestrator" ? "Orchestrator" : "Auditor";
           return (
@@ -889,7 +873,7 @@ export function AiDeveloperPanel({
                       <AnalyzingRow key={review.id} review={review} onOpen={() => openReviews(review)} />
                     ))}
                     {runningScans.map((scan) => (
-                      <ScanRow key={scan.scan_id} scan={scan} running onOpen={() => openScan(scan)} />
+                      <ScanRow key={scan.scan_id} scan={scan} onOpen={() => openScan(scan)} />
                     ))}
                   </>
                 ) : (
@@ -1081,36 +1065,6 @@ export function AiDeveloperPanel({
                   </div>
                 ) : (
                   <p className="text-xs text-muted">No reports ready to triage.</p>
-                )}
-              </div>
-
-              {/* Vulnhunts — recent Tier-C scans (vuln_scan rows), newest
-                  first; the cap collapses the tail into one "…" row. */}
-              <div className="space-y-1">
-                <p className="text-xs uppercase tracking-wide text-muted">
-                  Vulnhunts ({scans.length})
-                </p>
-                {recentScans.length > 0 ? (
-                  <>
-                    {shownScans.map((scan) => (
-                      <ScanRow key={scan.scan_id} scan={scan} running={false} onOpen={() => openScan(scan)} />
-                    ))}
-                    {moreScans > 0 && auditorUrl ? (
-                      <a
-                        href={`${auditorUrl}/tier-c`}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={`${moreScans} older ${moreScans === 1 ? "scan" : "scans"} — open the Tier-C list`}
-                        className="flex items-center gap-2 text-xs text-muted transition-colors hover:text-accent"
-                      >
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#6b7280]/40" />
-                        <span className="min-w-0 flex-1 truncate">… and {moreScans} more</span>
-                        <ExternalLinkIcon className="h-2.5 w-2.5 shrink-0" />
-                      </a>
-                    ) : null}
-                  </>
-                ) : (
-                  <p className="text-xs text-muted">No vulnhunts yet.</p>
                 )}
               </div>
 
