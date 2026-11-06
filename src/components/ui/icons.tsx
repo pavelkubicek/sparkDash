@@ -564,3 +564,35 @@ export function CoinsIcon({ className = "" }: { className?: string }) {
     </svg>
   );
 }
+
+/** Orchestrator brand logo (orchestrator-ui favicon): NVIDIA-green node
+ *  network on a dark tile. Brand fills are intentional — do not theme. */
+export function OrchestratorLogoIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width={14} height={14} viewBox="0 0 32 32" aria-hidden className={className}>
+      <rect width="32" height="32" rx="6" fill="#0d1117" />
+      <circle cx="16" cy="16" r="3" fill="#76b900" />
+      <circle cx="10" cy="10" r="2" fill="#76b900" opacity="0.8" />
+      <circle cx="22" cy="10" r="2" fill="#76b900" opacity="0.8" />
+      <circle cx="10" cy="22" r="2" fill="#76b900" opacity="0.8" />
+      <circle cx="22" cy="22" r="2" fill="#76b900" opacity="0.8" />
+      <line x1="13.5" y1="13.5" x2="12" y2="12" stroke="#76b900" strokeWidth="1" opacity="0.6" />
+      <line x1="18.5" y1="13.5" x2="20" y2="12" stroke="#76b900" strokeWidth="1" opacity="0.6" />
+      <line x1="13.5" y1="18.5" x2="12" y2="20" stroke="#76b900" strokeWidth="1" opacity="0.6" />
+      <line x1="18.5" y1="18.5" x2="20" y2="20" stroke="#76b900" strokeWidth="1" opacity="0.6" />
+    </svg>
+  );
+}
+
+/** Auditor brand logo (auditor-ui favicon): orange hexagon scan mark on a
+ *  dark tile. Brand fills are intentional — do not theme. */
+export function AuditorLogoIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width={14} height={14} viewBox="0 0 32 32" aria-hidden className={className}>
+      <rect width="32" height="32" rx="6" fill="#0d1117" />
+      <path d="M16 4 L26 10 L26 22 L16 28 L6 22 L6 10 Z" fill="none" stroke="#f97316" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M16 10 L16 19" stroke="#f97316" strokeWidth="1.6" />
+      <circle cx="16" cy="22.5" r="1.8" fill="#f97316" />
+    </svg>
+  );
+}

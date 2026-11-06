@@ -26,7 +26,7 @@ import type {
   OrchestratorTicket,
 } from "../../api/types";
 import { Panel } from "../ui/Panel";
-import { BotIcon, ExternalLinkIcon, GearIcon, MicroscopeIcon } from "../ui/icons";
+import { AuditorLogoIcon, ExternalLinkIcon, GearIcon, OrchestratorLogoIcon } from "../ui/icons";
 import { SlotSettingsDialog } from "./SlotSettingsDialog";
 
 const POLL_MS = 5000;
@@ -677,7 +677,7 @@ export function AiDeveloperPanel({
             title="Open the Orchestrator web UI"
             className={CHIP_CLS}
           >
-            <BotIcon className="h-3 w-3" />
+            <OrchestratorLogoIcon className="h-3.5 w-3.5" />
           </a>
           <a
             href={auditorUrl ?? undefined}
@@ -686,7 +686,7 @@ export function AiDeveloperPanel({
             title="Open the auditor web UI"
             className={CHIP_CLS}
           >
-            <MicroscopeIcon className="h-3 w-3" />
+            <AuditorLogoIcon className="h-3.5 w-3.5" />
           </a>
         </div>
       }
