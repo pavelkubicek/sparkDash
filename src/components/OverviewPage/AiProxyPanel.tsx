@@ -144,7 +144,7 @@ function RequestRow({
       ? "var(--color-warning)"
       : state === "prefill"
         ? "var(--color-text)"
-        : "var(--color-accent)";
+        : "var(--color-info)";
   const label =
     state === "streaming"
       ? "Streaming"
