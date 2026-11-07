@@ -110,10 +110,17 @@ export function Panel({
                 className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
               />
             </span>
-            {isCollapsed && collapsible.summary != null ? (
-              <span className="panel-summary mt-0.5 font-tabular text-[11px] font-normal text-muted">
-                {collapsible.summary}
-              </span>
+            {isCollapsed && (collapsible.summary != null || collapsible.aside != null) ? (
+              <div className="panel-collapsed-row flex items-center justify-between gap-2">
+                {collapsible.summary != null ? (
+                  <span className="panel-summary mt-0.5 font-tabular text-[11px] font-normal text-muted">
+                    {collapsible.summary}
+                  </span>
+                ) : null}
+                {collapsible.aside != null ? (
+                  <div className="panel-collapsed-aside shrink-0">{collapsible.aside}</div>
+                ) : null}
+              </div>
             ) : null}
           </button>
         ) : (
@@ -122,12 +129,7 @@ export function Panel({
             {title}
           </h3>
         )}
-        <div className="flex min-w-0 items-center gap-1.5">
-          {isCollapsed && collapsible?.aside != null ? (
-            <div className="panel-collapsed-aside shrink-0 self-center">{collapsible.aside}</div>
-          ) : null}
-          {actions ? <div className="panel-actions flex min-w-0 flex-wrap items-center gap-1.5">{actions}</div> : null}
-        </div>
+        {actions ? <div className="panel-actions flex min-w-0 flex-wrap items-center gap-1.5">{actions}</div> : null}
       </header>
       {!isCollapsed && <div className={bodyClassName}>{children}</div>}
     </section>

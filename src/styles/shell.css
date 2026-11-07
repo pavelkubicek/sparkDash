@@ -432,6 +432,12 @@ body {
     grid-row: 1;
     margin-left: 0;
   }
+  /* Collapsed summary + mini metric bar share line 2: summary left,
+     bar right. The row is a grid item of the display:contents toggle. */
+  .panel-head--stack .panel-collapsed-row {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
 }
 .tabbar {
   position: fixed;
