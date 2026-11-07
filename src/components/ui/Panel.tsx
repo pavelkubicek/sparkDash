@@ -122,10 +122,12 @@ export function Panel({
             {title}
           </h3>
         )}
-        {isCollapsed && collapsible?.aside != null ? (
-          <div className="panel-collapsed-aside shrink-0 self-center">{collapsible.aside}</div>
-        ) : null}
-        {actions ? <div className="panel-actions flex min-w-0 flex-wrap items-center gap-1.5">{actions}</div> : null}
+        <div className="flex min-w-0 items-center gap-1.5">
+          {isCollapsed && collapsible?.aside != null ? (
+            <div className="panel-collapsed-aside shrink-0 self-center">{collapsible.aside}</div>
+          ) : null}
+          {actions ? <div className="panel-actions flex min-w-0 flex-wrap items-center gap-1.5">{actions}</div> : null}
+        </div>
       </header>
       {!isCollapsed && <div className={bodyClassName}>{children}</div>}
     </section>
