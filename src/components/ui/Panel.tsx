@@ -10,6 +10,9 @@ interface PanelCollapsible {
   /** Status line shown next to the heading while collapsed on a phone
    *  (running counts, active job, …). Hidden when expanded and on desktop. */
   summary?: ReactNode;
+  /** Content shown on the right of the collapsed phone header, e.g. a mini
+   *  metric bar. Rendered only while collapsed (phone only). */
+  aside?: ReactNode;
 }
 
 interface PanelProps {
@@ -119,6 +122,9 @@ export function Panel({
             {title}
           </h3>
         )}
+        {isCollapsed && collapsible?.aside != null ? (
+          <div className="panel-collapsed-aside shrink-0 self-center">{collapsible.aside}</div>
+        ) : null}
         {actions ? <div className="panel-actions flex min-w-0 flex-wrap items-center gap-1.5">{actions}</div> : null}
       </header>
       {!isCollapsed && <div className={bodyClassName}>{children}</div>}

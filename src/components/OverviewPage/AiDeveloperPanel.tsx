@@ -750,6 +750,21 @@ export function AiDeveloperPanel({
         ) : (
           "unreachable"
         ),
+        // Mini slot bar on the right of the collapsed phone header; both
+        // services unreachable → empty track, no fabricated numbers.
+        aside: (
+          <span
+            title={
+              anyOnline
+                ? `${slotsUsed} / ${slotsTotal} slots — shared orchestrator + auditor pool`
+                : "unreachable"
+            }
+          >
+            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-border">
+              <div className="h-full rounded-full bg-bar" style={{ width: `${slotPct}%` }} />
+            </div>
+          </span>
+        ),
       }}
       actions={
         <div className="flex items-center gap-1.5">
