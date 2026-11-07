@@ -74,6 +74,19 @@ function waitedLabel(waitedMs: number | undefined): string {
   return `${m}m ${rem}s`;
 }
 
+/**
+ * Admission priority tier from the model id, mirroring the AI proxy's own
+ * convention (ai.api.proxy src/priority.js): a `-pN` / `_pN` / `.pN` suffix
+ * (N 1..99) declares a deferred tier; anything else is tier 0 (interactive).
+ * The proxy has no request-time override — the alias IS the priority — so the
+ * running rows' served model id yields the same tier the queue used.
+ */
+function priorityTier(model: string | null | undefined): number {
+  if (!model) return 0;
+  const m = /^(.+?)[-_.]p([1-9]\d?)$/i.exec(model);
+  return m ? Math.min(99, Number(m[2])) : 0;
+}
+
 type RunningItem =
   | (AiProxyStream & { kind: "stream" })
   | (AiProxyActiveRequest & { kind: "request" });
@@ -145,6 +158,7 @@ function RequestRow({
         style={{ backgroundColor: dotColor, boxShadow: `0 0 6px ${dotColor}` }}
         title={label}
       />
+      <TierChip tier={priorityTier(item.model)} />
       <span
         className="min-w-0 flex-1 truncate text-xs text-text"
         title={
@@ -187,8 +201,10 @@ function RequestRow({
 
 /**
  * Per-tier admission-priority chip styles: colored text + border + tinted
- * background. Index = tier (0 priorityless/first, 1–3 deferred); raw hex so
- * each tier reads as a distinct color. Literal strings for Tailwind's scanner.
+ * background. Index = tier: 0 interactive (green), 1–3 deferred (blue, amber,
+ * red); raw hex so each tier reads as a distinct color. Literal strings for
+ * Tailwind's scanner. The proxy allows deep tiers (1..99) — those fall back
+ * to the neutral `TIER_CHIP_FALLBACK`.
  */
 const TIER_CHIP_STYLES = [
   "border-[#34d399]/30 bg-[#34d399]/10 text-[#34d399]",
@@ -196,6 +212,28 @@ const TIER_CHIP_STYLES = [
   "border-[#fbbf24]/30 bg-[#fbbf24]/10 text-[#fbbf24]",
   "border-[#f87171]/30 bg-[#f87171]/10 text-[#f87171]",
 ] as const;
+
+/** Neutral style for rare deep tiers beyond the palette (proxy allows 1..99). */
+const TIER_CHIP_FALLBACK = "border-border text-muted";
+
+/**
+ * Priority chip shared by running and queued rows so both read identically.
+ */
+function TierChip({ tier }: { tier: number }) {
+  const style = TIER_CHIP_STYLES[tier] ?? TIER_CHIP_FALLBACK;
+  return (
+    <span
+      className={`shrink-0 rounded border px-1 font-tabular text-[10px] tabular-nums ${style}`}
+      title={
+        tier === 0
+          ? `Proxy admission priority #${tier} · admitted first`
+          : `Proxy admission priority #${tier} · deferred behind lower-tier demand`
+      }
+    >
+      #{tier}
+    </span>
+  );
+}
 
 /**
  * One waiter in the proxy's admission queue. Mirrors RequestRow's visual
@@ -205,7 +243,7 @@ const TIER_CHIP_STYLES = [
 function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?: number }) {
   const overdue = item.overdue === true;
   const waited = waitedLabel(item.waitedMs);
-  const tier = Math.max(0, Math.min(TIER_CHIP_STYLES.length - 1, Math.trunc(item.tier ?? 0)));
+  const tier = Math.max(0, Math.trunc(item.tier ?? priorityTier(item.model)));
   return (
     <div className="flex items-center gap-2">
       <span
@@ -219,16 +257,7 @@ function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?:
             : "Waiting in the proxy's admission queue"
         }
       />
-      <span
-        className={`shrink-0 rounded border px-1 font-tabular text-[10px] tabular-nums ${TIER_CHIP_STYLES[tier]}`}
-        title={
-          tier === 0
-            ? `Proxy admission priority #${tier} · admitted first`
-            : `Proxy admission priority #${tier} · deferred behind lower-tier demand`
-        }
-      >
-        #{tier}
-      </span>
+      <TierChip tier={tier} />
       <span
         className={`min-w-0 flex-1 truncate text-xs ${overdue ? "text-warning" : "text-text"}`}
         title={item.model ?? item.url ?? "queued request"}
