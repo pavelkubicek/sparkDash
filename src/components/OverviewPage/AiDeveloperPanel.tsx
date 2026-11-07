@@ -683,10 +683,17 @@ export function AiDeveloperPanel({
   const orchTotal = status?.slots_total ?? slots?.effective_concurrency;
   const audUsed = aStatus?.slots_used ?? aSlots?.effective_concurrency;
   const audTotal = aStatus?.slots_total ?? aSlots?.effective_concurrency;
-  const slotsUsed = (orchOnline ? orchUsed ?? 0 : 0) + (audOnline ? audUsed ?? 0 : 0);
+  // Per-service fills for the two-segment bars: unreachable → 0, clamped ≥ 0.
+  const orchSlots = Math.max(0, orchOnline ? orchUsed ?? 0 : 0);
+  const audSlots = Math.max(0, audOnline ? audUsed ?? 0 : 0);
+  const slotsUsed = orchSlots + audSlots;
   const slotsTotal =
     (orchOnline ? orchTotal : undefined) ?? (audOnline ? audTotal : undefined) ?? 0;
-  const slotPct = slotsTotal > 0 ? Math.round((slotsUsed / slotsTotal) * 100) : 0;
+  // Green orchestrator segment first, then orange auditor; widths capped so
+  // the stacked pair can never overflow the track.
+  const orchPct = slotsTotal > 0 ? Math.min(100, Math.round((orchSlots / slotsTotal) * 100)) : 0;
+  const audPct =
+    slotsTotal > 0 ? Math.min(100 - orchPct, Math.round((audSlots / slotsTotal) * 100)) : 0;
   // ── Auditor derivations — auditor-ui semantics over the polled windows ──
   // The model is still working on these reports (pass 1 / candidates / pass 2).
   const inProgress = reviews.filter((rv) => IN_PROGRESS_STATUSES[rv.status] === true);
@@ -756,12 +763,13 @@ export function AiDeveloperPanel({
           <span
             title={
               anyOnline
-                ? `${slotsUsed} / ${slotsTotal} slots — shared orchestrator + auditor pool`
+                ? `${slotsUsed} / ${slotsTotal} slots — green: orchestrator ${orchSlots}, orange: auditor ${audSlots}`
                 : "unreachable"
             }
           >
-            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-border">
-              <div className="h-full rounded-full bg-bar" style={{ width: `${slotPct}%` }} />
+            <div className="flex h-1.5 w-16 overflow-hidden rounded-full bg-border">
+              <div className="h-full bg-success" style={{ width: `${orchPct}%` }} />
+              <div className="h-full bg-[#f97316]" style={{ width: `${audPct}%` }} />
             </div>
           </span>
         ),
@@ -1129,19 +1137,21 @@ export function AiDeveloperPanel({
       )}
 
       {/* Combined slot usage footer — the orchestrator and the auditor share
-          one pool, so the card shows the sum, not two separate bars. */}
+          one pool: green segment = orchestrator's slots, orange = auditor's. */}
       <div className="mt-auto flex items-center gap-3 border-t border-border pt-3">
         <div className="min-w-0 flex-1">
-          <div className="h-1.5 overflow-hidden rounded-full bg-border">
-            <div
-              className="h-full rounded-full bg-bar"
-              style={{ width: `${slotPct}%` }}
-            />
+          <div className="flex h-1.5 overflow-hidden rounded-full bg-border">
+            <div className="h-full bg-success" style={{ width: `${orchPct}%` }} />
+            <div className="h-full bg-[#f97316]" style={{ width: `${audPct}%` }} />
           </div>
         </div>
         <span
           className="shrink-0 whitespace-nowrap text-center"
-          title="Slots in use — the orchestrator and the auditor share one pool"
+          title={
+            anyOnline
+              ? `Slots in use — the orchestrator and the auditor share one pool (green: orchestrator ${orchSlots}, orange: auditor ${audSlots})`
+              : "Slots in use — the orchestrator and the auditor share one pool"
+          }
         >
           <span className="font-tabular text-[18px] font-bold leading-none text-text-strong">
             {anyOnline ? `${slotsUsed} / ${slotsTotal}` : "— / —"}

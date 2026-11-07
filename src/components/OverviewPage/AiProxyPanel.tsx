@@ -153,12 +153,12 @@ function RequestRow({
         : "Non-streaming request";
   return (
     <div className="flex items-center gap-2">
+      <TierChip tier={priorityTier(item.model)} />
       <span
         className="h-1.5 w-1.5 shrink-0 rounded-full"
         style={{ backgroundColor: dotColor, boxShadow: `0 0 6px ${dotColor}` }}
         title={label}
       />
-      <TierChip tier={priorityTier(item.model)} />
       <span
         className="min-w-0 flex-1 truncate text-xs text-text"
         title={
@@ -179,7 +179,7 @@ function RequestRow({
           </span>
         )}
         <span
-          className="w-16 whitespace-nowrap text-right tabular-nums"
+          className="w-10 whitespace-nowrap text-right tabular-nums sm:w-12"
           title={`Started ${new Date(item.startTime).toLocaleTimeString()}`}
         >
           {ageLabel(item.startTime)}
@@ -226,11 +226,11 @@ function TierChip({ tier }: { tier: number }) {
       className={`shrink-0 rounded border px-1 font-tabular text-[10px] tabular-nums ${style}`}
       title={
         tier === 0
-          ? `Proxy admission priority #${tier} · admitted first`
-          : `Proxy admission priority #${tier} · deferred behind lower-tier demand`
+          ? `Proxy admission priority ${tier} · admitted first`
+          : `Proxy admission priority ${tier} · deferred behind lower-tier demand`
       }
     >
-      #{tier}
+      {tier}
     </span>
   );
 }
@@ -246,6 +246,7 @@ function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?:
   const tier = Math.max(0, Math.trunc(item.tier ?? priorityTier(item.model)));
   return (
     <div className="flex items-center gap-2">
+      <TierChip tier={tier} />
       <span
         className={`h-1.5 w-1.5 shrink-0 rounded-full bg-white ${overdue ? "animate-pulse" : ""}`}
         style={{ boxShadow: "0 0 6px rgba(255,255,255,0.75)" }}
@@ -257,7 +258,6 @@ function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?:
             : "Waiting in the proxy's admission queue"
         }
       />
-      <TierChip tier={tier} />
       <span
         className={`min-w-0 flex-1 truncate text-xs ${overdue ? "text-warning" : "text-text"}`}
         title={item.model ?? item.url ?? "queued request"}
@@ -270,7 +270,7 @@ function QueueRow({ item, maxWaitSec }: { item: AiProxyQueueWaiter; maxWaitSec?:
         </span>
       )}
       <span
-        className={`w-16 shrink-0 whitespace-nowrap text-right font-tabular text-xs tabular-nums ${overdue ? "text-warning" : "text-muted"}`}
+        className={`w-10 shrink-0 whitespace-nowrap text-right font-tabular text-xs tabular-nums sm:w-12 ${overdue ? "text-warning" : "text-muted"}`}
         title={`Waiting ${waited}`}
       >
         {waited}
