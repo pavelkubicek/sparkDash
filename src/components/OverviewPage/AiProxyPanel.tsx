@@ -23,6 +23,16 @@ import { AiProxyDetailDialog } from "./AiProxyDetailDialog";
 
 const POLL_MS = 5000;
 
+/** Endpoints polled each cycle, tracked independently for staleness. */
+type PollSource = "streams" | "requests" | "stats" | "queue";
+
+const INITIAL_LAST_OK: Record<PollSource, number> = {
+  streams: 0,
+  requests: 0,
+  stats: 0,
+  queue: 0,
+};
+
 /** Aggregate available LLM throughput (mirrors the spark boxes' tok/s + prefill). */
 function llmThroughput(metrics: LlmMetrics[] | undefined): {
   generationTps: number | null;
@@ -300,6 +310,10 @@ export function AiProxyPanel({
   const [requests, setRequests] = useState<AiProxyActiveRequest[]>([]);
   const [stats, setStats] = useState<AiProxyStats | null>(null);
   const [queue, setQueue] = useState<AiProxyQueue | null>(null);
+  // Last successful poll per endpoint (ms epoch); 0 = never succeeded. Drives
+  // the stale marker on a section whose endpoint dropped out while the panel
+  // stays online on the others.
+  const [lastOk, setLastOk] = useState<Record<PollSource, number>>(INITIAL_LAST_OK);
   const [error, setError] = useState<string | null>(null);
   const [killingId, setKillingId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -324,6 +338,7 @@ export function AiProxyPanel({
         fetchAiProxyQueue().catch(() => null),
       ]);
       if (cancelled) return;
+      const now = Date.now();
       let saw = false;
       if (s) {
         saw = true;
@@ -341,6 +356,12 @@ export function AiProxyPanel({
         saw = true;
         setQueue(q);
       }
+      setLastOk((prev) => ({
+        streams: s ? now : prev.streams,
+        requests: r ? now : prev.requests,
+        stats: st ? now : prev.stats,
+        queue: q ? now : prev.queue,
+      }));
       setError(saw ? null : "AI proxy unreachable — no data");
       // Publish for AutoPower: exact numbers this widget is showing right now.
       idleRef.current?.({
@@ -399,9 +420,17 @@ export function AiProxyPanel({
   const tps = llmThroughput(llmMetrics);
   const online = !error;
   // Proxy admission queue: the header count prefers the waiter list, falling
-  // back to the scalar count when the proxy omits it.
-  const queueWaiters = queue?.waiters ?? [];
-  const queuedCount = queue ? (queue.waiters ? queue.waiters.length : (queue.waiting ?? 0)) : 0;
+  // back to the scalar count when the proxy omits it. A proxy request id is
+  // stable across the queued→running transition, so a stale queue snapshot can
+  // still list a waiter the (fresher) streams/requests snapshot already shows
+  // as running — running wins: such a waiter never renders as queued.
+  const runningIds = new Set(allRunning.map((x) => x.id));
+  const queueWaiters = (queue?.waiters ?? []).filter((w) => !runningIds.has(w.id));
+  const queuedCount = queue ? (queue.waiters ? queueWaiters.length : (queue.waiting ?? 0)) : 0;
+  // The queue rows hold their last good frame, but say so once the snapshot
+  // is older than a full poll cycle — the queue endpoint failed the latest
+  // cycle while the panel itself is online on the other endpoints.
+  const queueStale = online && queue != null && Date.now() - lastOk.queue >= POLL_MS;
   // Engine wait gauges and the proxy's admission queue are disjoint (verified
   // against the live observer), so summing never double-counts.
   const proxyWaiting = queue?.waiting ?? null;
@@ -462,6 +491,14 @@ export function AiProxyPanel({
               <>
                 <p className="text-xs uppercase tracking-wide text-muted">
                   Queued ({queuedCount})
+                  {queueStale && (
+                    <span
+                      className="text-warning"
+                      title="The proxy's queue endpoint is unreachable — these rows are the last known snapshot and may no longer be current."
+                    >
+                      {" · stale"}
+                    </span>
+                  )}
                 </p>
                 {queueWaiters.map((w) => (
                   <QueueRow key={w.id} item={w} maxWaitSec={queue?.maxWaitSec} />
