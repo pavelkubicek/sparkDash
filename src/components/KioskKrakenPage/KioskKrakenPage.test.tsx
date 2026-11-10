@@ -8,6 +8,8 @@ import { KioskKrakenPage } from "./KioskKrakenPage";
 let sparks: SparkSnapshot[] = [];
 /** Flipped per test to simulate a bridge the kiosk cannot reach. */
 let bridgesDown = false;
+/** The auditor bridge's status payload, live-shaped; mutable so a test can pin one field set. */
+let auditorStatus: Record<string, unknown> = { analyzing: 0, checking: 0, reviews_queued: 0, slots_used: 2, slots_total: 2 };
 /** The WS snapshot's models block: DS41 serving, GLM stopped. */
 const wsModels = {
   models: [
@@ -28,14 +30,14 @@ vi.mock("../../api/client", () => ({
     bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve([{ task_id: "t1" }, { task_id: "t2" }, { task_id: "t3" }]),
   fetchOrchestratorPlans: () =>
     bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve([{ status: "processing" }, { status: "completed" }]),
-  fetchAuditorStatus: () =>
-    bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve({ analyzing: 4, reviews_queued: 2 }),
+  fetchAuditorStatus: () => (bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve(auditorStatus)),
   fetchAiProxyStats: () => (bridgesDown ? Promise.reject(new Error("down")) : Promise.resolve({ totals: { total_tokens: 1_234_567 } })),
 }));
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/kiosk-kraken");
   bridgesDown = false;
+  auditorStatus = { analyzing: 0, checking: 0, reviews_queued: 0, slots_used: 2, slots_total: 2 };
   vi.useFakeTimers();
 });
 
@@ -74,8 +76,21 @@ describe("KioskKrakenPage", () => {
     expect(slides[3].classList.contains("is-active")).toBe(false);
     expect(slides[2].textContent).toContain("3"); // orchestrator running
     expect(slides[2].querySelector(".kk-waiting")!.textContent).toBe("/1"); // queued plans
-    expect(slides[3].textContent).toContain("4"); // auditor analyzing
-    expect(slides[3].querySelector(".kk-waiting")!.textContent).toBe("/2"); // queued reviews
+    // The auditor tile reads the daemon's shared-pool occupancy: 2 Tier-C hunts hold the pool
+    // while `analyzing` stays 0, and no reviews are queued — so the slide carries no "/N".
+    expect(slides[3].querySelector(".kk-value")!.textContent).toBe("2"); // auditor running jobs
+    expect(slides[3].querySelector(".kk-waiting")).toBeNull(); // no queued reviews
+  });
+
+  it("keeps the old tile for a pre-shared-pool auditor that reports no slots_used", async () => {
+    auditorStatus = { analyzing: 4, reviews_queued: 2 };
+    sparks = [makeSpark("a")];
+    const { container } = render(<KioskKrakenPage />);
+    await flush();
+    const slide = [...container.querySelectorAll(".kk-slide")].find((s) => s.className.includes("kk-slide--auditor"))!;
+    // No shared-pool counter to trust — the tile degrades to `analyzing` and keeps the queue suffix.
+    expect(slide.querySelector(".kk-value")!.textContent).toBe("4/2");
+    expect(slide.querySelector(".kk-waiting")!.textContent).toBe("/2");
   });
 
   it("swaps the carousel groups every 3 seconds and wraps, models slide spanning the row", async () => {

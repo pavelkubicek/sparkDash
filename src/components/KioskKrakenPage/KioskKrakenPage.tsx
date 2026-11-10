@@ -133,7 +133,7 @@ function useWakeLock() {
 /**
  * /kiosk-kraken: the wall for the round NZXT Kraken LCD. Four big tiles — the top row is
  * static (fleet tok/s, requests the serving engines run and wait on), the bottom row is a carousel that cycles
- * temperature, proxy tokens today, orchestrator running and auditor analyzing every 2 s
+ * temperature, proxy tokens today, orchestrator running and auditor running jobs every 2 s
  * with a fade. Icon on the left, number on the right, nothing else; the sparkDash brand
  * sits above. Sized in vmin so it fills any square viewport. Like the big wall it holds
  * its last frame when a poll fails, and Esc returns to the dashboard.
@@ -192,8 +192,14 @@ export function KioskKrakenPage() {
     const plans = await fetchOrchestratorPlans();
     return plans.filter((p) => p.status === "queued" || p.status === "processing" || p.status === "creating_ticket").length;
   }, BRIDGE_REFRESH_MS);
-  const auditorRunning = usePolled(async () => (await fetchAuditorStatus()).analyzing, BRIDGE_REFRESH_MS);
-  const auditorQueued = usePolled(async () => (await fetchAuditorStatus()).reviews_queued, BRIDGE_REFRESH_MS);
+  // The auditor's own honest shared-pool occupancy: upstream computes
+  // slots_used = analyzing + checking + Tier-C hunts (running/stopping) + proof runs, so a
+  // fleet busy with hunts reads 0 in `analyzing` alone. `?? analyzing` keeps the old tile
+  // for a pre-shared-pool daemon that omits slots_used; nullish stays nullish → the tile
+  // renders "—", never a fabricated 0.
+  const auditorStatus = usePolled(fetchAuditorStatus, BRIDGE_REFRESH_MS);
+  const auditorRunning = auditorStatus?.slots_used ?? auditorStatus?.analyzing;
+  const auditorQueued = auditorStatus?.reviews_queued;
   const tokensToday = usePolled(async () => {
     const today = dateStrInTZ(new Date());
     return (await fetchAiProxyStats(today, today)).totals.total_tokens;
@@ -253,7 +259,7 @@ export function KioskKrakenPage() {
     },
     {
       key: "auditor",
-      label: "Auditor analyzing",
+      label: "Auditor running jobs",
       // Auditor mark — its repo favicon (orange scan hexagon on the dark app tile).
       icon: (
         <svg className="kk-icon" viewBox="0 0 32 32" aria-hidden>
