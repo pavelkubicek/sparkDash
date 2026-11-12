@@ -317,3 +317,51 @@ the storage collectors already had a local/nsenter transport (context.js), only 
 tests flaked under parallel CPU load; both suites green when run sequentially — pre-existing timing sensitivity, not this change.)
 
 **Next:** deploy + e2e `/storage` with dell.lan (picker card, status, an analysis run, delete lane).
+
+## 2026-11-12 — Deploy 1b9f906 (isLocal storage gate) + e2e dell.lan
+
+**Deployed:** `1b9f906` ("feat(storage): admit the dashboard's own Linux machine to Storage Manager")
+to the live stack (`sparkdash` project, container `sparkDash`, host network, :5555). Bind mounts
+re-verified via `docker inspect` before restart: `./server→/app/server`, `./dist→/app/dist:ro`,
+`./config→/app/config`, `./src/shared→/app/src/shared:ro` (plus `/host/{proc,root,sys}` for the
+nsenter transport). No image rebuild; version stays image-baked 2.75.0 in `/api/health` (documented).
+
+- `npm run build`: Vite OK in 2.68 s → `dist/assets/index-DiCRqvC3.js` (2,006.95 kB; >500 kB chunk warning only).
+- `docker compose restart`: 12.0 s; `GET /api/health` `{"ok":true,"authMode":"open-remote","version":"2.75.0",
+  "warnings":["SSH identity is not mounted"]}` green on the first probe after the container reported Started.
+  `StartedAt=2026-11-12T12:31:30Z`, RestartCount 0, new PID 3010242 (was 2205932) — fresh process proven.
+- Serve-asset parity (triple match): host `dist/assets/index-DiCRqvC3.js` sha256
+  `44d4f5d98d9da96ee55c21048a821fe3be8853f44dddd5cf890ee6b1902ca2cb` == served from :5555 == in-container copy.
+- `config/settings.json` left untouched (server rewrites it).
+
+**E2E (headless Chromium, 1440×900, shots in `/tmp/deploy-1b9f906/shots/`, API dumps
+`/tmp/dell-storage-status.json` / `/tmp/dell-storage-context.json`):** every check PASS; across all pages
+the console held only 3 benign `log` entries (`[ws] connected` ×3) — **zero uncaught errors, zero
+console errors, zero warnings.**
+
+1. `/storage` (01-storage-picker.png): picker shows **FIVE** units — spark1–4.lan **plus dell.lan**
+   (green dot, "338 GB used of 466 GB"). Fork feature live.
+2. Click dell.lan (02-storage-dell.png): real disks render — Main disk
+   `/dev/mapper/ubuntu--vg-ubuntu--lv · ext4`, "107 GB free", "339 GB used of 466 GB", "73% full",
+   context line **"Runs via the dashboard's container as root"**. No "only supports DGX Spark",
+   no "No DGX Spark to look at", no error banner. The old 400 is gone.
+3. API proof: GET `/api/sparks/dell-lan/storage` → 200, `filesystems` 3 entries, first
+   `{source:"/dev/mapper/ubuntu--vg-ubuntu--lv",fstype:"ext4",mount:"/",totalBytes:500235124736,
+   usedBytes:363297128448,availBytes:115473121280}`. (Status payload lives on GET `/api/sparks/:id/storage`
+   — there is no `/storage/status` route.) GET `/api/sparks/dell-lan/storage/context` → 200,
+   **kind=`container-local`, transport=`nsenter`**, hostname dell.lan, inContainer false,
+   `features.analyse.supported=true`.
+4. Regression: `/overview` (03-overview-full.png) — "5 Sparks · 4 online", all 5 unit cards green with
+   live numbers (spark2 GPU 95%/62 °C, spark4 96%/62 °C, dell.lan HOST RAM 7.9/14.8 GB, CPU 65 °C,
+   storage 339/466 GB); zero offline/unreachable. All 4 spark units in `/storage` still render their
+   Main disk + "Runs over SSH" panel (clicked through each; spark1/2 nvme0n1p2, spark3/4 nvme0n1p3, ext4).
+5. Folder-analysis touch: started "Whole disk /" analysis on dell.lan from the UI — scan ran on the
+   host via the nsenter script pipeline (progress bar, "Analysing / … on dell.lan", 04-dell-scan-running.png),
+   stopped after ~70 s via the UI **Stop scan** → banner "Scan stopped. Nothing of the scan is left
+   running on the Spark.", API confirms `job.state=cancelled`, `stop.outcome=terminated`
+   (05-dell-scan-stopped.png). Nothing left behind.
+
+**Broken:** nothing found. **Next:** delete-lane verification on dell.lan by the user (one safe folder,
+quarantine/staging behaviour on the host transport); upstream PR candidate for the two-gate admission
+change (`StorageManager.js` assertSupported + `SparkPicker.tsx` isStorageSpark + App.tsx isLocal
+REST-fallback plumbing).
