@@ -654,8 +654,9 @@ export function buildResetProgram(overrides = {}) {
 /**
  * Parse a program's KEY=value stdout. Unknown keys are dropped, values are
  * length-capped, and a missing RESULT line is an error (never "healthy").
+ * Keys that can repeat (one line per card or service) come back as arrays.
  * @param {string} out
- * @returns {Record<string, string>}
+ * @returns {Record<string, any>}
  */
 export function parseProgramOutput(out) {
   const KEYS = new Set([
@@ -664,10 +665,14 @@ export function parseProgramOutput(out) {
     "CRON_INSTALLED", "CRON_CLOCKS", "CRON_FAILED",
     "SCHED_INSTALLED", "SCHED_KIND", "SCHED_FAILED", "SCHED_TZ", "SCHED_WINDOWS",
   ]);
+  const LIST_KEYS = new Set(["CARD", "SVC_CARD", "OTHER_SVC"]);
+  const MAX_LIST = 64;
   const res = {};
   for (const line of String(out ?? "").split("\n")) {
     const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
-    if (m && KEYS.has(m[1])) res[m[1]] = m[2].slice(0, 300);
+    if (!m) continue;
+    if (KEYS.has(m[1])) res[m[1]] = m[2].slice(0, 300);
+    else if (LIST_KEYS.has(m[1]) && (res[m[1]] ??= []).length < MAX_LIST) res[m[1]].push(m[2].slice(0, 300));
   }
   if (res.RESULT !== "ok" && res.RESULT !== "error") {
     return { RESULT: "error", CODE: "bad-output", MSG: "the unit returned an unexpected answer" };

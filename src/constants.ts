@@ -5,6 +5,8 @@ export const TOKENS_ID = "__tokens__";
 export const ENERGY_ID = "__energy__";
 export const TEMPS_ID = "__temps__";
 export const ACTIVITY_ID = "__activity__";
+/** Storage Manager: what fills a Spark's disk, Docker images, and deleting them. */
+export const STORAGE_ID = "__storage__";
 export const SHOWCASE_ID = "__showcase__";
 /** Cost compare page: fleet token usage priced as a hosted API model. */
 export const COST_ID = "__cost__";
@@ -12,6 +14,8 @@ export const COST_ID = "__cost__";
 export const KIOSK_ID = "__kiosk__";
 /** Kiosk for the round NZXT Kraken LCD: the same wall reduced to a 2 × 3 fleet-metric matrix. */
 export const KIOSK_KRAKEN_ID = "__kiosk_kraken__";
+/** Opt-in API Keys page (Settings → API Keys); only reachable while that setting is on. */
+export const API_KEYS_ID = "__apikeys__";
 /** Benchmark pages: the active id is this prefix + the benchmark type (decode, tool-eval, …). */
 export const BENCH_PREFIX = "__bench__:";
 /** Tool pages (REA, …): the active id is this prefix + the tool type. */
@@ -23,10 +27,12 @@ const FIXED_PATHS: Record<string, string> = {
   [ENERGY_ID]: "/energy",
   [TEMPS_ID]: "/temps",
   [ACTIVITY_ID]: "/activity",
+  [STORAGE_ID]: "/storage",
   [SHOWCASE_ID]: "/showcase",
   [COST_ID]: "/cost",
   [KIOSK_ID]: "/kiosk",
   [KIOSK_KRAKEN_ID]: "/kiosk-kraken",
+  [API_KEYS_ID]: "/api-keys",
 };
 
 export function benchId(type: string): string {

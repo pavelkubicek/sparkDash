@@ -475,7 +475,7 @@ const AMD_SMI_RESOLVER = [
 const AMD_GPU_INDEX_OFFSET = 1000;
 const INTEL_GPU_INDEX_OFFSET = 2000;
 
-function tagCollectionResult(result, successful) {
+export function tagCollectionResult(result, successful) {
   Object.defineProperty(result, COLLECTION_SUCCESS, {
     value: successful === true,
     enumerable: false,
@@ -565,8 +565,9 @@ const REMOTE_IO_MARKER = "---sparkdash-block-io---";
 const DISK_RATE_MIN_WINDOW_MS = 250;
 
 export class SystemCollector {
-  constructor(spark) {
+  constructor(spark, { exec = sshExec } = {}) {
     this.spark = spark;
+    this._sshExec = exec;
     this._nvidiaSmiPath = this._resolveNvidiaSmiPath();
 
     // Rate-tracking baselines
@@ -851,7 +852,7 @@ export class SystemCollector {
     const vramRead = this._intelVram.stale;
     const [gpuOut, amd, clockCapMHz, intelOut] = await Promise.all([
       this._nvidiaSmi(
-        "--query-gpu=temperature.gpu,utilization.gpu,power.draw,power.limit,clocks.current.sm,clocks.max.sm,clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown,clocks_throttle_reasons.hw_slowdown,clocks_throttle_reasons.sw_power_cap,index,name,uuid --format=csv,noheader,nounits"
+        "--query-gpu=temperature.gpu,utilization.gpu,power.draw,power.limit,clocks.current.sm,clocks.max.sm,clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown,clocks_throttle_reasons.hw_slowdown,clocks_throttle_reasons.sw_power_cap,index,name,uuid,fan.speed,pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max --format=csv,noheader,nounits"
       ).catch(() => null),
       this._probeLocalAmd(),
       this._readLocalClockCap(),
@@ -956,6 +957,14 @@ export class SystemCollector {
   /** Where sysfs may be mounted: the host bind mount in the container, else /sys. */
   _sysRoots() {
     return [HOST_PATHS.SYS, "/sys"];
+  }
+
+  /**
+   * The sysfs root to read: the host bind mount when it exists (Docker), else /sys. Outside a container
+   * `/host/sys` does not exist, and a read that joined HOST_PATHS.SYS directly found no sensor at all.
+   */
+  _sysRoot(roots = this._sysRoots()) {
+    return roots.find((root) => fs.existsSync(root)) ?? roots[roots.length - 1];
   }
 
   /**
@@ -1206,7 +1215,7 @@ export class SystemCollector {
 
   /**
    * Parse every line of the `--query-gpu` output — one per physical GPU.
-   * Fields 0-9 are the metrics; 10-12 (`index,name,uuid`) identify the card.
+   * Fields 0-9 are the metrics; 10-12 (`index,name,uuid`) identify the card; 13-17 are fan % and the PCIe link.
    * Returns [] when nvidia-smi printed nothing.
    */
   _parseGpuLines(output, { source = "nvidia" } = {}) {
@@ -1226,6 +1235,16 @@ export class SystemCollector {
       const index = this._parseSmiNumber(parts[10]) ?? i;
       const name = parts[11] && !/^\[?n\/a\]?$/i.test(parts[11]) ? parts[11] : null;
       const uuid = parts[12] && /^GPU-/i.test(parts[12]) ? parts[12] : null;
+      // Fields 13-17 (fan, PCIe link) come from the same read-only query; an older fixture or a card
+      // that says [N/A] (a laptop, a GB10, a passively cooled card) leaves them null.
+      const fanPct = this._parseSmiNumber(parts[13]);
+      const pcieGen = this._parseSmiNumber(parts[14]);
+      const pcieGenMax = this._parseSmiNumber(parts[15]);
+      const pcieWidth = this._parseSmiNumber(parts[16]);
+      const pcieWidthMax = this._parseSmiNumber(parts[17]);
+      const pcie = pcieGen == null && pcieWidth == null
+        ? null
+        : { gen: pcieGen, genMax: pcieGenMax, width: pcieWidth, widthMax: pcieWidthMax };
       const vendor = /nvidia/i.test(name || "") ? "nvidia" : /amd|radeon/i.test(name || "") ? "amd" : source === "windows" ? "unknown" : "nvidia";
       const windowsAdapter = source === "windows" && vendor !== "nvidia";
       const temperature = rawTemperature ?? 0;
@@ -1238,6 +1257,8 @@ export class SystemCollector {
         physicalIndex: index,
         name,
         uuid,
+        fanPct,
+        pcie,
         temperature,
         usage,
         powerDraw,
@@ -1391,6 +1412,10 @@ export class SystemCollector {
         temperature: d.temperature,
         usage: d.usage,
         power: { draw: d.powerDraw, limit: d.powerLimit },
+        // Fan speed in % of its maximum, and the PCIe link now and at its best. A card with no memory
+        // figures of its own (the GB10) shares the CPU's link, so its PCIe numbers say nothing and are left out.
+        fanPct: d.fanPct ?? null,
+        pcie: mem.total == null ? null : d.pcie ?? null,
         vram,
         throttle: d.throttle,
         processes: this._topProcesses(own),
@@ -1625,10 +1650,10 @@ export class SystemCollector {
   }
 
   /** Local sensor candidates: hwmon chips by allowlist, then thermal zones. */
-  _localCpuTempCandidates() {
+  _localCpuTempCandidates(sysRoot = this._sysRoot()) {
     const candidates = [];
     try {
-      const hwmonDir = path.join(HOST_PATHS.SYS, "class/hwmon");
+      const hwmonDir = path.join(sysRoot, "class/hwmon");
       if (fs.existsSync(hwmonDir)) {
         for (const entry of fs.readdirSync(hwmonDir)) {
           const nameFile = path.join(hwmonDir, entry, "name");
@@ -1650,7 +1675,7 @@ export class SystemCollector {
       /* fall through to thermal zones */
     }
     try {
-      const thermalDir = path.join(HOST_PATHS.SYS, "class/thermal");
+      const thermalDir = path.join(sysRoot, "class/thermal");
       if (fs.existsSync(thermalDir)) {
         const zones = fs.readdirSync(thermalDir).filter((z) => z.startsWith("thermal_zone"));
         for (const zone of zones) {
@@ -2164,7 +2189,7 @@ export class SystemCollector {
 
   async _getNetworkLinkSpeedMbps(iface) {
     try {
-      const speedFile = path.join(HOST_PATHS.SYS, "class/net", iface, "speed");
+      const speedFile = path.join(this._sysRoot(), "class/net", iface, "speed");
       const raw = fs.readFileSync(speedFile, "utf-8").trim();
       const n = parseInt(raw, 10);
       return Number.isFinite(n) && n > 0 ? n : null;
@@ -2223,6 +2248,7 @@ export class SystemCollector {
       cpuUsed: usedMB - gpuUsedMB,
       used: usedMB,
       available: Math.round(availKB / 1024),
+      availableSource: availMatch ? "linux-memavailable" : null,
       percentage,
       oomRisk,
       bandwidth,
@@ -2244,7 +2270,7 @@ export class SystemCollector {
   _buildRemoteGpuCommand() {
     const vramRead = this._intelVram.stale;
     return [
-      "if command -v nvidia-smi >/dev/null 2>&1; then printf '\\n__NVIDIA__\\n'; nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,power.draw,power.limit,clocks.current.sm,clocks.max.sm,clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown,clocks_throttle_reasons.hw_slowdown,clocks_throttle_reasons.sw_power_cap,index,name,uuid --format=csv,noheader,nounits 2>/dev/null; printf '\\n__NVIDIA_VRAM__\\n'; nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null; printf '\\n__NVIDIA_APPS__\\n'; nvidia-smi --query-compute-apps=pid,process_name,used_gpu_memory,gpu_uuid --format=csv,noheader,nounits 2>/dev/null; fi",
+      "if command -v nvidia-smi >/dev/null 2>&1; then printf '\\n__NVIDIA__\\n'; nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,power.draw,power.limit,clocks.current.sm,clocks.max.sm,clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown,clocks_throttle_reasons.hw_slowdown,clocks_throttle_reasons.sw_power_cap,index,name,uuid,fan.speed,pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max --format=csv,noheader,nounits 2>/dev/null; printf '\\n__NVIDIA_VRAM__\\n'; nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null; printf '\\n__NVIDIA_APPS__\\n'; nvidia-smi --query-compute-apps=pid,process_name,used_gpu_memory,gpu_uuid --format=csv,noheader,nounits 2>/dev/null; fi",
       `${AMD_SMI_RESOLVER}; if [ -n "$amd_smi" ]; then printf '\\n__AMD__\\n'; "$amd_smi" metric -u -p -m -t --json 2>/dev/null; printf '\\n__AMD_LIMITS__\\n'; "$amd_smi" static -l --json 2>/dev/null; fi`,
       `printf '\\n__INTEL__\\n'; ${buildIntelProbeScript({ sudo: this._intelSudo.allowed && getSettings().intelVramSudo, vram: vramRead })}`,
       "printf '\\n__MEMINFO__\\n'; grep -E 'MemTotal|MemAvailable' /proc/meminfo 2>/dev/null",
@@ -2382,7 +2408,7 @@ export class SystemCollector {
     }, nvidiaFailed);
   }
 
-  async _getRemoteGpu(executor = sshExec) {
+  async _getRemoteGpu(executor = this._sshExec) {
     try {
       const output = await executor(this.spark, this._buildRemoteGpuCommand());
       const gpuData = this._parseRemoteGpu(output);
@@ -2567,7 +2593,7 @@ export class SystemCollector {
 
   async _getRemoteRam() {
     try {
-      const output = await sshExec(this.spark, this._buildRemoteRamCommand());
+      const output = await this._sshExec(this.spark, this._buildRemoteRamCommand());
       return this._parseRemoteRam(output);
     } catch (err) {
       console.error(`[SystemCollector] Remote RAM error for ${this.spark.id}:`, err.message);
@@ -2575,7 +2601,7 @@ export class SystemCollector {
     }
   }
 
-  async _getRemoteStorage(execute = sshExec) {
+  async _getRemoteStorage(execute = this._sshExec) {
     try {
       // Include root (/); exclude pseudo filesystems via -x and type filter. The block devices'
       // cumulative sector counters ride in the same round trip, after a marker line.
@@ -3034,7 +3060,7 @@ export class SystemCollector {
     }
   }
 
-  async _getRemoteNetwork(execute = sshExec) {
+  async _getRemoteNetwork(execute = this._sshExec) {
     try {
       const output = await execute(this.spark, this._buildRemoteNetworkCommand());
       return this._parseRemoteNetwork(output);
@@ -3088,6 +3114,7 @@ export class SystemCollector {
       cpuUsed: cpuUsedMB,
       used: usedMB,
       available: Math.round(availKB / 1024),
+      availableSource: availMatch ? "linux-memavailable" : null,
       percentage,
       oomRisk,
       bandwidth: { current: 0, peak: 400 },
@@ -3096,7 +3123,7 @@ export class SystemCollector {
 
   async _getRemoteUnifiedMemory() {
     try {
-      const output = await sshExec(this.spark, this._buildRemoteUnifiedMemoryCommand());
+      const output = await this._sshExec(this.spark, this._buildRemoteUnifiedMemoryCommand());
       return this._parseRemoteUnifiedMemory(output);
     } catch (err) {
       console.error(`[SystemCollector] Remote Unified Memory error for ${this.spark.id}:`, err.message);
@@ -3413,16 +3440,23 @@ export class SystemCollector {
   /**
    * True when this process's netns IS the host's (network_mode: host) —
    * only then does the container's own /proc/net mirror the host's.
+   *
+   * Rootless Docker may deny the host namespace symlink. In that case only
+   * an explicit deployment declaration permits the fallback; a shared procfs
+   * mount does not prove shared networking. Readable namespace IDs take
+   * precedence, including a mismatch against the deployment declaration.
    */
   _containerNetnsIsHost() {
     if (this._containerNetnsShared !== null) return this._containerNetnsShared;
     try {
-      const host = fs.statSync(path.join(HOST_PATHS.PROC, "1", "ns", "net"));
-      const mine = fs.statSync("/proc/self/ns/net");
-      this._containerNetnsShared = host.dev === mine.dev && host.ino === mine.ino;
-    } catch {
-      this._containerNetnsShared = false;
-    }
+      const hostLink = fs.readlinkSync(path.join(HOST_PATHS.PROC, "1", "ns", "net"));
+      const mineLink = fs.readlinkSync("/proc/self/ns/net");
+      if (/^net:\[\d+\]$/.test(hostLink) && /^net:\[\d+\]$/.test(mineLink)) {
+        this._containerNetnsShared = hostLink === mineLink;
+        return this._containerNetnsShared;
+      }
+    } catch { /* Permission failure is inconclusive, not proof of equality. */ }
+    this._containerNetnsShared = process.env.SPARKDASH_HOST_NETWORK === "1";
     return this._containerNetnsShared;
   }
 
@@ -3508,7 +3542,7 @@ export class SystemCollector {
         meminfo = results[2];
         coresParsed = (cpuinfo.match(/processor\s*:/g) || []).length;
       } else {
-        const out = await sshExec(this.spark, [
+        const out = await this._sshExec(this.spark, [
           "nvidia-smi --query-gpu=name,driver_version --format=csv,noheader,nounits 2>/dev/null",
           "echo '---'",
           "grep -E '^model name' /proc/cpuinfo | head -1",
