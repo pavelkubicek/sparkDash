@@ -16,9 +16,10 @@ export function mainDisk(spark: SparkSnapshot): { usedBytes: number; totalBytes:
   return main ? { usedBytes: main.used * MB, totalBytes: main.total * MB } : null;
 }
 
-/** Storage Manager supports DGX Spark units only: not the GPU hosts (Windows PCs, Macs). */
+/** Storage Manager supports DGX Spark units plus the dashboard's own machine (isLocal): not remote GPU hosts (Windows PCs, Macs). */
 export function isStorageSpark(spark: SparkSnapshot): boolean {
-  return spark.kind !== "host" && spark.platform !== "darwin" && spark.platform !== "windows";
+  // fork: the dashboard's own machine is kind "host" too, but it is a local Linux box, so isLocal admits it.
+  return (spark.kind !== "host" || spark.isLocal === true) && spark.platform !== "darwin" && spark.platform !== "windows";
 }
 
 export function usageTone(pct: number): "good" | "warn" | "bad" {

@@ -175,7 +175,9 @@ const httpError = (status, message, code, extra) => Object.assign(new Error(mess
 /** @param {object} spark registry entry */
 export function assertSupported(spark) {
   if (!spark) throw httpError(404, "Spark not found");
-  if (spark.kind === "host") throw httpError(400, "Storage Manager only supports DGX Spark units for now");
+  // fork: the dashboard's own machine registers as kind "host" with isLocal: true (config/sparks.json),
+  // yet it is a local Linux box like any Spark, so it alone is admitted; remote hosts keep the refusal.
+  if (spark.kind === "host" && !spark.isLocal) throw httpError(400, "Storage Manager only supports DGX Spark units for now");
   if (spark.platform === "windows" || spark.platform === "darwin") {
     throw httpError(400, "Storage Manager only supports Linux DGX Spark units for now");
   }

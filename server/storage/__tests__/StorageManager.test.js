@@ -33,6 +33,12 @@ test("only Spark units are supported", () => {
   assert.throws(() => assertSupported(undefined), (e) => e.status === 404);
 });
 
+test("the dashboard's own machine (kind host, isLocal) is supported", () => {
+  assert.doesNotThrow(() => assertSupported({ id: "l", kind: "host", isLocal: true, platform: "linux" }));
+  // The Linux gate is untouched: even a local unit on another OS stays refused.
+  assert.throws(() => assertSupported({ id: "l", kind: "host", isLocal: true, platform: "windows" }), (e) => e.status === 400 && /Linux DGX Spark/.test(e.message));
+});
+
 test("parseElevation: a password needs sudo: true", () => {
   assert.deepEqual(parseElevation({}), { elevate: false, password: null, remember: false });
   assert.deepEqual(parseElevation({ sudo: true, sudoPassword: "pw" }), { elevate: true, password: "pw", remember: false });

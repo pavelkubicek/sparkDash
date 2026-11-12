@@ -152,6 +152,15 @@ test("host units, unknown units and rate-limited callers are refused before anyt
   });
 });
 
+test("the dashboard's own machine (isLocal host) gets status, not a 400", async () => {
+  const run = async () => "RESULT=ok\nUSER=me\nSUDO=no\nFS=/dev/nvme0n1p2 ext4 1000 400 600 40% /\nDOCKER=ok\nDOCKER_ROOT=/var/lib/docker\n";
+  await withApp({ run, sparks: { l1: { id: "l1", name: "L1", kind: "host", isLocal: true, platform: "linux" } } }, async (base) => {
+    const res = await fetch(`${base}/l1/storage`);
+    assert.equal(res.status, 200, "the local host passes the gate the remote host fails");
+    assert.equal((await res.json()).filesystems[0].mount, "/");
+  });
+});
+
 test("unexpected errors stay generic", async () => {
   await withApp({ run: async () => "RESULT=ok\n" }, async (base, _e, manager) => {
     manager.snapshot = () => { throw new Error("internal detail /secret/path"); };

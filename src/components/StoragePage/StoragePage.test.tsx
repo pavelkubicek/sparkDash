@@ -99,6 +99,16 @@ describe("StoragePage", () => {
     expect(button("Analyse").disabled).toBe(false);
   });
 
+  it("offers the dashboard's own machine too: an isLocal host is a candidate", async () => {
+    const localHost = { ...makeSpark("dell-lan"), kind: "host" as const, isLocal: true, platform: "linux" as const, name: "dell.lan" };
+    render(<StoragePage sparks={[makeSpark("s1"), localHost]} />);
+    await flush();
+    expect(text()).toContain("dell.lan");
+    act(() => button("dell.lan").click());
+    await flush();
+    expect(fetchStorageStatus).toHaveBeenCalledWith("dell-lan");
+  });
+
   it("offers whole disk, home folder, cache folder and a specific folder, nothing else", async () => {
     vi.mocked(fetchStorageStatus).mockResolvedValue({ ...STATUS, homeDir: "/home/me" });
     render(<StoragePage sparks={[makeSpark("s1")]} />);

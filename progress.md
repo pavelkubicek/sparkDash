@@ -293,3 +293,27 @@ Extra evidence: `/spark/spark1-lan` GPU panel (09-spark1-gpu.png) shows the new 
 **Broken:** nothing found. **Next:** optionally enable API Keys (Settings → API Keys + bridge env) to see
 the page for real; push `merge/v2.0.0` to `fork`; image rebuild would restore the correct version string
 in `/api/health` (cosmetic).
+
+## 2026-11-12 — Storage Manager: admit the dashboard's own machine (isLocal host)
+
+**Changed (2 gates + 1 fallback + 3 tests):**
+- `server/storage/StorageManager.js:180` — `assertSupported` now refuses only
+  `kind === "host" && !spark.isLocal` (message verbatim; `// fork:` marker). The Linux/platform gate below is untouched.
+- `src/components/StoragePage/SparkPicker.tsx:22` — `isStorageSpark` admits
+  `(kind !== "host" || isLocal === true)` (fail-closed `=== true`, SparkSnapshot.isLocal is optional; `// fork:` marker).
+- `src/App.tsx` — REST fallback kept dropping `isLocal`: added to the `if (existing)` merge (line 419) and to
+  `placeholderSnapshot` (roleFields + return, lines 128/144 + call site 439), so dell.lan is in the picker before the first WS snapshot.
+- Tests: `StorageManager.test.js:36` (assertSupported passes `{kind:"host", isLocal:true, platform:"linux"}`; local windows host still 400),
+  `routes.test.js:155` (GET `/l1/storage` 200 for an isLocal host), `StoragePage.test.tsx:102` (isLocal host renders in the picker, clicking fetches its status).
+  Existing host-rejection fixtures (bare `kind:"host"`, no isLocal) untouched and green.
+
+**Why:** user wants storage management for dell-lan, the dashboard's own machine (config/sparks.json:
+kind "host", platform "linux", isLocal true). Consultant verdict (Option B): relax the gate to
+`kind === "host"` only when `spark.isLocal === true` — no reclassification, no schema change, no new flags;
+the storage collectors already had a local/nsenter transport (context.js), only the feature gate blocked it.
+
+**Verified:** typecheck clean; build clean; `test:server` 2366 tests / 2341 pass / 0 fail / 25 skipped (env);
+`test:frontend` 200 files / 1523 tests / 0 fail. (One QualityBench timing test and four QualityBenchDialog
+tests flaked under parallel CPU load; both suites green when run sequentially — pre-existing timing sensitivity, not this change.)
+
+**Next:** deploy + e2e `/storage` with dell.lan (picker card, status, an analysis run, delete lane).

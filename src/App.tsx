@@ -125,6 +125,7 @@ function placeholderSnapshot(
     comfyPort?: number;
     tailscaleMonitoring?: boolean;
     kind?: "spark" | "host" | "mac";
+    isLocal?: boolean;
   }
 ): SparkSnapshot {
   const role =
@@ -140,6 +141,7 @@ function placeholderSnapshot(
     id,
     name,
     kind: roleFields?.kind ?? "spark",
+    isLocal: roleFields?.isLocal,
     online: false,
     uptime: null,
     disabledDevices,
@@ -414,6 +416,7 @@ function DashboardApp() {
               llmPorts: c.llmPorts ?? existing.llmPorts,
               llmPort: c.llmPorts?.[0] ?? c.llmPort ?? existing.llmPort,
               kind: c.kind ?? existing.kind,
+              isLocal: c.isLocal ?? existing.isLocal,
             };
           }
           return placeholderSnapshot(
@@ -433,6 +436,7 @@ function DashboardApp() {
               comfyPort: c.comfyPort,
               tailscaleMonitoring: c.tailscaleMonitoring,
               kind: c.kind,
+              isLocal: c.isLocal,
             }
           );
         })
