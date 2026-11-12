@@ -238,3 +238,58 @@ upstream's version → **2.90.0**; the `test:server` glob is the UNION (fork-onl
   later). Suggested next step: fast-forward `merge/v2.0.0` to `eefe390`, run the
   stack once in Docker (GPU fan/PCIe tiles, Storage Manager, API Keys page,
   power-meter wall series, kiosk kraken), then push to `fork`.
+
+## 2026-11-12 — Deploy v2.90.0 + e2e
+
+**Deployed:** `merge/v2.0.0` @ `eefe390` ("Merge origin/main (v2.90.0) into merge/v2.0.0") to the
+production compose stack (`sparkdash` project, container `sparkDash`, host network, :5555).
+
+- `npm install`: "up to date" (node_modules already matched the merged lockfile).
+- `npm run build`: Vite OK in 1.0 s → `dist/assets/index-CRhClZXB.js` (2,006.86 kB; >500 kB chunk warning only).
+- Mounts confirmed live via `docker inspect`: `./server→/app/server`, `./dist→/app/dist:ro`,
+  `./config→/app/config`, `./src/shared→/app/src/shared:ro` (override keeps the dist mount).
+- `docker compose restart`: health 200 within 5 s; `StartedAt=2026-11-12T09:51:28Z` (was 2026-11-08),
+  RestartCount 0 — fresh process proven.
+- `GET /api/health`: `{"ok":true,"authMode":"open-remote","version":"2.75.0",
+  "warnings":["SSH identity is not mounted"]}` — version is the **image-baked** package.json value
+  (documented container behavior; no image rebuild per plan).
+- Serve-asset parity: host `dist/assets/index-CRhClZXB.js` sha256
+  `5039524da50059a2be10da0bed1d2fc0657baef44cfe5895d26e4ee4b340a530` == served via :5555 == in-container copy.
+- `config/settings.json` shows as modified in `git status` (server rewrites it; content diff vs HEAD is
+  empty at check time) — left untouched per policy.
+
+**E2E (headless Chromium, 1440×900, shots in `/tmp/deploy-290/shots/`, page texts in `/tmp/deploy-290/`,
+full results `/tmp/deploy-290/results.json`):** all 8 checks PASS; **zero uncaught errors, zero console
+errors, zero warnings** across every page.
+
+1. `/overview` (01-overview.png): 5/5 spark cards live (spark1 95% GPU/64°C, spark3 96%/69°C …);
+   AI Proxy panel "RUNNING REQUESTS (6)" + stats (93.03% cache); Recent activity rows present.
+   Queued section: proxy queue empty at check time ("0 wait") → header correctly hidden (renders only
+   when `queuedCount>0`, AiProxyPanel.tsx:490); fork dedup (running-wins filter :427) and `· stale`
+   marker (:499) code-verified, not observable with healthy endpoints.
+2. `/` (02-root.png): default Overview render; sidebar = fork's TOOLS group (REA) + BENCHMARKS incl.
+   VulnHunter + upstream's **Storage** entry. **API Keys entry absent by design**: `settings.apiKeysEnabled
+   = false` (verified via `GET /api/settings`), upstream opt-in; sidebar + route gated on it.
+3. `/storage` (03-storage.png): Storage Manager renders — 4 units, disk breakdown, Files-and-folders/
+   Docker lanes, analyse flow, permissions notice.
+4. `/api-keys` (13-api-keys-redirect.png): route renders Overview — App.tsx:503 redirects when
+   `apiKeysEnabled=false`. Working-as-designed opt-in gate, NOT a merge regression; enabling requires
+   Settings (config edit — out of scope). Localized labels confirmed in source + i18n pass.
+5. `/kiosk-kraken` (05-kiosk-kraken.png): auditor tile shows **2**; daemon `GET :10010/api/status`
+   reports `slots_used:2, analyzing:0` → fork `slots_used ?? analyzing` (KioskKrakenPage.tsx:201)
+   proven live (pre-fix would show 0). "—" only when both nullish.
+6. `/bench` — bare `/bench` is not a route (catalog lives in the sidebar; renders Overview fallback).
+   Pages checked instead: `/bench/decode` (10, v2 temp/thinking controls), `/bench/quality` (11, Compare +
+   GSM8K-Platinum/MMLU-Pro/MMLU), `/bench/vulnhunt` (12, fork page, opt-in-off clean state, nothing started).
+7. `/energy` (07-energy.png): renders with power-telemetry estimate ("Estimated … Not wall-metered");
+   no wall series because power meters are not configured — clean state, no error.
+8. Mobile 420×900 (08-mobile-overview.png): `/overview` renders fully, `scrollWidth 412 ≤ clientWidth 420`
+   — no overflow/crash; resized back afterwards.
+
+Extra evidence: `/spark/spark1-lan` GPU panel (09-spark1-gpu.png) shows the new rows — Card NVIDIA GB10,
+**Fan —**, **PCIe link —** (GB10 reports N/A; rows render with em-dash per design), Throttle reasons
+"Clock locked ≤ 2200 MHz".
+
+**Broken:** nothing found. **Next:** optionally enable API Keys (Settings → API Keys + bridge env) to see
+the page for real; push `merge/v2.0.0` to `fork`; image rebuild would restore the correct version string
+in `/api/health` (cosmetic).
