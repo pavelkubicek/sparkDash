@@ -460,3 +460,36 @@ the running tile 7; earlier samples showed the rate change 214.7 → 185.3 →
 153.5 → 174.1 as batches completed. The engine emits no per-step or periodic
 stats line, so a per-second aggregate is not measurable from it; the age makes
 the actual cadence explicit instead of interpolating.
+
+## 2026-11-13 — Model Launcher: every card read "running" while only Pico served (fix)
+
+**Symptom.** Overview → Model Launcher showed 5 of 8 cards as running although
+only the Pico card (DeepSeek V4.1 Flash 1017) was actually serving. All eight
+models share `:8000` on `spark1-lan`; Pico runs natively (no `container`), the
+others are docker kits that were all down.
+
+**Root cause.** `buildModelStatus` in `server/models/ModelProbe.js` credited a
+bare `/v1/models` answer to every model probing that (target, port) whenever no
+confirmed container owned the port. Pico has no container to claim `:8000`, so
+its answer made `qwen38-flash-next-v531`, `deepseek-v41-flash-1017-tp4`,
+`deepseek-v41-flash-1017` and `qwen38-flash-next-single-tf` read
+`running: true` with `containerUp: false`. Takeover then also lost the real
+incumbent (Pico) as a distinct holder.
+
+**Fix.** A port answer now has an owner: a confirmed container first, otherwise
+the single container-less model configured on that (target, port). Every other
+card on the port reads `portUp: false`, `modelId: null` and the error
+`:8000 answering but held by <holder>`. Two container-less models on one port,
+or a machine where `docker ps` failed (`containers.get(key) === null`), keep the
+answer unattributed: neither model claims it, and the docker-unknown path keeps
+the previous reading so a transient `docker ps` failure never reports a false
+down. A docker-settled port only settles for a container owner (a native owner
+without an HTTP answer never claims liveness).
+
+**Verification.** `node --test server/models/__tests__/*.test.js` 142 pass
+(incl. 3 new attribution tests), full `npm test` 2358 server + 1524 frontend
+pass, `npm run typecheck` clean. Live: `docker restart sparkDash`, then the WS
+snapshot shows `pico-ds41f-4x-spark` running with `modelId:
+DeepSeek-V4.1-Flash-1017` and the four other spark1 cards down with
+`:8000 answering but held by DeepSeek V4.1 Flash 1017 Pico 4x` (the spark3-head
+kits still report `:8000 fetch failed`).

@@ -188,18 +188,54 @@ test("a port whose verdict is unknown stays unknown (portChecked false, portUp n
   assert.match(st.glm.error, /docker ps unavailable/);
 });
 
-test("probed port keeps the old semantics exactly (regression)", () => {
+test("a bare port answer belongs to the sole container-less model, not its neighbours", () => {
+  // The real failure this pins: Pico runs natively on spark1's :8000 while
+  // every container kit on that Spark is down. The answering port used to
+  // make all of them read "running".
   const st = buildModelStatus(MODELS, {
-    containers: cmap(new Set()), // nothing up
+    containers: cmap(new Set()), // docker answered: nothing up
     ports: { "local:8000": { ok: true, modelId: "deepseek-v4", status: 200, error: null } },
     keys: { qwen: "local", glm: "local", ds: "local" },
     checkedAt: 1,
   });
-  // No container claims 8000 → the bare answer counts for everyone probing it.
+  assert.equal(st.ds.running, true, "the container-less engine is the one answering");
+  assert.equal(st.ds.portUp, true);
+  assert.equal(st.ds.modelId, "deepseek-v4");
+  for (const id of ["qwen", "glm"]) {
+    assert.equal(st[id].running, false);
+    assert.equal(st[id].portUp, false);
+    assert.equal(st[id].modelId, null);
+    assert.match(st[id].error, /:8000 answering but held by DeepSeek/);
+  }
+});
+
+test("two container-less models on one port: neither claims the bare answer", () => {
+  const other = { id: "ds2", name: "Other native", container: null, port: 8000 };
+  const st = buildModelStatus([DS, other], {
+    containers: cmap(new Set()),
+    ports: { "local:8000": { ok: true, modelId: "x", status: 200, error: null } },
+    keys: { ds: "local", ds2: "local" },
+    checkedAt: 1,
+  });
+  for (const id of ["ds", "ds2"]) {
+    assert.equal(st[id].running, false);
+    assert.equal(st[id].portUp, false);
+    assert.match(st[id].error, /answering but not this model/);
+  }
+});
+
+test("docker unavailable keeps the legacy reading: the answer counts for everyone", () => {
+  // Nothing can attribute the port on a machine docker did not answer for, so
+  // the bare answer must not be turned into a false "down" either.
+  const st = buildModelStatus(MODELS, {
+    containers: cmap(null),
+    ports: { "local:8000": { ok: true, modelId: "x", status: 200, error: null } },
+    keys: { qwen: "local", glm: "local", ds: "local" },
+    checkedAt: 1,
+  });
   for (const id of ["qwen", "glm", "ds"]) {
     assert.equal(st[id].running, true);
     assert.equal(st[id].portUp, true);
-    assert.equal(st[id].portChecked, true);
   }
 });
 

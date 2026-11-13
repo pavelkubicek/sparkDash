@@ -114,10 +114,17 @@ export async function probeModelPort(port, timeoutMs = LLM_PROBE_TIMEOUT_MS, hos
  * Port attribution: every kit here serves on the same 8000, so "something
  * answers on :8000" does NOT prove *this* model is up. When a container for
  * that port is confirmed up, that container owns the port and the other
- * models probing it are told the port is held elsewhere. Only when no
- * container claims the port does a bare port answer prove liveness. All of
- * this is scoped to ONE machine: the same port on a different Spark is a
- * different question with a different answer.
+ * models probing it are told the port is held elsewhere. With no container
+ * claiming the port, a bare answer is attributed to the model only when
+ * exactly one container-less model is configured there (a native engine such
+ * as Pico, which runs outside docker): it owns the port and every container
+ * model on that port is down, not "up because something answers". Two
+ * container-less models on one port cannot be told apart from the model card
+ * alone, so neither claims the answer. A machine docker could not answer for
+ * keeps the legacy reading — the bare answer counts for everyone probing it,
+ * because nothing there can attribute it. All of this is scoped to ONE
+ * machine: the same port on a different Spark is a different question with a
+ * different answer.
  *
  * @param {object[]} models registry configs
  * @param {{ containers: Map<string, Set<string>|null>, ports: Record<string, {ok:boolean, modelId:string|null, error:string|null}>, keys: Record<string, string|null>, reasons?: Record<string, string>, checkedAt?: number }} result
@@ -145,6 +152,24 @@ export function buildModelStatus(models, result) {
       if (set && set.has(m.container)) portOwner.set(pk(key, m.port), m);
     }
   }
+  // A port with no confirmed container owner is answered by whatever runs
+  // outside docker (Pico serves natively on the shared :8000). Only a SOLE
+  // container-less model on that (target,port) may claim that answer — two of
+  // them are indistinguishable from the model card alone, so neither does.
+  if (containers) {
+    /** @type {Map<string, object[]>} */
+    const native = new Map();
+    for (const m of models) {
+      if (m.port == null || m.container) continue;
+      const key = keyOf(m);
+      if (key == null) continue;
+      if (!containers.get(key)) continue; // docker did not answer: nothing to attribute
+      const portKey = pk(key, m.port);
+      if (portOwner.has(portKey)) continue;
+      native.set(portKey, [...(native.get(portKey) || []), m]);
+    }
+    for (const [portKey, list] of native) if (list.length === 1) portOwner.set(portKey, list[0]);
+  }
 
   for (const m of models) {
     const key = keyOf(m);
@@ -167,6 +192,9 @@ export function buildModelStatus(models, result) {
     const portKey = m.port != null ? pk(key, m.port) : null;
     const portRes = portKey ? ports[portKey] || null : null;
     const owner = portKey ? portOwner.get(portKey) || null : null;
+    /** docker ps answered for this machine, so a bare port answer CAN be attributed. */
+    const dockerKnown = Boolean(set);
+    const owned = Boolean(owner);
     const heldByOther =
       portRes?.ok && owner && owner.id !== m.id ? owner.name || owner.id : null;
 
@@ -180,9 +208,13 @@ export function buildModelStatus(models, result) {
     let portChecked = true;
     let modelId = null;
     if (portRes) {
-      portUp = portRes.ok ? !heldByOther : false;
-      modelId = heldByOther ? null : portRes.modelId ?? null;
-    } else if (owner && set) {
+      // A bare answer is this model's own only when the port was attributed to
+      // it. On a machine docker could not answer for nothing can attribute it,
+      // so the legacy reading stands: the answer counts for everyone probing it.
+      const attributable = !dockerKnown || owned;
+      portUp = portRes.ok ? !heldByOther && attributable : false;
+      modelId = heldByOther || !attributable ? null : portRes.modelId ?? null;
+    } else if (owner?.container && set) {
       portChecked = false; // docker ps settled it, no HTTP needed
       portUp = owner.id === m.id;
     } else if (m.port != null) {
@@ -194,6 +226,8 @@ export function buildModelStatus(models, result) {
     if (!set && m.container)
       errors.push(key === "local" ? "docker ps unavailable" : `docker ps unavailable on ${key}`);
     if (heldByOther) errors.push(`:${m.port} answering but held by ${heldByOther}`);
+    else if (portRes?.ok && dockerKnown && !owned)
+      errors.push(`:${m.port} answering but not this model`);
     else if (!portChecked && owner && owner.id !== m.id)
       errors.push(`:${m.port} held by ${owner.name || owner.id}`);
     else if (portRes && !portRes.ok && portRes.error) errors.push(`:${m.port} ${portRes.error}`);
