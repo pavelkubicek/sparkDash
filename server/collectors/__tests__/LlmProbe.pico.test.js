@@ -271,3 +271,100 @@ test("Pico uses its port's dashboard stream rate while synthetic sampling is blo
     assert.equal(requested.filter((r) => r.path === "/v1/chat/completions").length, 0);
   }
 });
+
+// ─── Engine-log telemetry ───────────────────────────────
+const PICO_RANK_LINE =
+  "serve: req 129 session 0006af6397c0001b: prompt 62124, reused 61764 (live), prefill 203.7 ms (1767 tok/s), 200 tokens in 2403.0 ms (82.8 tok/s), stop; store 1897.2 MiB; session 62324 positions, 56.2 MiB, 20 window snapshots; 1 slices, paused 0.00 s, resumes 0.0 ms, 199 tokens in batches";
+
+/** A head whose log holds `line` and was last written at `mtime` (epoch ms). */
+function picoLogExec(line, mtime) {
+  return async () => {
+    const body = `${line}\n`;
+    return `__pico ${Buffer.byteLength(body)} 0 0 ${Math.floor(mtime / 1000)}\n${body}\n__pico_end__`;
+  };
+}
+
+test("the engine log supplies Pico's decode, prefill and token totals", async () => {
+  const requested = [];
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888, {
+    picoLog: { exec: picoLogExec(PICO_RANK_LINE, Date.now()), minIntervalMs: 0 },
+  });
+  probe._fetch = picoFetch(requested);
+  const snap = await probe.probe();
+  assert.equal(snap.backend, "pico");
+  assert.equal(snap.generationTps, 82.8);
+  assert.equal(snap.generationTpsSource, "engine-log");
+  assert.equal(snap.prefillTps, 1767);
+  assert.equal(snap.prefillTpsSource, "completed-engine");
+  assert.equal(snap.totalPromptTokens, 62124);
+  assert.equal(snap.totalCachedTokens, 61764);
+  assert.equal(snap.totalOutputTokens, 200);
+  assert.equal(snap.prefixCacheHitRate, 61764 / 62124);
+  assert.equal(snap.measurementValid, true);
+});
+
+test("a log whose last completion is older than the hold window is not measured, never 0", async () => {
+  const requested = [];
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888, {
+    picoLog: { exec: picoLogExec(PICO_RANK_LINE, Date.now() - 60_000), minIntervalMs: 0 },
+  });
+  probe._fetch = picoFetch(requested);
+  const snap = await probe.probe();
+  assert.equal(snap.generationTps, 0);
+  assert.equal(snap.generationTpsSource, null);
+  assert.equal(snap.measurementValid, false);
+  assert.match(snap.measurementError, /no completed batch or request/);
+  // Totals are still real and monotonic; only the live rate is unknown.
+  assert.equal(snap.totalOutputTokens, 200);
+});
+
+test("a successful sample clears the not-measured state a stale log left", async () => {
+  const requested = [];
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888, {
+    picoLog: { exec: picoLogExec(PICO_RANK_LINE, Date.now() - 60_000), minIntervalMs: 0 },
+    streamSampleEnabled: () => true,
+    streamSampleMinIntervalMs: 0,
+    now: fakeClock(),
+  });
+  probe._fetch = picoFetchWithSample(requested, { stream: SAMPLE_STREAM });
+  const snap = await probe.probe();
+  assert.equal(snap.generationTpsSource, "probe-sample");
+  assert.equal(snap.generationTps, 10);
+  assert.equal(snap.measurementValid, true);
+  assert.equal(snap.measurementError, null);
+});
+
+const PICO_BATCH_LINE =
+  "serve: batch of 3: 94 steps in 4962.0 ms, 53.12 ms a step (median); req, tokens, end: 456 370 stop, 455 161 stop, 433 256 paused; drafts: 8.37 tokens and 10.55 rows per step, 560 of 757 drafts accepted; GPU ms by rows: 5: 35.32 (3)";
+
+test("the batch line reports aggregate decode while perStreamTps keeps the single-stream rate", async () => {
+  const requested = [];
+  const body = `${PICO_RANK_LINE}\n${PICO_BATCH_LINE}\n`;
+  const exec = async () =>
+    `__pico ${Buffer.byteLength(body)} 0 0 ${Math.floor(Date.now() / 1000)}\n${body}\n__pico_end__`;
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888, {
+    picoLog: { exec, minIntervalMs: 0 },
+  });
+  probe._fetch = picoFetch(requested);
+  const snap = await probe.probe();
+  // 370 + 161 + 256 tokens over 4.962 s is the engine's aggregate, not one stream.
+  assert.equal(snap.generationTps, 158.6);
+  assert.equal(snap.generationTpsSource, "engine-log");
+  assert.equal(snap.perStreamTps, 82.8);
+  assert.equal(snap.prefillTps, 1767);
+});
+
+test("the front-end gate reports running and waiting requests", async () => {
+  const requested = [];
+  const body = `${PICO_RANK_LINE}\n${PICO_BATCH_LINE}\n`;
+  const exec = async () =>
+    `__pico ${Buffer.byteLength(body)} 0 0 ${Math.floor(Date.now() / 1000)}\n${body}\n__pico_gate__ held 0 in_flight 8 waiting 3 idle_s 0 engine 1 held_s 0 passed 1 refused 0\n__pico_end__`;
+  const probe = new LlmProbe({ lanIp: "127.0.0.1" }, 8888, {
+    picoLog: { exec, minIntervalMs: 0 },
+  });
+  probe._fetch = picoFetch(requested);
+  const snap = await probe.probe();
+  assert.equal(snap.requestsRunning, 8);
+  assert.equal(snap.requestsWaiting, 3);
+  assert.equal(snap.slotsActive, 8);
+});

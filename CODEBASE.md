@@ -11,7 +11,7 @@ The package uses ESM throughout. `server/index.js` runs directly in Node and cre
 | Path | Responsibility |
 | --- | --- |
 | `server/sparks/` | Persistent unit registry and independent poll loops |
-| `server/collectors/` | Hardware, platform-specific probes, LLM detection, streaming, benchmarks and Showcase |
+| `server/collectors/` | Hardware, platform-specific probes, LLM detection, engine-log telemetry (Pico), streaming, benchmarks and Showcase |
 | `server/auth.js`, `server/validate.js` | Incoming access checks and configured-target validation |
 | `server/secretsStore.js`, `server/settings.js` | Encrypted credentials and ordinary persistent settings |
 | `server/metrics/`, `server/llmtokens/`, `server/energy/` | Metric histories, token accounting and fleet energy |

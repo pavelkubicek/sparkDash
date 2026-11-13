@@ -645,7 +645,7 @@ export interface LlmMetrics {
   slotsTotal: number;
   generationTps: number;
   /** How generationTps was measured when a backend exposes a fallback. */
-  generationTpsSource?: "window" | "slot-mean" | "probe-sample" | "dashboard-stream" | null;
+  generationTpsSource?: "window" | "slot-mean" | "probe-sample" | "dashboard-stream" | "engine-log" | null;
   /**
    * Average decode tok/s of ONE stream (aggregate ÷ active streams when all
    * decode in lockstep). Only engines publishing a per-token latency histogram
@@ -659,7 +659,7 @@ export interface LlmMetrics {
    */
   perStreamPrefillTps?: number | null;
   /** TensorFold: live throughput or a held, cache-inclusive completed-request window. */
-  prefillTpsSource?: "live" | "completed-effective" | "completed-split" | null;
+  prefillTpsSource?: "live" | "completed-effective" | "completed-split" | "completed-engine" | null;
   prefillTps: number;
   /** A prompt is being processed right now. With no live rate available (TensorFold reports totals only for finished requests) the UI says "prefilling" instead of 0. */
   prefillActive?: boolean;

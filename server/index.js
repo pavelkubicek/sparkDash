@@ -527,6 +527,10 @@ function startMonitor(spark) {
         ?? showcaseManager.getLiveDecodeTps(spark.id, port),
       streamSampleEnabled: () => getSettings().llmStreamSample === true,
       streamSampleBlocked: () => llmStreamSampleBlocked(spark.id),
+      // Pico publishes no counters, but its engine log has one line per finished request.
+      // PICO_ENGINE_LOG overrides the path on the head unit (default: rank 0's log under
+      // ~/dsgb10/service/logs). Unreadable logs leave the probe's other sources untouched.
+      picoLog: { path: process.env.PICO_ENGINE_LOG || undefined },
     }),
   });
   monitors.set(spark.id, monitor);

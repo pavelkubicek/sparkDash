@@ -365,3 +365,76 @@ console errors, zero warnings.**
 quarantine/staging behaviour on the host transport); upstream PR candidate for the two-gate admission
 change (`StorageManager.js` assertSupported + `SparkPicker.tsx` isStorageSpark + App.tsx isLocal
 REST-fallback plumbing).
+
+## 2026-11-12 — Pico telemetry from the engine log (fix)
+
+**Symptom.** The Pico (dsgb10) engine was detected correctly on spark1:8000
+(`backend: pico`, `DeepSeek-V4.1-Flash-1017`, 1M context), but the LLM panel
+showed no throughput and the token totals stayed empty while the engine was
+actively serving other clients. Pico serves only `/health`, `/v1/models` and
+`/v1/chat/completions`, so the existing probe had nothing to read; the only
+shipped fallbacks were the opt-in stream sample (one poll in fifteen) and
+sparkDash's own bench/showcase streams.
+
+**Fix.**
+- New `server/collectors/picoLogs.js`: incremental reader for the head unit's
+  engine log over SSH (default `$HOME/dsgb10/service/logs/rank.0.log`,
+  `PICO_ENGINE_LOG` overrides). Parses the per-request `serve:` line for
+  prompt/cached/completion tokens and measured prefill/decode tok/s; falls back
+  to the front-end `req … session` line when pointed at `front.log`. A shorter
+  file means an engine restart/rotation and resets the totals; a read failure
+  keeps the last snapshot; unparseable lines are ignored.
+- `LlmProbe`: for `backendType === "pico"` the priority is now dashboard stream
+  > engine log (held 20 s after the completion) > opt-in stream sample. Totals,
+  cached tokens and prefix-cache hit rate come from the log. With a readable
+  log but no completion in the hold window the poll is `measurementValid:false`
+  with the reason, never a fabricated 0.
+- Frontend: `generationTpsSource: "engine-log"` renders the rate with an
+  **Engine log** label (en + zh-CN); `prefillTpsSource: "completed-engine"`
+  reuses the completed-prefill presentation.
+- Docs: README Pico bullet, CHANGELOG Unreleased entry.
+
+**Verification.** `npm run typecheck`, `npm run build`; full `npm test` →
+2376 tests, 1 unrelated flaky storage timing test (`scanCancel.test.js:165`),
+which passed on rerun. New tests: `picoLogs.test.js` (7) and two engine-log
+cases in `LlmProbe.pico.test.js`; one panel case in `LlmPanel.pico.test.tsx`.
+Live proof against the real head (SSH): decode 89.9 tok/s, prefill 2049 tok/s,
+47.8M/49.8M cached/prompt, 169k completion, cache hit 97.9%, source
+`engine-log`. Container `sparkDash` restarted so the bind-mounted server code
+is live.
+
+**Next.** If the kit moves its service logs, set `PICO_ENGINE_LOG` on the
+sparkDash container. The log has no timestamps, so a backlog's newest line is
+dated by the file mtime; live lines are dated at read time.
+
+## 2026-11-13 — Pico telemetry: aggregate rate + live occupancy (follow-up)
+
+**Reported.** The new Pico telemetry read as one stream's speed, and the panel
+did not appear to refresh each second.
+
+**Cause.** The first pass used the per-request completion line (`tokens / ms`,
+i.e. one request's decode rate) and held it as the engine rate. The engine's
+own aggregate is in its `serve: batch of N: … steps in T ms … req, tokens, end:
+…` line, and occupancy is only in the front-end gate (`in_flight`/`waiting`),
+which was not read at all. The log tailer also throttled reads to 5 s, and a
+strict 1 s throttle could skip a 1 s poll on timer jitter.
+
+**Fix.**
+- `parsePicoBatchLine` + tailer `batch`/`batchAt`: aggregate decode =
+  sum of the batch's per-request tokens ÷ its wall time. `generationTps` uses
+  that; the completion line's per-request rate is `perStreamTps` (**per
+  stream**).
+- Same SSH call now runs `dsfront admin --socket …/front.admin status`;
+  `parsePicoGateLine` maps `in_flight`/`waiting` to `requestsRunning`,
+  `requestsWaiting` and `slotsActive`.
+- Tailer read interval 500 ms so a configured 1 s poll always reads; hold the
+  last batch rate until a newer one arrives (60 s when idle, up to 5 min while
+  the gate reports requests in flight, so a 30 s batch does not blank).
+
+**Verification.** Browser e2e (headless Chromium, `/spark/spark1-lan`):
+WebSocket snapshots arrived every 1001/999/1000 ms; decode read
+214.7 → 185.3 → 153.5 → 174.1 tok/s (aggregate, per batch) with **Engine log**
+and `per stream` 22.5/20.5/4.8 tok/s; the running tile moved 12 → 6 → 7 → 8 → 9
+→ 11 → 10 across those samples. Targeted tests 27/27 pass; `npm run typecheck`
+and `npm run build` clean. Decode changes at batch granularity because that is
+the finest aggregate the engine logs; occupancy changes every poll.

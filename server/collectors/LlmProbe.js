@@ -8,6 +8,7 @@ import { LLM_PROBE_TIMEOUT_MS } from "../config.js";
 import { classifyHostScope } from "../validate.js";
 import { llmProbeHost } from "./llmHost.js";
 import { openSshLlmTunnel } from "./llmTunnel.js";
+import { PicoLogTail } from "./picoLogs.js";
 import { applyThinkingFlags } from "./LlmStreaming.js";
 
 const FAIL_RESET_THRESHOLD = 3;
@@ -37,6 +38,10 @@ const STREAM_SAMPLE_MAX_TOKENS = 128;
 const STREAM_SAMPLE_TIMEOUT_MS = 12_000;
 const STREAM_SAMPLE_PROMPT =
   "Count from 1 to 60, with each number separated by a single space. Output only the numbers.";
+/** How long a Pico log completion counts as the current rate before the panel says not measured. */
+const PICO_LOG_HOLD_MS = 60_000;
+/** While the gate reports requests in flight, the last batch rate is still the current measurement. */
+const PICO_LOG_ACTIVE_HOLD_MS = 5 * 60_000;
 /**
  * TensorFold prefill rates are the computed (and the cached) tokens of the requests that finished in the
  * last minute divided by their prefill seconds. One poll window holds one to a few requests, and a request
@@ -148,6 +153,10 @@ export class LlmProbe {
     this._streamSampleNow = typeof options.now === "function" ? options.now : Date.now;
     this._streamSampleLastAt = 0;
     this._streamSampleBusy = false;
+    /** Pico publishes no counters, but its engine log has one line per finished request. */
+    this._picoLogOptions = options.picoLog && typeof options.picoLog === "object" ? options.picoLog : null;
+    /** @type {PicoLogTail | null} */
+    this._picoLogTail = null;
     /** The unit's own address; baseUrl switches to a local forward when only SSH reaches the engine. */
     this._directBase = `http://${llmProbeHost(spark)}:${port}`;
     this.baseUrl = this._directBase;
@@ -1342,24 +1351,101 @@ export class LlmProbe {
 
     if (this.backendType === "vllm") await this._refreshEngineVersion();
 
-    // Pico has no live counters. A sample belongs only to the poll that measured
-    // it; replaying it on later polls makes an idle engine look busy forever.
+    // Pico has no live counters. Its engine log has one line per finished request with
+    // the measured rates and token counts; read that first. A dashboard benchmark or
+    // Showcase stream is more current while it runs, and the opt-in stream sample is the
+    // last resort. A rate from a completed request belongs only to the hold window; after
+    // that the panel says not measured rather than claiming the engine is idle.
     if (this.backendType === "pico") {
       this.generationTps = 0;
+      this.prefillTps = 0;
+      this.prefillTpsSource = null;
+      this.perStreamTps = null;
       const liveTps = this._liveDecodeTps?.(this.port);
       if (Number.isFinite(liveTps) && liveTps >= 0) {
         this.generationTps = liveTps;
         this.generationTpsSource = "dashboard-stream";
         this.decodeActive = liveTps > 0;
       } else {
-        await this._maybeStreamSample();
-        if (this._liveDecodeTps && this.generationTpsSource == null) {
-          this.generationTpsSource = "dashboard-stream";
+        const log = await this._readPicoLog();
+        if (!this._applyPicoLog(log)) {
+          await this._maybeStreamSample();
+          if (this._liveDecodeTps && this.generationTpsSource == null) {
+            this.generationTpsSource = "dashboard-stream";
+          }
         }
       }
     }
 
     return this._getSnapshot();
+  }
+
+  /** Read the Pico engine log (throttled inside the tailer); null when unavailable. */
+  async _readPicoLog() {
+    if (!this._picoLogOptions) return null;
+    if (!this._picoLogTail) {
+      try {
+        this._picoLogTail = new PicoLogTail(this.spark, this._picoLogOptions);
+      } catch {
+        return null;
+      }
+    }
+    try {
+      return await this._picoLogTail.poll();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Apply one engine-log snapshot. Returns true when a recent completion supplied the
+   * current rates; false lets the caller fall back to the stream sample.
+   * Token totals are applied whenever the log is readable, recent or not.
+   * @param {{ last: object | null, lastAt: number | null, totals: { promptTokens: number, cachedTokens: number, completionTokens: number } } | null} log
+   */
+  _applyPicoLog(log) {
+    if (!log || !log.totals) return false;
+    this.totalOutputTokens = log.totals.completionTokens;
+    this.totalPromptTokens = log.totals.promptTokens;
+    this.totalCachedTokens = log.totals.cachedTokens;
+    // The front-end gate knows what is in flight right now; null when it did not answer.
+    this.requestsRunning = log.gate ? log.gate.running : null;
+    this.requestsWaiting = log.gate ? log.gate.waiting : null;
+    this.slotsActive = log.gate ? log.gate.running : 0;
+    const last = log.last;
+    const now = Date.now();
+    const active = Boolean(log.gate && log.gate.running > 0);
+    const lastRecent = last && Number.isFinite(log.lastAt) && now - log.lastAt <= PICO_LOG_HOLD_MS;
+    // A batch under heavy concurrency can run for tens of seconds, and its rate is still
+    // the engine's current aggregate while the gate reports requests in flight.
+    const batchHold = active ? PICO_LOG_ACTIVE_HOLD_MS : PICO_LOG_HOLD_MS;
+    const batchRecent =
+      log.batch && Number.isFinite(log.batchAt) && now - log.batchAt <= batchHold;
+    if (!lastRecent && !batchRecent) {
+      this.measurementValid = false;
+      this.measurementError = last || log.batch
+        ? "the engine log has no completed batch or request recently"
+        : "the engine log has no completed batch or request yet";
+      return false;
+    }
+    this.measurementValid = true;
+    this.measurementError = null;
+    // The batch line is the engine's own aggregate across every concurrent request; a
+    // single completion line's tok/s is one stream and must not stand in for the engine.
+    this.generationTps = batchRecent ? log.batch.decodeTps : last.decodeTps;
+    this.generationTpsSource = "engine-log";
+    this.decodeActive = true;
+    if (lastRecent) {
+      this.perStreamTps = last.decodeTps;
+      if (Number.isFinite(last.prefillTps) && last.prefillTps > 0) {
+        this.prefillTps = last.prefillTps;
+        this.prefillTpsSource = "completed-engine";
+      }
+      if (Number.isFinite(last.promptTokens) && last.promptTokens > 0 && Number.isFinite(last.cachedTokens)) {
+        this.prefixCacheHitRate = last.cachedTokens / last.promptTokens;
+      }
+    }
+    return true;
   }
 
   /** Run at most one sample per minimum interval; never two at once; never while blocked. */
@@ -1378,6 +1464,8 @@ export class LlmProbe {
       if (sample && sample.tps > 0) {
         this.generationTps = sample.tps;
         this.generationTpsSource = "probe-sample";
+        this.measurementValid = true;
+        this.measurementError = null;
       } else {
         this._markUnmeasured("stream sample has no measurable token window");
       }

@@ -7,6 +7,14 @@ Format: version sections are listed newest first.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Pico telemetry is read from the engine's own log.** Pico serves only `/health`, `/v1/models` and `/v1/chat/completions`, so the probe could see the model but no throughput: the panel showed a dash and the token totals stayed empty while another client generated. The engine's rank-0 log carries one line per finished batch with the tokens every concurrent request produced in it (the engine's aggregate decode rate, not one stream's) and one per finished request with the prompt/cached/completion token counts and the measured prefill and single-stream decode rates; the probe now reads that file over SSH from the head unit (incrementally, so a poll transfers only appended bytes), labels the aggregate rate **Engine log** and the single-stream figure **per stream**, holds the last batch rate until a newer batch line arrives (up to five minutes while the gate reports requests in flight), fills the prompt/completion/cached totals and prefix-cache hit rate, and reads the front-end admin socket's `status` in the same SSH call for the running/waiting request counts. It polls at the configured poll interval. A shorter file means the engine restarted and the totals restart with it; an unreadable log leaves the existing dashboard-stream and stream-sample paths untouched. Override the path with `PICO_ENGINE_LOG` when the kit does not use `~/dsgb10/service/logs/rank.0.log`.
+
+---
+
 ## [2.90.0] — 2026-11-12
 
 ### Added

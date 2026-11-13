@@ -804,7 +804,7 @@ export function LlmPanel({
                     <span className="ov-tps__dots" aria-hidden />
                     <small>{t("llm.decoding")}</small>
                   </>
-                ) : isPico && !sampledDecode && llm?.generationTpsSource !== "dashboard-stream" ? (
+                ) : isPico && !sampledDecode && llm?.generationTpsSource !== "dashboard-stream" && llm?.generationTpsSource !== "engine-log" ? (
                   <span title={t("llm.sampleOffHelp")}>—</span>
                 ) : (
                   <>
@@ -819,6 +819,11 @@ export function LlmPanel({
               {llm?.generationTpsSource === "dashboard-stream" && (
                 <span className="sp-avg" title={t("llm.dashboardStreamHelp")}>
                   {t("llm.dashboardStream")}
+                </span>
+              )}
+              {llm?.generationTpsSource === "engine-log" && (
+                <span className="sp-avg" title={t("llm.engineLogHelp")}>
+                  {t("llm.engineLog")}
                 </span>
               )}
               {sampledDecode && (
