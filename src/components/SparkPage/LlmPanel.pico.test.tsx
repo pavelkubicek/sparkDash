@@ -42,11 +42,13 @@ it("shows Pico's engine-log rate and labels it, and hides the dash without a sou
   const llm = {
     ...makeSpark().metrics.llm[0], backend: "pico" as const,
     generationTps: 82.8, generationTpsSource: "engine-log" as const,
+    generationTpsMeasuredAt: Date.now() - 10_000,
     prefillTps: 1767, prefillTpsSource: "completed-engine" as const, decodeActive: true,
   };
   const { container, root } = render(<LlmPanel llm={llm} sparkId="fixture" llmPort={8888} />);
   expect(container.querySelector(".sp-decode .big-num")?.textContent).toBe("82.8tok/s");
   expect(container.textContent).toContain("Engine log");
+  expect(container.textContent).toContain("10s ago");
   expect(container.querySelector("[data-llm-idle]")).toBeNull();
   act(() => root.render(
     <LlmPanel

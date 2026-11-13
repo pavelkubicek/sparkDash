@@ -350,6 +350,7 @@ test("the batch line reports aggregate decode while perStreamTps keeps the singl
   // 370 + 161 + 256 tokens over 4.962 s is the engine's aggregate, not one stream.
   assert.equal(snap.generationTps, 158.6);
   assert.equal(snap.generationTpsSource, "engine-log");
+  assert.ok(Number.isFinite(snap.generationTpsMeasuredAt));
   assert.equal(snap.perStreamTps, 82.8);
   assert.equal(snap.prefillTps, 1767);
 });

@@ -240,7 +240,8 @@
     "sampleOffHelp": "No completed request was found in the engine log. Turn on Settings → Stream-sample engines without gauges to have the dashboard measure decode tok/s itself.",
     "completedPrefillHelp": "Token and prefill-time deltas over requests that finished in the same window; not continuous live throughput.",
     "effectiveIncludesCached": "Effective rate · includes cached tokens",
-    "completedDecodeRate": "{{rate}} tok/s · last completions"
+    "completedDecodeRate": "{{rate}} tok/s · last completions",
+    "engineLogAge": "{{seconds}}s ago"
   },
   "sessions": {
     "title": "Sessions",

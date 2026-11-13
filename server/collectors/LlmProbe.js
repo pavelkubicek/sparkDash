@@ -188,6 +188,8 @@ export class LlmProbe {
     this.prefillTps = 0;
     this.decodeActive = false;
     this.generationTpsSource = null;
+    /** When a held generation rate was measured (epoch ms); null when the rate is live. */
+    this.generationTpsMeasuredAt = null;
     /** Live cached-prefill tok/s when the backend splits kinds (ds4 / llama.cpp / sglang). null otherwise. */
     this.cachedPrefillTps = null;
     /** Live uncached/computed prefill tok/s when split is available. null otherwise. */
@@ -452,6 +454,7 @@ export class LlmProbe {
     this.measurementError = null;
     this.decodeActive = false;
     this.generationTpsSource = null;
+    this.generationTpsMeasuredAt = null;
     this.prefillActive = false;
     if (this.backendType === "strata") this._clearStrataRates();
     try {
@@ -580,6 +583,7 @@ export class LlmProbe {
     this.prefillTps = 0;
     this.decodeActive = false;
     this.generationTpsSource = null;
+    this.generationTpsMeasuredAt = null;
     this.cachedPrefillTps = null;
     this.uncachedPrefillTps = null;
     this.contextLength = null;
@@ -1434,6 +1438,7 @@ export class LlmProbe {
     // single completion line's tok/s is one stream and must not stand in for the engine.
     this.generationTps = batchRecent ? log.batch.decodeTps : last.decodeTps;
     this.generationTpsSource = "engine-log";
+    this.generationTpsMeasuredAt = batchRecent ? log.batchAt : log.lastAt;
     this.decodeActive = true;
     if (lastRecent) {
       this.perStreamTps = last.decodeTps;
@@ -4182,6 +4187,7 @@ export class LlmProbe {
       slotsActive: this.slotsActive,
       slotsTotal: this.slotsTotal,
       generationTps: this.generationTps,
+      generationTpsMeasuredAt: this.generationTpsMeasuredAt,
       perStreamTps: this.perStreamTps,
       perStreamPrefillTps: this.perStreamPrefillTps,
       prefillTpsSource: this.prefillTpsSource,
@@ -4235,6 +4241,7 @@ export class LlmProbe {
       slotsActive: 0,
       slotsTotal: 0,
       generationTps: 0,
+      generationTpsMeasuredAt: null,
       perStreamTps: null,
       perStreamPrefillTps: null,
       prefillTpsSource: null,

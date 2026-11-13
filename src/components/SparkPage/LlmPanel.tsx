@@ -444,6 +444,12 @@ export function LlmPanel({
   const isTensorFold = llm?.backend === "tensorfold";
   const isPico = llm?.backend === "pico";
   const sampledDecode = llm?.generationTpsSource === "probe-sample";
+  // A held engine-log rate is a measurement, not a live counter: show its age so a
+  // value that has not changed for a few seconds reads as measured, not frozen.
+  const measuredAt = llm?.generationTpsMeasuredAt;
+  const engineLogAge = llm?.generationTpsSource === "engine-log" && typeof measuredAt === "number" && Number.isFinite(measuredAt)
+    ? Math.max(0, Math.round((Date.now() - measuredAt) / 1000))
+    : null;
   const completedPrefill = llm?.prefillTpsSource?.startsWith("completed-") === true;
   const showPrefillSplit = llm?.cachedPrefillTps != null || llm?.uncachedPrefillTps != null;
   const cachedPrefillTps = llm?.cachedPrefillTps ?? 0;
@@ -824,6 +830,7 @@ export function LlmPanel({
               {llm?.generationTpsSource === "engine-log" && (
                 <span className="sp-avg" title={t("llm.engineLogHelp")}>
                   {t("llm.engineLog")}
+                  {engineLogAge != null ? ` · ${t("llm.engineLogAge", { seconds: engineLogAge })}` : ""}
                 </span>
               )}
               {sampledDecode && (

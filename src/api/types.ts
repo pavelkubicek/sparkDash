@@ -646,6 +646,8 @@ export interface LlmMetrics {
   generationTps: number;
   /** How generationTps was measured when a backend exposes a fallback. */
   generationTpsSource?: "window" | "slot-mean" | "probe-sample" | "dashboard-stream" | "engine-log" | null;
+  /** Epoch ms when a held generation rate was measured; null for live rates. */
+  generationTpsMeasuredAt?: number | null;
   /**
    * Average decode tok/s of ONE stream (aggregate ÷ active streams when all
    * decode in lockstep). Only engines publishing a per-token latency histogram

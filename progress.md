@@ -438,3 +438,25 @@ and `per stream` 22.5/20.5/4.8 tok/s; the running tile moved 12 → 6 → 7 → 
 → 11 → 10 across those samples. Targeted tests 27/27 pass; `npm run typecheck`
 and `npm run build` clean. Decode changes at batch granularity because that is
 the finest aggregate the engine logs; occupancy changes every poll.
+
+## 2026-11-13 — Pico: measurement age beside the held rate
+
+**Reported.** The panel still looked stale between engine updates.
+
+**Cause.** Pico's engine writes its batch line only when a batch ends; under a
+long agent turn a batch can run 10–30 s, so the aggregate rate legitimately
+holds that long. The panel showed no hint that the figure was a held
+measurement, so an unchanged number read as a frozen UI.
+
+**Fix.** The snapshot now carries `generationTpsMeasuredAt` (the batch line's
+arrival, mtime-dated on the backlog read), and the **Engine log** label renders
+its age (`Engine log · 7s ago`). The age ticks every second because snapshots
+arrive every second, so the panel visibly refreshes even while the measured
+rate waits for the next batch.
+
+**Verification.** Browser e2e: 12 consecutive one-second samples showed
+`Engine log · 1s ago` … `· 12s ago` while the held rate stayed 100.0 tok/s and
+the running tile 7; earlier samples showed the rate change 214.7 → 185.3 →
+153.5 → 174.1 as batches completed. The engine emits no per-step or periodic
+stats line, so a per-second aggregate is not measurable from it; the age makes
+the actual cadence explicit instead of interpolating.
