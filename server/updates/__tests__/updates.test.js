@@ -71,7 +71,7 @@ function makeStubs(extraEnv = {}) {
   if (!extraEnv.STUB_NO_FW) {
     stub("fwupdmgr", [
       'if [ "$1" = get-updates ]; then printf "%s\\n" "$STUB_FW_JSON"; exit "${STUB_FW_RC:-0}"; fi',
-      'if [ "$1" = check-reboot-needed ]; then exit "${STUB_FW_REBOOT_RC:-1}"; fi',
+      'if [ "$1" = get-devices ]; then printf "%s\\n" "$STUB_FW_DEVICES"; exit "${STUB_FW_DEVICES_RC:-0}"; fi',
       "exit 0",
     ].join("\n"));
   }
@@ -120,7 +120,7 @@ function runShellFull(programText, extraEnv = {}) {
       ["-c", programText],
       {
         timeout: 30_000,
-        env: { PATH, HOME: process.env.HOME, LANG: "C", ...extraEnv },
+        env: { PATH, HOME: process.env.HOME, LANG: "C", STUB_FW_DEVICES: '{"Devices":[]}', ...extraEnv },
         maxBuffer: 10 * 1024 * 1024,
       },
       (err, stdout, stderr) => (err ? reject(new Error(`${err.message}\n${stderr}`)) : resolve({ stdout: String(stdout), stderr: String(stderr ?? "") }))
@@ -138,7 +138,7 @@ test("check.sh parses apt list, the simulation, fwupd and the reboot flags", asy
     STUB_SIM: SIM_FIXTURE,
     STUB_FW_JSON: FW_TWO_DEVICES,
     STUB_FW_RC: "0",
-    STUB_FW_REBOOT_RC: "0",
+    STUB_FW_DEVICES: '{"Devices":[{"Name":"NVIDIA GB10","UpdateState":4}]}',
   });
   const res = parseKv(out);
   assert.equal(res.RESULT, "ok");
@@ -163,13 +163,15 @@ test("check.sh parses apt list, the simulation, fwupd and the reboot flags", asy
   assert.match(out, /^STAMP=\d*$/m);
 });
 
-test("check.sh: no devices and fwupd exit 2, missing fwupdmgr, reboot rc mapping", async () => {
+test("check.sh: no devices and fwupd exit 2, missing fwupdmgr, reboot flag from device state", async () => {
+  // The reported bug: a static needs-reboot capability flag is not a pending reboot. Only
+  // UpdateState 4 (FWUPD_UPDATE_STATE_NEEDS_REBOOT) may raise FWREBOOT, never Flags alone.
   const ok2 = await runShell(buildProgram("check"), {
     STUB_APT_LIST: "Listing...\n",
     STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
     STUB_FW_JSON: '{"Devices":[],"Updates":[]}',
     STUB_FW_RC: "2", // "no actions, and that is fine"
-    STUB_FW_REBOOT_RC: "1",
+    STUB_FW_DEVICES: '{"Devices":[{"Name":"UEFI dbx","Flags":["needs-reboot"],"UpdateState":2}]}',
   });
   const r2 = parseKv(ok2);
   assert.equal(r2.RESULT, "ok");
@@ -193,12 +195,31 @@ test("check.sh: no devices and fwupd exit 2, missing fwupdmgr, reboot rc mapping
     STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
     STUB_FW_JSON: "",
     STUB_FW_RC: "1", // a real failure, not exit 2
-    STUB_FW_REBOOT_RC: "2",
+    STUB_FW_DEVICES_RC: "7", // a failing get-devices claims nothing, never a healthy 0
   });
   const re = parseKv(err);
   assert.equal(re.FW_STATE, "error");
   assert.ok(re.FW_ERR);
   assert.equal(re.FWREBOOT, "unknown");
+
+  const junk = await runShell(buildProgram("check"), {
+    STUB_APT_LIST: "Listing...\n",
+    STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+    STUB_FW_JSON: '{"Devices":[],"Updates":[]}',
+    STUB_FW_RC: "2",
+    STUB_FW_DEVICES: "not json", // exit 0 but no "Devices" anchor: garbage, so no verdict
+  });
+  assert.equal(parseKv(junk).FWREBOOT, "unknown");
+
+  // fwupd 2.0.20 prints `"UpdateState" : 4` with spaces around the colon; both spellings count.
+  const spaced = await runShell(buildProgram("check"), {
+    STUB_APT_LIST: "Listing...\n",
+    STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+    STUB_FW_JSON: '{"Devices":[],"Updates":[]}',
+    STUB_FW_RC: "2",
+    STUB_FW_DEVICES: '{"Devices":[{"Name":"NVIDIA GB10","Flags":["needs-reboot"],"UpdateState" : 4}]}',
+  });
+  assert.equal(parseKv(spaced).FWREBOOT, "1");
 });
 
 test("refresh.sh tries apt-get update at most three times and reports honestly", async () => {

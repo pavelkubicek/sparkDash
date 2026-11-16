@@ -695,6 +695,29 @@ desktop-scoped. No desktop value changed.
 exactly 600px, pane fills it, footer pinned — desktop unchanged. Full
 frontend suite 201 files / 1527 tests green; typecheck and build clean.
 
+## 2026-11-16 — Updates: firmware reboot flag no longer false-positives
+
+**Reported.** Every unit showed "Firmware reboot pending" (the summary card
+renders it as "Reboot required") although nothing was ever installed.
+
+**Cause.** The check derived the flag from `fwupdmgr check-reboot-needed`,
+whose exit 0 on the fleet's fwupd 2.0.x only means some device carries the
+static needs-reboot/needs-shutdown capability flag (UEFI keys, dbx, NVMe and
+EC always have it); an exit 1, a real failure, was even mapped to "no reboot
+needed". fwupd corrected the subcommand's semantics in 2.1.5.
+
+**Fix.** `check.sh` now derives FWREBOOT from `fwupdmgr get-devices --json`
+alone: a device whose `UpdateState` is 4 (NEEDS_REBOOT) — what fwupd applied
+and still waits to finish. Failure or missing anchor → unknown, never a
+healthy guess. Both JSON spellings accepted (`"UpdateState" : 4` on 2.0.x,
+`"UpdateState": 4` newer). Contract unchanged (UpdateManager untouched).
+
+**Verification.** `node --test server/updates/__tests__/updates.test.js`
+(27 pass, incl. the static-flag regression and spaced-serialization cases);
+full `npm test` (backend 2393, frontend 1542), typecheck and build clean;
+live read-only e2e of the check program on spark1 returned
+`{"RESULT":"ok","FWREBOOT":"0","REBOOT":"0","FW_STATE":"ok"}`.
+
 ## 2026-11-16 — PR Companion jump link points at pr-companion.lan
 
 **Change.** `PR_COMPANION_WEBUI_URL=https://pr-companion.lan` added to

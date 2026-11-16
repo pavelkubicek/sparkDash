@@ -4278,7 +4278,7 @@ export interface UpdateSummaryUnit {
   fwCount: number;
   /** /run/reboot-required exists on the unit. */
   rebootRequired: boolean;
-  /** fwupdmgr check-reboot-needed exited 0 (a firmware update waits for a reboot). */
+  /** A fwupd device reports UpdateState NEEDS_REBOOT (an applied firmware update waits for a reboot). */
   firmwareRebootNeeded: boolean;
   /** Server time of the last check, ms epoch, null when never checked. */
   checkedAt: number | null;

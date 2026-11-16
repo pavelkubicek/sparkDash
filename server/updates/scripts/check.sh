@@ -72,14 +72,20 @@ else
   else
     printf 'FW_STATE=error\nFW_ERR=%s\n' "$(clean "fwupdmgr get-updates answered nothing (exit $frc)")"
   fi
-  # Exit 0 means fwupd wants a reboot to finish a firmware update; anything past 1 (a missing
-  # subcommand on an old fwupd) stays unknown rather than guessed.
-  timeout -k 10 60 fwupdmgr check-reboot-needed >/dev/null 2>&1; nrc=$?
-  case $nrc in
-    0) printf 'FWREBOOT=1\n' ;;
-    1) printf 'FWREBOOT=0\n' ;;
-    *) printf 'FWREBOOT=unknown\n' ;;
-  esac
+  # A pending firmware reboot is a device fact, not an exit code: UEFI keys, dbx, NVMe and EC
+  # plugins always carry needs-reboot/needs-shutdown as capability flags, so old fwupdmgr
+  # `check-reboot-needed` exits 0 on idle machines too. What fwupd applied and still waits to
+  # finish is a device whose UpdateState is 4 (FWUPD_UPDATE_STATE_NEEDS_REBOOT). fwupd 2.0.x
+  # prints `"UpdateState" : 4`, newer prints `"UpdateState": 4`; the pattern accepts both and
+  # is applied per device object (the same `tr '{' '\n'` split the firmware list uses).
+  DEVOUT=$(timeout -k 10 60 fwupdmgr get-devices --json 2>/dev/null); drc=$?
+  if [ "$drc" -ne 0 ] || ! printf '%s' "$DEVOUT" | grep -q '"Devices"'; then
+    printf 'FWREBOOT=unknown\n'
+  elif printf '%s' "$DEVOUT" | tr '{' '\n' | grep -Eq '"UpdateState"[[:space:]]*:[[:space:]]*4([^0-9]|$)'; then
+    printf 'FWREBOOT=1\n'
+  else
+    printf 'FWREBOOT=0\n'
+  fi
 fi
 
 # 4. Pending reboots and index freshness.
