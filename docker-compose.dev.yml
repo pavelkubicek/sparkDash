@@ -46,6 +46,7 @@ services:
       - AI_PROXY_URL=https://ai-proxy.lan
       - ORCHESTRATOR_WEBUI_URL=https://orchestrator.lan
       - AUDITOR_WEBUI_URL=https://auditor.lan
+      - PR_COMPANION_WEBUI_URL=https://pr-companion.lan
       - NODE_ENV=development
       - HOST_PROC_PATH=/host/proc
       - HOST_SYS_PATH=/host/sys

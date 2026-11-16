@@ -2820,6 +2820,119 @@ export interface AuditorWebuiUrl {
   url: string;
 }
 
+// ─── PR Companion ──────────────────────────────────────────
+/**
+ * The spark.ai.developer suite's PR lens / merge-risk daemon (API on port
+ * 10030). Same bridge contract as the Orchestrator and Auditor; fields mirror
+ * its payloads (`src/pr_companion/api.py` + `models.py`, wire shapes as the
+ * companion's own UI reads them in `pr-companion-ui/src/types.ts`).
+ */
+
+/** Daemon status as reported by GET /api/status. */
+export interface PrCompanionStatus {
+  running: boolean;
+  /** The companion parked dispatch (its own pause, not the shared pool's). */
+  paused: boolean;
+  enabled: boolean;
+  /** Analysis runs currently executing (slot consumers). */
+  analyzing: number;
+  queued: number;
+  /** The companion's own share of the shared pool. */
+  slots_used: number;
+  slots_total: number;
+  /** The siblings' share of the same pool, as the companion observed it. */
+  orchestrator_slots_used: number;
+  orchestrator_slots_pending: number;
+  auditor_slots_used: number;
+  auditor_slots_pending: number;
+  /** Cap the shared-pool plan grants the companion (null = unobserved). */
+  companion_cap: number | null;
+  force_running: number;
+  in_auto_window: boolean;
+  auto_next_at: string | null;
+  model_online: boolean;
+  served_models: string[] | null;
+  renderer_ok: boolean;
+  github_ok: boolean;
+  /** ok | missing — the credential ladder's state, never the token. */
+  github_auth: string;
+  repos_enabled: number;
+  open_prs: number;
+  analyzed_prs: number;
+  version: string;
+}
+
+/** Risk band vocabulary (`models.RiskBand`; null = not assessed). */
+export type PrCompanionRiskBand = "low" | "medium" | "high";
+
+/** Analysis-state vocabulary (`latest_analysis_status` per companion-ui). */
+export type PrCompanionAnalysisStatus = "current" | "stale" | "running" | "queued" | "failed" | "none";
+
+/** One cached PR row as reported by GET /api/pulls (the fields the card reads). */
+export interface PrCompanionPull {
+  id: string;
+  repo_id: string;
+  repo_name: string | null;
+  repo_slug: string | null;
+  number: number;
+  title: string;
+  author: string | null;
+  state: "open" | "draft" | "merged" | "closed";
+  draft: boolean;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  html_url: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  latest_risk_band: PrCompanionRiskBand | null;
+  latest_analysis_status: PrCompanionAnalysisStatus | null;
+  checks_summary: Record<string, number> | null;
+  /** GitHub mergeability; `mergeable_state: "dirty"` = conflict. */
+  mergeable: boolean | null;
+  mergeable_state: string | null;
+}
+
+/** Response envelope of GET /api/pulls. */
+export interface PrCompanionPullsResponse {
+  pulls: PrCompanionPull[];
+}
+
+/** One analysis run row as reported by GET /api/runs (`api._run_item`). */
+export interface PrCompanionRun {
+  id: string;
+  /** `<repo_id>#<number>` — split halves carried as first-class fields. */
+  pr_id: string;
+  repo_id: string;
+  repo_name: string | null;
+  number: number | null;
+  title: string | null;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  features: string[];
+  assessment_kind: "initial" | "reassess";
+  phase: string | null;
+  phase_detail: string | null;
+  progress: number;
+  /** Live dispatch order for queued rows (§13.2); null elsewhere. */
+  position: number | null;
+  force: boolean;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** Response envelope of GET /api/runs. */
+export interface PrCompanionRunsResponse {
+  runs: PrCompanionRun[];
+  total: number;
+}
+
+/** Response for the PR Companion webui-url helper. */
+export interface PrCompanionWebuiUrl {
+  url: string;
+}
+
 // ─── Spark AutoPower ───────────────────────────────────────
 /** One watch span (single per day type, "HH:MM", end ≤ start wraps past midnight). */
 export interface AutoPowerWindow {

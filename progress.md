@@ -610,3 +610,102 @@ under /bin/sh with PATH-stubbed sudo (-n refuse, -S sudoers-refusal, "Sorry, try
 PATH without sh: stdout must be exactly the RESULT=error/CODE=no-sudo|bad-password|no-sh KEY=value
 answer, exit 0, stderr free of "not found". Suite: 34/34 + settings-apikeys 2/2.
 2026-11-16 RefreshFix3: refresh() now catches _exec transport rejection — sets state=error + sanitized lastError (mirrors _checkNow) and rethrows so the route surfaces it; regression test added (error state on rejecting transport, later successful check clears to ok).
+## 2026-11-15 — PR Companion integrated into the AI developer card
+
+**What.** The spark.ai.developer suite's third daemon (PR lens + merge risk,
+API 10030, UI 10031) joined the Overview's AI developer card like the
+orchestrator and auditor before it:
+
+- Server bridge `server/index.js`: `/api/pr-companion/status|pulls|runs|webui-url`
+  via the shared `createBridge`; env `PR_COMPANION_API_HOST` /
+  `PR_COMPANION_WEBUI_HOST` / `PR_COMPANION_WEBUI_URL` (defaults 10030/10031,
+  co-located loopback). Its `slots-config` is deliberately not bridged — the
+  shared pool's plan belongs to the orchestrator, and the card's Slots dialog
+  edits it at the source.
+- Frontend: `PrCompanion*` types + fetchers (`src/api/`),
+  `PrCompanionLogoIcon` (the companion favicon's blue PR glyph),
+  and a fourth **PR Companion** tab in `AiDeveloperPanel.tsx` (queue running→
+  queued, open PRs with the companion's §16 risk/analysis chip tones, model/
+  GitHub health strip), a "PR Companion — running (N)" section on Active
+  (running analyses count into active jobs), and a third **blue** segment in
+  the shared-pool bars (companion `/status` reports the whole pool).
+- Regression: `src/components/OverviewPage/AiDeveloperPanel.companion.test.tsx`
+  (tab + jump link + active section + slot math, tab content, companion-down
+  degradation).
+
+**Verification.** `npm run typecheck`, `npm run build`, full `npm test`
+(server + frontend, 201 files / 1527 frontend tests) green. Live smoke: the
+bridge answered through an isolated host server run and after
+`docker restart sparkDash` (the container needed the restart to pick up the
+new server module graph); headless Chromium on `/overview` renders the tab
+bar with live counts (Active (4) · Orchestrator (45) · Auditor (11) ·
+PR Companion (51)), the Active section lists the four running analyses with
+their phase details, and the footer reads 4/4 slots (all held by the
+companion at that moment).
+
+**Not done / notes.** Pixel-level screenshot of the fourth tab's pane was not
+captured (CDP automation flaked in this environment); its rendering is pinned
+by the jsdom regression test and its data source by the bridge smoke. The
+orchestrator's `/api/slots-config`-owned plan means the companion's
+`companion_cap` is display-only here.
+
+## 2026-11-15 — PR Companion rows restyled to the auditor row anatomy
+
+**Feedback.** The companion tab's lists used a different row style
+(single-line title with right-aligned chips, an inner `max-h-40` scroll box
+on the PR list) and read as a foreign element in the card.
+
+**Fix.** Queue and open-PR rows now use the card's shared row anatomy —
+full-width button, status dot (pulsing cyan running / brand blue queued /
+blue open), truncate title line, then the wrap meta line (`mt-0.5 flex
+flex-wrap … text-[10px] text-muted`): repo, phase detail or `#N in queue`,
+feature chips (TierChip style) and age on runs; repo, draft chip, risk +
+analysis chips (borderless §16 tones), `+adds −dels` and age on PRs. The PR
+list is a plain section capped at the card's 12-row limit with an "… and N
+more" jump link (orchestrator Pending-PRs structure); the queue keeps the
+auditor ready-list's flex-grow scroll region. Regression test pins the meta
+line (`#1 in queue`, `+412 −87`, draft chip).
+
+**Verification.** `npm run typecheck`, `npm run build`, frontend suite
+(201 files / 1527 tests) green; live headless-Chromium dump confirms the
+card renders with live counts and no regressions.
+
+## 2026-11-16 — AI developer card: phone layout fixed (overlap + dead gaps)
+
+**Reported.** On a phone the Active tab painted rows over the slots footer
+and left large dead gaps between sections; the card also kept a 600px
+minimum height on phone.
+
+**Cause.** The card's `min-h-[600px]` floor applied at every width, and on
+phone the flex chain (`flex-1` bodies, `min-h-0`, `overflow-y-auto` panes)
+let sections stretch into that floor (the gaps) while content taller than
+the clamped box bled over the `mt-auto` footer (no shrink path).
+
+**Fix.** Breakpoint rule: desktop keeps the designed flex-fill layout; phone
+(`max-phone:`, the app's ≤900px variant matching Panel's `PHONE_MEDIA`)
+renders natural flow — card `max-phone:min-h-0`, body/panes/sections
+`max-phone:flex-none max-phone:min-h-[auto]`, panes and inner lists
+`max-phone:overflow-visible` (scroll only under the desktop's definite
+height), the Active/orchestrator panes' `overflow-y-auto nice-scroll` is
+desktop-scoped. No desktop value changed.
+
+**Verification.** CDP at 500×1400: card height 409px = content, pane
+`scrollH == clientH` (no internal scroll), footer below the pane, overlap
+`false`, card `scrollHeight − clientHeight = 0`. CDP at 1440×1000: card
+exactly 600px, pane fills it, footer pinned — desktop unchanged. Full
+frontend suite 201 files / 1527 tests green; typecheck and build clean.
+
+## 2026-11-16 — PR Companion jump link points at pr-companion.lan
+
+**Change.** `PR_COMPANION_WEBUI_URL=https://pr-companion.lan` added to
+`docker-compose.yml` and `docker-compose.dev.yml` (same LAN reverse-proxy
+contract as the orchestrator/auditor links); the card's "open PR Companion"
+jump link, the tab's "Show all" pills and the "… and N more" row all derive
+from `/api/pr-companion/webui-url`, which now answers the configured name.
+Stray `companion.lan` comment mentions renamed to `pr-companion.lan`.
+
+**Verification.** `docker compose up -d` recreated the container;
+`/api/pr-companion/webui-url` → `{"url":"https://pr-companion.lan"}` and the
+rendered overview DOM carries `href="https://pr-companion.lan"` on the jump
+link. (The pr-companion.lan vhost on the LAN reverse proxy itself is outside
+this repo.)

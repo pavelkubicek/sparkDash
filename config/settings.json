@@ -23,6 +23,7 @@
   "energyCurrency": "$",
   "showVramBreakdown": true,
   "prometheusExport": false,
+  "allowPlainSudoPassword": false,
   "intelVramSudo": false,
   "vulnhuntEnabled": false,
   "reaEnabled": false,
@@ -32,7 +33,11 @@
   "mqttUrl": "",
   "mqttUsername": "",
   "mqttTopicPrefix": "sparkdash",
+  "mqttDiscovery": false,
+  "mqttDiscoveryPrefix": "homeassistant",
+  "apiKeysEnabled": false,
   "occupancyMaxAgeMs": 43200000,
   "healthTempWarnC": 85,
-  "healthTempCriticalC": 90
+  "healthTempCriticalC": 90,
+  "llmStreamSample": false
 }

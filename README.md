@@ -1379,6 +1379,8 @@ Copy `.env.example` to `.env` if needed:
 | `AI_PROXY_URL` | _(host:port link)_ | Public HTTPS base for the observer "jump" links, e.g. `https://ai-proxy.lan`. Overrides the link only — the bridge still fetches `AI_PROXY_HOST` over plain http |
 | `ORCHESTRATOR_WEBUI_URL` | _(host:port link)_ | Public HTTPS base for the orchestrator web UI "jump" links, e.g. `https://orchestrator.lan` |
 | `AUDITOR_WEBUI_URL` | _(host:port link)_ | Public HTTPS base for the auditor web UI "jump" links, e.g. `https://auditor.lan` |
+| `PR_COMPANION_API_HOST` / `PR_COMPANION_WEBUI_HOST` | _(unset = co-located)_ | Hostnames of the PR Companion daemon API (port 10030) and its web UI (port 10031) when they do not run on the dashboard machine |
+| `PR_COMPANION_WEBUI_URL` | _(host:port link)_ | Public HTTPS base for the PR Companion web UI "jump" links, e.g. `https://pr-companion.lan` |
 | `AUTOPOWER_FEATURE` | _(off)_ | Spark AutoPower master switch. `1` re-enables the whole feature: Overview panel, idle-shutdown ticks and scheduled wakes; off hides the panel, never arms the timer and rejects the config/tick routes |
 | `SSH_CONTROL_PERSIST_SECONDS` | `60` | Idle SSH transport persistence in seconds, capped at `3600`. Reuses authenticated SSH transports for remote collectors. Set to `0` to disable multiplexing. |
 | `MACMON_PATH` | _(unset)_ | macOS units: path to [macmon](https://github.com/vladkens/macmon) on the Mac, when it is not in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin` or the SSH PATH. macmon (no sudo) supplies CPU / GPU usage, temperatures, RAM and system power for Mac units. |

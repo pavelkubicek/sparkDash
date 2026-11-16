@@ -44,6 +44,10 @@ import type {
   AuditorStats,
   AuditorStatus,
   AuditorWebuiUrl,
+  PrCompanionPullsResponse,
+  PrCompanionRunsResponse,
+  PrCompanionStatus,
+  PrCompanionWebuiUrl,
   FleetEnergy,
   HealthResponse,
   InferenceActivity,
@@ -1280,6 +1284,69 @@ export function updateAuditorSlotsConfig(patch: AuditorSlotsPatch): Promise<Audi
 /** Web UI base URL for "open auditor" links. */
 export function fetchAuditorWebuiUrl(): Promise<AuditorWebuiUrl> {
   return apiFetch("/api/auditor/webui-url");
+}
+
+// ─── PR Companion ─────────────────────────────────────────
+// Same bridge pattern as the orchestrator and auditor: every call goes through
+// the sparkDash server, each endpoint returns 502 when the daemon is
+// unreachable.
+
+/** Daemon status (shared-pool slots, run counters, model health). */
+export function fetchPrCompanionStatus(): Promise<PrCompanionStatus> {
+  return apiFetch("/api/pr-companion/status");
+}
+
+/**
+ * Cached PR rows (default excludes archived; `state="open"` is the card's
+ * working set). Query passes through to the companion.
+ */
+export function fetchPrCompanionPulls(query: {
+  state?: "open" | "merged" | "closed";
+  repo?: string;
+  q?: string;
+  risk?: string;
+  analysis?: string;
+  draft?: boolean;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<PrCompanionPullsResponse> {
+  const search = new URLSearchParams();
+  if (query.state) search.set("state", query.state);
+  if (query.repo) search.set("repo", query.repo);
+  if (query.q) search.set("q", query.q);
+  if (query.risk) search.set("risk", query.risk);
+  if (query.analysis) search.set("analysis", query.analysis);
+  if (query.draft != null) search.set("draft", String(query.draft));
+  if (query.limit != null) search.set("limit", String(query.limit));
+  if (query.offset != null) search.set("offset", String(query.offset));
+  const qs = search.toString();
+  return apiFetch(`/api/pr-companion/pulls${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * Analysis runs, newest-queued first (queue page rows; `status` filters —
+ * the card polls `running` for the Active tab's live work).
+ */
+export function fetchPrCompanionRuns(query: {
+  status?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  repo_id?: string;
+  pr_id?: string;
+  assessment_kind?: "initial" | "reassess";
+  limit?: number;
+} = {}): Promise<PrCompanionRunsResponse> {
+  const search = new URLSearchParams();
+  if (query.status) search.set("status", query.status);
+  if (query.repo_id) search.set("repo_id", query.repo_id);
+  if (query.pr_id) search.set("pr_id", query.pr_id);
+  if (query.assessment_kind) search.set("assessment_kind", query.assessment_kind);
+  if (query.limit != null) search.set("limit", String(query.limit));
+  const qs = search.toString();
+  return apiFetch(`/api/pr-companion/runs${qs ? `?${qs}` : ""}`);
+}
+
+/** Web UI base URL for "open PR Companion" links. */
+export function fetchPrCompanionWebuiUrl(): Promise<PrCompanionWebuiUrl> {
+  return apiFetch("/api/pr-companion/webui-url");
 }
 
 // ─── Spark AutoPower ─────────────────────────────────────

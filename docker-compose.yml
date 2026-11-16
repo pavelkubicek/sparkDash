@@ -91,11 +91,13 @@ services:
       # co-located on the dashboard host, so their API bridges stay loopback.
       # Browser-facing "jump" links go through the LAN HTTPS reverse proxy
       # (MyLAN-Root-CA cert — trusted by the browser, not by this container):
-      # https://ai-proxy.lan / https://orchestrator.lan / https://auditor.lan.
+      # https://ai-proxy.lan / https://orchestrator.lan / https://auditor.lan /
+      # https://pr-companion.lan.
       - AI_PROXY_HOST=spark1.lan
       - AI_PROXY_URL=https://ai-proxy.lan
       - ORCHESTRATOR_WEBUI_URL=https://orchestrator.lan
       - AUDITOR_WEBUI_URL=https://auditor.lan
+      - PR_COMPANION_WEBUI_URL=https://pr-companion.lan
       - NODE_ENV=production
       # Opt in only if this process shares the physical host's network namespace.
       # RootlessKit can isolate the daemon even with network_mode: host above.

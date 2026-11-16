@@ -140,6 +140,9 @@ const AI_PROXY_PORT = parseInt(process.env.AI_PROXY_PORT || "3001", 10);
 const ORCHESTRATOR_API_PORT = parseInt(process.env.ORCHESTRATOR_API_PORT || "10000", 10);
 const ORCHESTRATOR_WEBUI_PORT = parseInt(process.env.ORCHESTRATOR_WEBUI_PORT || "10001", 10);
 const AUDITOR_API_PORT = parseInt(process.env.AUDITOR_API_PORT || "10010", 10);
+// PR Companion daemon (spark.ai.developer suite): API 10030, its own UI port 10031.
+const PR_COMPANION_API_PORT = parseInt(process.env.PR_COMPANION_API_PORT || "10030", 10);
+const PR_COMPANION_WEBUI_PORT = parseInt(process.env.PR_COMPANION_WEBUI_PORT || "10031", 10);
 
 /** Per-spark LLM HTTP port (1–65535), else env default. */
 function resolveLlmPort(sparkOrPort) {
@@ -843,6 +846,8 @@ const ORCHESTRATOR_API_HOST = process.env.ORCHESTRATOR_API_HOST || "";
 const ORCHESTRATOR_WEBUI_HOST = process.env.ORCHESTRATOR_WEBUI_HOST || "";
 const AUDITOR_API_HOST = process.env.AUDITOR_API_HOST || "";
 const AUDITOR_WEBUI_HOST = process.env.AUDITOR_WEBUI_HOST || "";
+const PR_COMPANION_API_HOST = process.env.PR_COMPANION_API_HOST || "";
+const PR_COMPANION_WEBUI_HOST = process.env.PR_COMPANION_WEBUI_HOST || "";
 // The auditor web UI has no dedicated LAN port — it lives behind the reverse
 // proxy on 443, same as ORCHESTRATOR_WEBUI_URL=https://auditor.lan.
 const AUDITOR_WEBUI_PORT = parseInt(process.env.AUDITOR_WEBUI_PORT || "443", 10);
@@ -852,6 +857,7 @@ const AUDITOR_WEBUI_PORT = parseInt(process.env.AUDITOR_WEBUI_PORT || "443", 10)
 // API bridges above stay http.
 const ORCHESTRATOR_WEBUI_URL = (process.env.ORCHESTRATOR_WEBUI_URL || "").replace(/\/+$/, "");
 const AUDITOR_WEBUI_URL = (process.env.AUDITOR_WEBUI_URL || "").replace(/\/+$/, "");
+const PR_COMPANION_WEBUI_URL = (process.env.PR_COMPANION_WEBUI_URL || "").replace(/\/+$/, "");
 const BRIDGE_TIMEOUT_MS = 5000;
 
 /**
@@ -908,6 +914,10 @@ const orchestrator = createBridge({
 const auditor = createBridge({
   base: `http://${AUDITOR_API_HOST || "127.0.0.1"}:${AUDITOR_API_PORT}`,
   label: "Auditor",
+});
+const prCompanion = createBridge({
+  base: `http://${PR_COMPANION_API_HOST || "127.0.0.1"}:${PR_COMPANION_API_PORT}`,
+  label: "PR Companion",
 });
 
 // ─── Orchestrator ─────────────────────────────────────────
@@ -995,6 +1005,31 @@ app.post("/api/auditor/slots-config", (req, res) => {
 /** Web UI base URL for "open auditor" links — public URL, configured host, else request origin. */
 app.get("/api/auditor/webui-url", (req, res) => {
   res.json({ url: AUDITOR_WEBUI_URL || integrationBaseUrl(req, AUDITOR_WEBUI_HOST, AUDITOR_WEBUI_PORT) });
+});
+
+// ─── PR Companion ─────────────────────────────────────────
+// The spark.ai.developer suite's third daemon (PR lens + merge-risk analysis
+// over the open PRs). Same bridge contract as the orchestrator and auditor.
+// Its /api/slots-config is intentionally NOT bridged: the shared pool has one
+// owner (the orchestrator) and the companion's own route only proxies there —
+// the card's Slots dialog already edits the plan at the source.
+app.get("/api/pr-companion/status", (req, res) => {
+  void prCompanion.get(req, res, "/api/status");
+});
+
+/** Cached open-PR list — state/repo/q/risk/analysis/draft/limit/offset pass through. */
+app.get("/api/pr-companion/pulls", (req, res) => {
+  void prCompanion.get(req, res, "/api/pulls");
+});
+
+/** Analysis runs — status/repo_id/pr_id/assessment_kind/limit pass through. */
+app.get("/api/pr-companion/runs", (req, res) => {
+  void prCompanion.get(req, res, "/api/runs");
+});
+
+/** Web UI base URL for "open PR Companion" links — public URL, configured host, else request origin. */
+app.get("/api/pr-companion/webui-url", (req, res) => {
+  res.json({ url: PR_COMPANION_WEBUI_URL || integrationBaseUrl(req, PR_COMPANION_WEBUI_HOST, PR_COMPANION_WEBUI_PORT) });
 });
 
 // ─── REST API ────────────────────────────────────────────

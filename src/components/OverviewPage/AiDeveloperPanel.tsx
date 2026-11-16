@@ -13,6 +13,10 @@ import {
   fetchOrchestratorStatus,
   fetchOrchestratorTickets,
   fetchOrchestratorWebuiUrl,
+  fetchPrCompanionPulls,
+  fetchPrCompanionRuns,
+  fetchPrCompanionStatus,
+  fetchPrCompanionWebuiUrl,
 } from "../../api/client";
 import type { OrchestratorLive } from "../../shared/idleCounts";
 import type {
@@ -28,9 +32,20 @@ import type {
   OrchestratorSlotsConfig,
   OrchestratorStatus,
   OrchestratorTicket,
+  PrCompanionAnalysisStatus,
+  PrCompanionPull,
+  PrCompanionRiskBand,
+  PrCompanionRun,
+  PrCompanionStatus,
 } from "../../api/types";
 import { Panel } from "../ui/Panel";
-import { AuditorLogoIcon, ExternalLinkIcon, GearIcon, OrchestratorLogoIcon } from "../ui/icons";
+import {
+  AuditorLogoIcon,
+  ExternalLinkIcon,
+  GearIcon,
+  OrchestratorLogoIcon,
+  PrCompanionLogoIcon,
+} from "../ui/icons";
 import { SlotSettingsDialog } from "./SlotSettingsDialog";
 
 const POLL_MS = 5000;
@@ -43,6 +58,10 @@ const POLL_MS = 5000;
 const REVIEWS_POLL_LIMIT = 200;
 const FINDINGS_POLL_LIMIT = 500;
 const SCANS_POLL_LIMIT = 10;
+// PR Companion windows: the open-PR working set (the card caps its rows
+// anyway) and a recent run window for the running/queued splits.
+const PC_PULLS_POLL_LIMIT = 100;
+const PC_RUNS_POLL_LIMIT = 30;
 
 /** Review statuses where the model is still working (auditor-ui's
  *  in-progress definition): pass 1 running, candidates written, pass 2 checking. */
@@ -182,6 +201,25 @@ const STATUS_LABEL: Record<AuditorReviewStatus, string> = {
   failed: "Failed",
   cancelled: "Cancelled",
   done: "Scanned",
+};
+
+/** ── PR Companion chip vocabulary — copied from pr-companion-ui's
+ *  `src/lib/colors.ts` (plan §16) so the dashboard reads exactly like
+ *  pr-companion.lan for the same state. Blue stays the companion's brand —
+ *  never a risk fill. ── */
+const PC_RISK_TONES: Record<PrCompanionRiskBand, string> = {
+  low: "bg-[#22c55e]/15 text-[#86efac]",
+  medium: "bg-[#f59e0b]/15 text-[#fcd34d]",
+  high: "bg-[#ef4444]/15 text-[#fca5a5]",
+};
+
+const PC_ANALYSIS_TONES: Record<PrCompanionAnalysisStatus, string> = {
+  current: "bg-[#3b82f6]/15 text-[#93c5fd]",
+  stale: "bg-[#f59e0b]/15 text-[#fcd34d]",
+  running: "bg-[#06b6d4] text-[#111827] animate-pulse",
+  queued: "bg-[#374151] text-[#d1d5db]",
+  failed: "bg-[#dc2626] text-white",
+  none: "bg-[#374151] text-[#d1d5db]",
 };
 
 /** Resolve the display tone for a ticket's PR badge. */
@@ -504,23 +542,133 @@ function FinishedRow({ review, onOpen }: { review: AuditorReview; onOpen: () => 
   );
 }
 
-type Tab = "active" | "orchestrator" | "auditor";
+/** Risk-band chip — companion §16 tones, auditor TierChip treatment (inline
+ *  in the row's meta line; null renders nothing). */
+function PcRiskChip({ band }: { band: PrCompanionRiskBand | null }) {
+  if (!band) return null;
+  return (
+    <span
+      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${PC_RISK_TONES[band]}`}
+      title={`Merge risk: ${band}`}
+    >
+      {band}
+    </span>
+  );
+}
 
-const TAB_IDS: ReadonlyArray<Tab> = ["active", "orchestrator", "auditor"];
+/** Analysis-state chip — companion §16 tones, TierChip treatment; running pulses. */
+function PcAnalysisChip({ status }: { status: PrCompanionAnalysisStatus | null }) {
+  if (!status || status === "none") return null;
+  const label = status === "current" ? "analyzed" : status;
+  return (
+    <span
+      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${PC_ANALYSIS_TONES[status]}`}
+      title={`Analysis: ${status}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** One companion analysis run (queued or running) — auditor-row anatomy:
+ *  status dot (pulsing cyan while running, brand blue queued), truncate
+ *  title, meta line with repo, phase/queue position, feature chips and age. */
+function CompanionRunRow({ run, onOpen }: { run: PrCompanionRun; onOpen: () => void }) {
+  const running = run.status === "running";
+  const color = running ? "#06b6d4" : "#4493f8";
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-center gap-2 text-left transition-colors hover:text-accent"
+      title={`Open ${run.title ?? `PR #${run.number ?? ""}`} in the PR Companion${run.error ? ` — ${run.error}` : ""}`}
+    >
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${running ? "animate-pulse" : ""}`}
+        style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }}
+        title={run.status}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs text-text">
+          {run.title ?? `PR #${run.number ?? run.pr_id}`}
+        </span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+          <span className="truncate">{run.repo_name ?? run.repo_id}</span>
+          {running ? (
+            (run.phase_detail || run.phase) && <span className="truncate">{run.phase_detail || run.phase}</span>
+          ) : (
+            run.position != null && <span className="font-tabular">#{run.position} in queue</span>
+          )}
+          {run.features.map((feature) => (
+            <span
+              key={feature}
+              className="rounded bg-[#1f2937] px-1.5 py-0.5 text-[10px] text-[#d1d5db]"
+              title={`Analyzing ${feature}`}
+            >
+              {feature}
+            </span>
+          ))}
+          <span className="font-tabular">{ageLabel(running ? run.started_at : run.created_at)}</span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** One open-PR row — auditor-row anatomy with the companion's chips inline
+ *  in the meta line (repo, draft, risk band, analysis state, diff size, age). */
+function PcPullRow({ pull, onOpen }: { pull: PrCompanionPull; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-center gap-2 text-left transition-colors hover:text-accent"
+      title={`Open ${pull.title} in the PR Companion`}
+    >
+      <span
+        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: "#4493f8", boxShadow: "0 0 6px #4493f8" }}
+        title={pull.draft ? "open · draft" : pull.state}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs text-text">{pull.title}</span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+          <span className="truncate">{pull.repo_name ?? pull.repo_id}</span>
+          {pull.draft && (
+            <span className="rounded bg-[#1f2937] px-1.5 py-0.5 text-[10px] text-[#d1d5db]">draft</span>
+          )}
+          <PcRiskChip band={pull.latest_risk_band} />
+          <PcAnalysisChip status={pull.latest_analysis_status} />
+          <span className="font-tabular">
+            +{pull.additions} −{pull.deletions}
+          </span>
+          <span className="font-tabular">{ageLabel(pull.updated_at ?? pull.created_at)}</span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+type Tab = "active" | "orchestrator" | "auditor" | "pr-companion";
+
+const TAB_IDS: ReadonlyArray<Tab> = ["active", "orchestrator", "auditor", "pr-companion"];
 
 const CHIP_CLS =
   "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent";
 
 /**
- * The merged "AI developer" card: the Orchestrator scheduler and the Auditor
- * reviewer in one Panel with three tabs — Active (both services' running
- * work: orchestrator tasks, in-progress reports and running vulnhunts),
- * Orchestrator (running tasks, plans, tickets, pending PRs) and Auditor
- * (ready-to-triage reports, pipeline). The two services now SHARE one slot
- * pool, so a single footer shows the combined usage. Same chrome as before:
- * one slots settings dialog managing the shared pool, both "open web UI" jump links, one 5 s bridge
+ * The merged "AI developer" card: the Orchestrator scheduler, the Auditor
+ * reviewer and the PR Companion in one Panel with four tabs — Active (the
+ * services' running work: orchestrator tasks, in-progress reports, running
+ * vulnhunts and companion analyses), Orchestrator (running tasks, plans,
+ * tickets, pending PRs), Auditor (ready-to-triage reports, pipeline) and
+ * PR Companion (queue, open PRs with risk/analysis chips, health). The three
+ * services SHARE one slot pool, so a single footer shows the combined usage
+ * (green orchestrator, orange auditor, blue companion). Same chrome as
+ * before: one slots settings dialog managing the shared pool, the "open web
+ * UI" jump links, one 5 s bridge
  * poll with independent per-endpoint degradation, and a graceful offline state
- * per service. Colors match the orchestrator and auditor web UIs exactly.
+ * per service. Colors match the orchestrator, auditor and companion web UIs exactly.
  */
 export function AiDeveloperPanel({
   onIdleCounts,
@@ -550,6 +698,12 @@ export function AiDeveloperPanel({
   const [aSlots, setASlots] = useState<AuditorSlotsConfig | null>(null);
   const [audError, setAudError] = useState<string | null>(null);
   const [auditorUrl, setAuditorUrl] = useState<string | null>(null);
+  // PR Companion state — the suite's third daemon (same degrade-per-service rule).
+  const [pcStatus, setPcStatus] = useState<PrCompanionStatus | null>(null);
+  const [pcPulls, setPcPulls] = useState<PrCompanionPull[]>([]);
+  const [pcRuns, setPcRuns] = useState<PrCompanionRun[]>([]);
+  const [pcError, setPcError] = useState<string | null>(null);
+  const [pcUrl, setPcUrl] = useState<string | null>(null);
   // No persistence: every reload starts on the Active overview tab.
   const [tab, setTab] = useState<Tab>("active");
   // Kept in a ref: the poll loop runs in a deps-less effect.
@@ -564,7 +718,7 @@ export function AiDeveloperPanel({
       // Each endpoint degrades independently: a single upstream failure must
       // not clear the other sections' data, but total failure per service =
       // that service down.
-      const [s, t, p, r, sc, aS, aSt, rv, fd, tcs, aSc] = await Promise.all([
+      const [s, t, p, r, sc, aS, aSt, rv, fd, tcs, aSc, pcs, pcp, pcr] = await Promise.all([
         fetchOrchestratorStatus().catch(() => null),
         fetchOrchestratorTickets().catch(() => null),
         fetchOrchestratorPlans().catch(() => null),
@@ -580,6 +734,11 @@ export function AiDeveloperPanel({
         // being review rows; the same window doubles as recent history.
         fetchAuditorTierCScans(SCANS_POLL_LIMIT).catch(() => null),
         fetchAuditorSlotsConfig().catch(() => null),
+        fetchPrCompanionStatus().catch(() => null),
+        // Unfiltered newest-first window: the running/queued splits and the
+        // open-PR list are derived client-side.
+        fetchPrCompanionPulls({ state: "open", limit: PC_PULLS_POLL_LIMIT }).catch(() => null),
+        fetchPrCompanionRuns({ limit: PC_RUNS_POLL_LIMIT }).catch(() => null),
       ]);
       if (cancelled) return;
       let sawOrch = false;
@@ -630,6 +789,20 @@ export function AiDeveloperPanel({
         setASlots(aSc);
       }
       setAudError(sawAud ? null : "Auditor unreachable — no data");
+      let sawPc = false;
+      if (pcs) {
+        sawPc = true;
+        setPcStatus(pcs);
+      }
+      if (pcp) {
+        sawPc = true;
+        setPcPulls(pcp.pulls);
+      }
+      if (pcr) {
+        sawPc = true;
+        setPcRuns(pcr.runs);
+      }
+      setPcError(sawPc ? null : "PR Companion unreachable — no data");
       // Publish for AutoPower. plansActive uses the DECISION definition
       // (queued/processing/creating_ticket) — a failed plan is terminal, so it
       // is listed in this panel but must not read as busy to AutoPower.
@@ -653,6 +826,11 @@ export function AiDeveloperPanel({
         if (!cancelled) setAuditorUrl(res.url);
       })
       .catch(() => {});
+    void fetchPrCompanionWebuiUrl()
+      .then((res) => {
+        if (!cancelled) setPcUrl(res.url);
+      })
+      .catch(() => {});
 
     void poll();
     return () => {
@@ -663,7 +841,8 @@ export function AiDeveloperPanel({
 
   const orchOnline = !orchError;
   const audOnline = !audError;
-  const anyOnline = orchOnline || audOnline;
+  const pcOnline = !pcError;
+  const anyOnline = orchOnline || audOnline || pcOnline;
 
   const activeTickets = (tickets ?? []).filter((t) => !!ACTIVE_STATUSES[t.status]);
   const activePlans = (plans ?? []).filter((p) => !!ACTIVE_PLAN_STATUSES[p.status]);
@@ -675,25 +854,33 @@ export function AiDeveloperPanel({
   const shownPrs = withPendingPrs.slice(0, PENDING_PR_LIMIT);
   const morePrs = withPendingPrs.length - shownPrs.length;
 
-  // The orchestrator and the auditor SHARE one slot pool, so the card shows a
-  // single footer: used = sum of the reachable services' slots, total = the
-  // orchestrator's view (falling back to the auditor's). Only one reachable →
-  // that service alone; both unreachable → the "— / —" offline rendering.
+  // The orchestrator, the auditor and the PR Companion SHARE one slot pool, so
+  // the card shows a single footer: used = sum of the reachable services'
+  // slots, total = the orchestrator's view (falling back to the auditor's,
+  // then the companion's). Only one reachable → that service alone; all
+  // unreachable → the "— / —" offline rendering.
   const orchUsed = status?.slots_used ?? slots?.effective_concurrency;
   const orchTotal = status?.slots_total ?? slots?.effective_concurrency;
   const audUsed = aStatus?.slots_used ?? aSlots?.effective_concurrency;
   const audTotal = aStatus?.slots_total ?? aSlots?.effective_concurrency;
-  // Per-service fills for the two-segment bars: unreachable → 0, clamped ≥ 0.
+  // Per-service fills for the three-segment bars: unreachable → 0, clamped ≥ 0.
   const orchSlots = Math.max(0, orchOnline ? orchUsed ?? 0 : 0);
   const audSlots = Math.max(0, audOnline ? audUsed ?? 0 : 0);
-  const slotsUsed = orchSlots + audSlots;
+  const pcSlots = Math.max(0, pcOnline ? pcStatus?.slots_used ?? 0 : 0);
+  const slotsUsed = orchSlots + audSlots + pcSlots;
   const slotsTotal =
-    (orchOnline ? orchTotal : undefined) ?? (audOnline ? audTotal : undefined) ?? 0;
-  // Green orchestrator segment first, then orange auditor; widths capped so
-  // the stacked pair can never overflow the track.
+    (orchOnline ? orchTotal : undefined) ??
+    (audOnline ? audTotal : undefined) ??
+    (pcOnline ? pcStatus?.slots_total ?? 0 : 0);
+  // Green orchestrator segment first, then orange auditor, then the blue
+  // companion; widths capped so the stacked trio can never overflow the track.
   const orchPct = slotsTotal > 0 ? Math.min(100, Math.round((orchSlots / slotsTotal) * 100)) : 0;
   const audPct =
     slotsTotal > 0 ? Math.min(100 - orchPct, Math.round((audSlots / slotsTotal) * 100)) : 0;
+  const pcPct =
+    slotsTotal > 0
+      ? Math.min(100 - orchPct - audPct, Math.round((pcSlots / slotsTotal) * 100))
+      : 0;
   // ── Auditor derivations — auditor-ui semantics over the polled windows ──
   // The model is still working on these reports (pass 1 / candidates / pass 2).
   const inProgress = reviews.filter((rv) => IN_PROGRESS_STATUSES[rv.status] === true);
@@ -722,13 +909,31 @@ export function AiDeveloperPanel({
   // Tier-C hunts still occupying an auditor slot — Active tab only.
   const runningScans = scans.filter((sc) => RUNNING_SCAN_STATUSES[sc.status] === true);
   const auditorBusy = inProgress.length + runningScans.length;
-  const activeJobs = runningTasks.length + auditorBusy;
+  // The companion's live work: runs executing or dispatched in its queue (the
+  // same slot-consumer semantics the auditor section uses). A queued run
+  // shows on the companion tab; only running ones count as active jobs.
+  const pcRunningRuns = pcRuns.filter((run) => run.status === "running");
+  const pcQueuedRuns = pcRuns.filter((run) => run.status === "queued");
+  const pcBusy = pcRunningRuns.length;
+  const activeJobs = runningTasks.length + auditorBusy + pcBusy;
 
   const openReviews = (report: AuditorReview) => {
     if (auditorUrl) window.open(`${auditorUrl}/reports/${encodeURIComponent(report.id)}`, "_blank", "noreferrer");
   };
   const openScan = (scan: AuditorTierCScan) => {
     if (auditorUrl) window.open(`${auditorUrl}/tier-c/scans/${encodeURIComponent(scan.scan_id)}`, "_blank", "noreferrer");
+  };
+  const openPull = (pull: PrCompanionPull) => {
+    if (pcUrl) {
+      window.open(
+        `${pcUrl}/pulls/${encodeURIComponent(pull.repo_id)}/${pull.number}`,
+        "_blank",
+        "noreferrer"
+      );
+    }
+  };
+  const openRun = (run: PrCompanionRun) => {
+    if (pcUrl) window.open(`${pcUrl}/runs/${encodeURIComponent(run.id)}`, "_blank", "noreferrer");
   };
 
   return (
@@ -742,12 +947,12 @@ export function AiDeveloperPanel({
           }`}
           title={`${orchOnline ? "Orchestrator online" : "Orchestrator unreachable"} · ${
             audOnline ? "Auditor online" : "Auditor unreachable"
-          }`}
+          } · ${pcOnline ? "PR Companion online" : "PR Companion unreachable"}`}
         />
       }
       accent
-      className="ov-aidev flex min-h-[600px] flex-col"
-      bodyClassName="flex flex-1 flex-col space-y-3"
+      className="ov-aidev flex min-h-[600px] flex-col max-phone:min-h-0"
+      bodyClassName="flex min-h-0 flex-1 flex-col space-y-3 max-phone:min-h-[auto]"
       collapsible={{
         key: "ai-developer",
         summary: anyOnline ? (
@@ -757,19 +962,20 @@ export function AiDeveloperPanel({
         ) : (
           "unreachable"
         ),
-        // Mini slot bar on the right of the collapsed phone header; both
+        // Mini slot bar on the right of the collapsed phone header; all
         // services unreachable → empty track, no fabricated numbers.
         aside: (
           <span
             title={
               anyOnline
-                ? `${slotsUsed} / ${slotsTotal} slots — green: orchestrator ${orchSlots}, orange: auditor ${audSlots}`
+                ? `${slotsUsed} / ${slotsTotal} slots — green: orchestrator ${orchSlots}, orange: auditor ${audSlots}, blue: PR Companion ${pcSlots}`
                 : "unreachable"
             }
           >
             <div className="flex h-1.5 w-16 overflow-hidden rounded-full bg-border">
               <div className="h-full bg-success" style={{ width: `${orchPct}%` }} />
               <div className="h-full bg-[#f97316]" style={{ width: `${audPct}%` }} />
+              <div className="h-full bg-[#4493f8]" style={{ width: `${pcPct}%` }} />
             </div>
           </span>
         ),
@@ -803,6 +1009,15 @@ export function AiDeveloperPanel({
           >
             <AuditorLogoIcon className="h-3.5 w-3.5" />
           </a>
+          <a
+            href={pcUrl ?? undefined}
+            target="_blank"
+            rel="noreferrer"
+            title="Open the PR Companion web UI"
+            className={CHIP_CLS}
+          >
+            <PrCompanionLogoIcon className="h-3.5 w-3.5" />
+          </a>
         </div>
       }
     >
@@ -814,9 +1029,17 @@ export function AiDeveloperPanel({
               ? activeJobs
               : id === "orchestrator"
                 ? withPendingPrs.length
-                : readyToTriage.length;
+                : id === "auditor"
+                  ? readyToTriage.length
+                  : pcPulls.length;
           const label =
-            id === "active" ? "Active" : id === "orchestrator" ? "Orchestrator" : "Auditor";
+            id === "active"
+              ? "Active"
+              : id === "orchestrator"
+                ? "Orchestrator"
+                : id === "auditor"
+                  ? "Auditor"
+                  : "PR Companion";
           return (
             <button
               key={id}
@@ -835,22 +1058,25 @@ export function AiDeveloperPanel({
       </div>
 
       {tab === "active" && (
-        <div className="flex min-h-0 flex-1 flex-col space-y-3">
+        <div className="flex min-h-0 flex-1 flex-col space-y-3 overflow-y-auto nice-scroll max-phone:flex-none max-phone:min-h-[auto] max-phone:overflow-visible">
           {!anyOnline ? (
             <div className="space-y-1">
-              <p className="text-xs text-warning">Orchestrator and Auditor unreachable</p>
+              <p className="text-xs text-warning">Orchestrator, Auditor and PR Companion unreachable</p>
               <p className="break-all text-[11px] text-muted">
-                {orchError} · {audError}
+                {orchError} · {audError} · {pcError}
               </p>
             </div>
-          ) : runningTasks.length === 0 && auditorBusy === 0 ? (
+          ) : runningTasks.length === 0 && auditorBusy === 0 && pcBusy === 0 ? (
             <div className="space-y-1">
               <p className="text-xs text-muted">No active jobs.</p>
               {!orchOnline && (
-                <p className="text-xs text-warning">Orchestrator unreachable — showing auditor only.</p>
+                <p className="text-xs text-warning">Orchestrator unreachable — showing others only.</p>
               )}
               {!audOnline && (
-                <p className="text-xs text-warning">Auditor unreachable — showing orchestrator only.</p>
+                <p className="text-xs text-warning">Auditor unreachable — showing others only.</p>
+              )}
+              {!pcOnline && (
+                <p className="text-xs text-warning">PR Companion unreachable — showing others only.</p>
               )}
             </div>
           ) : (
@@ -886,7 +1112,7 @@ export function AiDeveloperPanel({
               {/* Auditor's live slot consumers: reports mid-model AND running
                   Tier-C hunts — vulnhunts occupy slots without being review
                   rows, so the old analyzing-only feed never showed them. */}
-              <div className="flex min-h-[4.5rem] flex-1 flex-col space-y-1">
+              <div className="flex min-h-[4.5rem] flex-1 flex-col space-y-1 max-phone:flex-none max-phone:min-h-[auto]">
                 <p className="text-xs uppercase tracking-wide text-muted">
                   Auditor — in progress ({auditorBusy})
                 </p>
@@ -905,13 +1131,29 @@ export function AiDeveloperPanel({
                   </p>
                 )}
               </div>
+              {/* PR Companion's live work: analysis runs executing (queued rows
+                  live on the companion tab; only running ones hold a slot). */}
+              <div className="flex min-h-[4.5rem] flex-1 flex-col space-y-1 max-phone:flex-none max-phone:min-h-[auto]">
+                <p className="text-xs uppercase tracking-wide text-muted">
+                  PR Companion — running ({pcBusy})
+                </p>
+                {pcBusy > 0 ? (
+                  pcRunningRuns.map((run) => (
+                    <CompanionRunRow key={run.id} run={run} onOpen={() => openRun(run)} />
+                  ))
+                ) : (
+                  <p className="text-xs text-muted">
+                    {pcOnline ? "No analysis running right now." : "PR Companion unreachable."}
+                  </p>
+                )}
+              </div>
             </>
           )}
         </div>
       )}
 
       {tab === "orchestrator" && (
-        <div className="flex min-h-0 flex-1 flex-col space-y-3">
+        <div className="flex min-h-0 flex-1 flex-col space-y-3 overflow-y-auto nice-scroll max-phone:flex-none max-phone:min-h-[auto] max-phone:overflow-visible">
           {orchError ? (
             <div className="space-y-1">
               <p className="text-xs text-warning">Orchestrator unreachable</p>
@@ -1047,7 +1289,7 @@ export function AiDeveloperPanel({
       )}
 
       {tab === "auditor" && (
-        <div className="flex min-h-0 flex-1 flex-col space-y-3">
+        <div className="flex min-h-0 flex-1 flex-col space-y-3 max-phone:flex-none max-phone:min-h-[auto]">
           {audError ? (
             <div className="space-y-1">
               <p className="text-xs text-warning">Auditor unreachable</p>
@@ -1062,7 +1304,7 @@ export function AiDeveloperPanel({
                   height and scrolls instead of leaving a dead gap above the
                   footer. (In-progress work — reports mid-model and running
                   vulnhunts — lives on the Active tab.) */}
-              <div className="flex min-h-[7rem] flex-1 flex-col space-y-1">
+              <div className="flex min-h-[7rem] flex-1 flex-col space-y-1 max-phone:flex-none max-phone:min-h-[auto]">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs uppercase tracking-wide text-muted">
                     Ready to triage ({readyToTriage.length})
@@ -1081,7 +1323,7 @@ export function AiDeveloperPanel({
                   )}
                 </div>
                 {readyToTriage.length > 0 ? (
-                  <div className="nice-scroll -mx-1 flex-1 space-y-1 overflow-y-auto px-1">
+                  <div className="nice-scroll -mx-1 flex-1 space-y-1 overflow-y-auto px-1 max-phone:flex-none max-phone:overflow-visible">
                     {readyToTriage.map((review) => (
                       <FinishedRow key={review.id} review={review} onOpen={() => openReviews(review)} />
                     ))}
@@ -1136,21 +1378,160 @@ export function AiDeveloperPanel({
         </div>
       )}
 
-      {/* Combined slot usage footer — the orchestrator and the auditor share
-          one pool: green segment = orchestrator's slots, orange = auditor's. */}
+      {tab === "pr-companion" && (
+        <div className="flex min-h-0 flex-1 flex-col space-y-3 max-phone:flex-none max-phone:min-h-[auto]">
+          {pcError ? (
+            <div className="space-y-1">
+              <p className="text-xs text-warning">PR Companion unreachable</p>
+              <p className="break-all text-[11px] text-muted">{pcError}</p>
+            </div>
+          ) : (
+            <>
+              {/* Queue — runs executing and waiting, newest-queued first. The
+                  flex-grow region (same anatomy as the auditor tab's ready
+                  list) so a taller card scrolls here instead of gapping. */}
+              <div className="flex min-h-[7rem] flex-1 flex-col space-y-1 max-phone:flex-none max-phone:min-h-[auto]">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-wide text-muted">
+                    Queue ({pcRunningRuns.length + pcQueuedRuns.length})
+                  </p>
+                  {pcUrl && (
+                    <a
+                      href={`${pcUrl}/queue`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Show the full queue in the PR Companion"
+                      className={CHIP_CLS}
+                    >
+                      <ExternalLinkIcon className="h-3 w-3" />
+                      Show all
+                    </a>
+                  )}
+                </div>
+                {pcRunningRuns.length + pcQueuedRuns.length > 0 ? (
+                  <div className="nice-scroll -mx-1 flex-1 space-y-1 overflow-y-auto px-1 max-phone:flex-none max-phone:overflow-visible">
+                    {pcRunningRuns.map((run) => (
+                      <CompanionRunRow key={run.id} run={run} onOpen={() => openRun(run)} />
+                    ))}
+                    {pcQueuedRuns.map((run) => (
+                      <CompanionRunRow key={run.id} run={run} onOpen={() => openRun(run)} />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted">No queued or running analyses.</p>
+                )}
+              </div>
+
+              {/* Open PRs — the working set the companion keeps cached, the
+                  orchestrator Pending-PRs section's structure with the
+                  auditor's row anatomy (chips inline in the meta line). */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-wide text-muted">
+                    Open pull requests ({pcPulls.length})
+                  </p>
+                  {pcUrl && (
+                    <a
+                      href={`${pcUrl}/pulls`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Show all open pull requests in the PR Companion"
+                      className={CHIP_CLS}
+                    >
+                      <ExternalLinkIcon className="h-3 w-3" />
+                      Show all
+                    </a>
+                  )}
+                </div>
+                {pcPulls.length > 0 ? (
+                  <>
+                    {pcPulls.slice(0, PENDING_PR_LIMIT).map((pull) => (
+                      <PcPullRow
+                        key={`pc-${pull.repo_id}-${pull.number}`}
+                        pull={pull}
+                        onOpen={() => openPull(pull)}
+                      />
+                    ))}
+                    {pcPulls.length > PENDING_PR_LIMIT ? (
+                      <a
+                        href={`${pcUrl}/pulls`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`${pcPulls.length - PENDING_PR_LIMIT} more open pull ${pcPulls.length - PENDING_PR_LIMIT === 1 ? "request" : "requests"} — open the PR Companion`}
+                        className="flex items-center gap-2 text-xs text-muted transition-colors hover:text-accent"
+                      >
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#4493f8]/40" />
+                        <span className="min-w-0 flex-1 truncate">… and {pcPulls.length - PENDING_PR_LIMIT} more</span>
+                        <ExternalLinkIcon className="h-2.5 w-2.5 shrink-0" />
+                      </a>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted">No open pull requests.</p>
+                )}
+              </div>
+
+              {/* Health counters strip — the daemon's own reachability view,
+                  same text-chips row as the auditor tab's Pipeline strip. */}
+              <div className="space-y-1">
+                <p className="text-xs uppercase tracking-wide text-muted">Health</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted">
+                  {pcStatus?.model_online != null && (
+                    <span className="inline-flex items-center gap-1">
+                      <span
+                        className={`inline-block h-1.5 w-1.5 rounded-full ${
+                          pcStatus.model_online ? "bg-[#22c55e]" : "bg-[#dc2626]"
+                        }`}
+                      />
+                      model {pcStatus.model_online ? "online" : "offline"}
+                    </span>
+                  )}
+                  {pcStatus?.github_auth != null && (
+                    <span className="inline-flex items-center gap-1">
+                      <span
+                        className={`inline-block h-1.5 w-1.5 rounded-full ${
+                          pcStatus.github_ok ? "bg-[#22c55e]" : "bg-[#f59e0b]"
+                        }`}
+                      />
+                      GitHub {pcStatus.github_auth}
+                    </span>
+                  )}
+                  {pcStatus?.served_models?.length ? (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-tabular text-text">{pcStatus.served_models.length}</span>
+                      served model{pcStatus.served_models.length === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                  {pcStatus && (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-tabular text-text">{pcStatus.open_prs}</span>
+                      open PRs tracked
+                    </span>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Combined slot usage footer — the orchestrator, the auditor and the
+          PR Companion share one pool: green = orchestrator's slots, orange =
+          auditor's, blue = companion's. */}
       <div className="mt-auto flex items-center gap-3 border-t border-border pt-3">
         <div className="min-w-0 flex-1">
           <div className="flex h-1.5 overflow-hidden rounded-full bg-border">
             <div className="h-full bg-success" style={{ width: `${orchPct}%` }} />
             <div className="h-full bg-[#f97316]" style={{ width: `${audPct}%` }} />
+            <div className="h-full bg-[#4493f8]" style={{ width: `${pcPct}%` }} />
           </div>
         </div>
         <span
           className="shrink-0 whitespace-nowrap text-center"
           title={
             anyOnline
-              ? `Slots in use — the orchestrator and the auditor share one pool (green: orchestrator ${orchSlots}, orange: auditor ${audSlots})`
-              : "Slots in use — the orchestrator and the auditor share one pool"
+              ? `Slots in use — the orchestrator, the auditor and the PR Companion share one pool (green: orchestrator ${orchSlots}, orange: auditor ${audSlots}, blue: PR Companion ${pcSlots})`
+              : "Slots in use — the orchestrator, the auditor and the PR Companion share one pool"
           }
         >
           <span className="font-tabular text-[18px] font-bold leading-none text-text-strong">

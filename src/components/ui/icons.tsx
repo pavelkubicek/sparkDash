@@ -608,6 +608,23 @@ export function AuditorLogoIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/** PR Companion brand logo (pr-companion-ui favicon): blue pull-request
+ *  glyph inside a lens ring on a dark tile. Brand fills are intentional — do
+ *  not theme. */
+export function PrCompanionLogoIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width={14} height={14} viewBox="0 0 32 32" aria-hidden className={className}>
+      <rect width="32" height="32" rx="7" fill="#0d1117" />
+      <circle cx="16" cy="16" r="10.5" fill="none" stroke="#1f6feb" strokeWidth="1.2" opacity="0.55" />
+      <circle cx="11.5" cy="9" r="2" fill="#4493f8" />
+      <circle cx="20.5" cy="23" r="2" fill="#4493f8" />
+      <path d="M11.5 11v9.5a2.5 2.5 0 0 0 2.5 2.5h2" stroke="#4493f8" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      <path d="M20.5 21V11.5A2.5 2.5 0 0 0 18 9h-2" stroke="#58a6ff" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      <path d="M16 6.5l1.8 2.5H14.2z" fill="#58a6ff" />
+    </svg>
+  );
+}
+
 export function TrashIcon({ className = "" }: { className?: string }) {
   return (
     <svg {...baseProps(className)}>
