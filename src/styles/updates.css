@@ -1,0 +1,350 @@
+/* Updates page. Everything is scoped under .up (page) or .up-dialog (confirmations). */
+.up {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.up > .page-head {
+  margin-bottom: 2px;
+}
+.up [hidden] {
+  display: none !important;
+}
+.up .mono,
+.up-dialog .mono {
+  font-family: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+}
+
+/* ─── Cards (one per unit, cloned from the Storage picker) ─── */
+.up-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+.up-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.up-card:hover {
+  border-color: var(--color-border-strong);
+}
+.up-card.is-active {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+.up-card.is-offline {
+  opacity: 0.65;
+}
+.up-card__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.up-card__name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.up-card__counts {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-accent-text);
+}
+.up-card__sub {
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+.up-card__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Chips: reboot-required states. */
+.up-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  background: var(--color-warning-soft, var(--color-accent-soft));
+  color: var(--color-warning);
+}
+.up-chip--info {
+  background: var(--color-surface-elevated);
+  color: var(--color-muted-strong);
+}
+
+/* ─── Panels and action rows ─────────────────────────────── */
+.up-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.up-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.up-panel__head h2 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text-strong);
+}
+.up-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.up-sub {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+/* ─── Lists (apt packages, firmware devices, removals) ───── */
+.up-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.up-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--color-surface-elevated);
+}
+.up-list .up-from {
+  color: var(--color-muted);
+  font-size: 0.6875rem;
+}
+.up-empty {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+/* Empty-fleet and busy markers (the .panel shell does the box). */
+.up-state h2 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text-strong);
+  margin: 0;
+}
+.up-state p {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+
+/* ─── Banners (tones clone the Storage Banner) ───────────── */
+.up-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  font-size: 0.75rem;
+  color: var(--color-text);
+  background: var(--color-surface-elevated);
+}
+.up-banner__icon {
+  flex: none;
+  margin-top: 1px;
+}
+.up-banner__text {
+  min-width: 0;
+  flex: 1;
+}
+.up-banner__action {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.up-banner__x {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+}
+.up-banner.is-ok {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+.up-banner.is-info {
+  border-color: var(--color-info);
+  color: var(--color-info);
+}
+.up-banner.is-warn {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+.up-banner.is-error {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+/* ─── Job rows (fleet install-all and the unit's own install) ─── */
+.up-job {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.up-job__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.75rem;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--color-border);
+}
+.up-job__row:last-child {
+  border-bottom: 0;
+}
+.up-job__name {
+  font-weight: 600;
+  color: var(--color-text-strong);
+  min-width: 0;
+}
+.up-job__state {
+  color: var(--color-muted-strong);
+  flex: 1;
+}
+.up-job__state.is-done {
+  color: var(--color-success);
+}
+.up-job__state.is-error {
+  color: var(--color-danger);
+}
+.up-job__state.is-warn {
+  color: var(--color-warning);
+}
+.up-job__removals {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+.up-summary {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-muted-strong);
+  margin: 2px 0 0;
+}
+
+/* Spinner: the row marker of a running phase or unit. */
+.up-spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  animation: up-spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes up-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ─── DGX Dashboard service section ──────────────────────── */
+.up-svc {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.up-svc__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.75rem;
+  padding: 5px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-elevated);
+}
+.up-svc__unit {
+  font-weight: 600;
+  color: var(--color-text-strong);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.up-svc__cell {
+  color: var(--color-muted-strong);
+  white-space: nowrap;
+}
+.up-svc__cell.is-on {
+  color: var(--color-success);
+}
+.up-svc__cell.is-off {
+  color: var(--color-muted);
+}
+
+/* ─── Password dialog (shared by refresh / install / update-all / dashboard) ─── */
+.up-dialog .up-pw__note {
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+.up-dialog .up-pw__error {
+  font-size: 0.75rem;
+  color: var(--color-danger);
+  margin: 0;
+}
+.up-dialog .up-removals__list {
+  list-style: disc;
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.75rem;
+  color: var(--color-text);
+  max-height: 220px;
+  overflow: auto;
+}
+.up-dialog .field-hint.is-warn {
+  color: var(--color-warning);
+}

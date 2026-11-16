@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { benchId, benchTypeOf, ENERGY_ID, idToPath, initialActiveId, isPageId, isStaleSparkId, KIOSK_ID, OVERVIEW_ID, pathToId, STORAGE_ID, TEMPS_ID, TOOLS_PREFIX, toolId, toolTypeOf } from "./constants";
+import { benchId, benchTypeOf, ENERGY_ID, idToPath, initialActiveId, isPageId, isStaleSparkId, KIOSK_ID, OVERVIEW_ID, pathToId, STORAGE_ID, TEMPS_ID, TOOLS_PREFIX, toolId, toolTypeOf, UPDATES_ID } from "./constants";
 
 describe("route helpers", () => {
   it("round-trips ids and paths", () => {
@@ -9,6 +9,9 @@ describe("route helpers", () => {
     expect(pathToId("/storage")).toBe(STORAGE_ID);
     expect(idToPath(STORAGE_ID)).toBe("/storage");
     expect(isPageId(STORAGE_ID)).toBe(true);
+    expect(pathToId("/updates")).toBe(UPDATES_ID);
+    expect(idToPath(UPDATES_ID)).toBe("/updates");
+    expect(isPageId(UPDATES_ID)).toBe(true);
     expect(pathToId("/spark/a%20b")).toBe("a b");
     expect(idToPath("a b")).toBe("/spark/a%20b");
     expect(pathToId(idToPath(benchId("decode")))).toBe(benchId("decode"));

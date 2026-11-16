@@ -83,6 +83,7 @@ Monitored units run **Linux**, **macOS**, or **Windows** (a Windows PC with an N
 - **Quality compare is a sub-page of the Quality benchmark** (Suite / Compare sub-tabs), and a fresh run starts from the Defaults preset.
 - **Pico** is recognised as its own engine; with **Settings → Stream-sample engines without gauges** the dashboard measures decode tok/s itself and labels it *sampled*.
 - **Storage Manager** (sidebar → Storage): analyse a Spark's disk, browse files and Docker images, multi-select deletes with a pre-delete check and staged deletion.
+- **Updates** (sidebar → Updates): one sudo-free check per Spark per day (apt + firmware), installs with a one-time administrator password, **Update all machines**, and a switch for the DGX Dashboard services with their RAM use.
 - **GPU power limit per card** on GPU hosts, and **Settings → Allow sudo password over plain http** for units without passwordless sudo.
 - **API Keys page** (opt-in, read-only LiteLLM keys) and English/简体中文 across the main surfaces.
 
@@ -171,6 +172,7 @@ Full history: [CHANGELOG.md](./CHANGELOG.md)
 | **Spark roles** | **Head** / **Worker** / **Standalone** — worker label + head link; standalone can disable LLM monitoring; optional hide workers from Overview and tabs |
 | **Unified memory** | GB10 128 GB LPDDR5X pool (~273 GB/s), GPU/CPU split, bandwidth via `nvidia-smi dmon`. Non-Spark hosts show discrete **VRAM** (nvidia-smi) and system **RAM** separately |
 | **Health findings** | Small explainable rules over metrics already collected: GPU running hot (85 / 90 °C), GPU stuck in a low-power state, unified memory low (under 3 GB warns, under 1.5 GB critical), NVIDIA **Xid** errors and kernel **OOM kills**, several models loaded while memory is busy, a link slower than 1 Gb/s, and RoCE link / loss. Shown as chips on the cards and in full on the unit page; changes are logged to **Activity** |
+| **Updates** | **Sidebar → Updates**: daily sudo-free apt + firmware check per Spark with a warn dot on the rail, one-time-sudo installs (removals always confirmed first, never an automatic reboot), fleet-wide **Update all machines**, and DGX Dashboard service on/off with RAM |
 | **Fleet pages** | **Token totals** (per model, hourly / daily history), **Fleet energy** (rolling 24 h / 31 d plus a permanent monthly archive, optional cost), and **Activity** (event log with filters). Each page can be cleared or reset from its **Clear / Reset…** menu |
 | **RoCE / RDMA** | Per-port link state and rate, traffic, drops, PFC and QoS (trust mode, DSCP), and RDMA counters, read from sysfs / ethtool / `mlnx_qos` on the Spark (see [RoCE / RDMA monitoring](#roce--rdma-monitoring)) |
 | **Windows PCs** | A Windows PC with an NVIDIA GPU is a first-class unit over the built-in OpenSSH server; an AMD-iGPU Windows host (Strix Halo) works too — its GPU usage comes from Windows' GPU engine counters (see [Windows PCs](#windows-pcs)) |
@@ -860,6 +862,16 @@ sparkDash only needs the engine's HTTP port; it does not care how the engine was
 **Discover on this Spark.** On the local unit, the *Add a model* dialog scans the machine when it opens (and on the button) and lists what it finds: directories holding a `start.sh` under `$HOME`, `$HOME/llms`, `$HOME/models` and `$HOME/Qwen*` (depth 3, at most 30), model names from `ollama list` inside the `spark-ollama-engine` container when it is running, and repos in `~/.cache/huggingface/hub`. The commands are fixed read-only templates (`find`, `docker ps`, `docker exec … ollama list`, `ls`); nothing from the browser reaches them. They run **as the host SSH user** through the launcher's `nsenter` + `setpriv` drop, the same privilege the launchers themselves use. `MODEL_DISCOVERY_ROOTS` (colon-separated) adds scan roots; each root must pass a character allow-list, and the value is **shell-expanded** on the unit (so `$HOME/x` and `Qwen*` work), not treated as a literal path list. Results are cached for 15 s and the route is rate-limited and local-unit-only.
 
 Model launchers require Bash, util-linux `setsid`, and GNU `tail` with `--pid` support on the Linux unit. **Start** and live **Output** drain the log before reporting completion, including the last line without a newline. The follower tracks the script's whole process group, so output continues when the wrapper exits but the model process is still running.
+
+---
+
+## Updates
+
+**Sidebar → Updates** keeps the Sparks' software current (Linux Spark units only; hosts, Windows and Macs are not offered).
+
+Once a day, at a jittered 06:00–09:00 slot per unit (**Settings → Check for updates daily**, on by default), the dashboard runs a **sudo-free check** on every online Spark: `apt list --upgradable`, an unprivileged `apt-get -s full-upgrade` simulation (its `Remv` lines are what an install would remove), `fwupdmgr get-updates`, and the pending-reboot flags. A rail dot warns when any online unit has something to install. Nothing is ever installed automatically, and a check never touches the apt index — **Refresh index** does that with an administrator password (`apt-get update` with three tries, plus `fwupdmgr refresh`).
+
+**Install** runs `apt-get -y full-upgrade` (non-interactive, keeping your config files) and then `fwupdmgr upgrade --offline`, using the sudo password once per action — it is never stored, never appears in a log or command line, and repeated wrong guesses are locked for a while. If the simulation says the upgrade would **remove packages**, the page shows the list and only proceeds after you confirm it. **Update all machines** walks the fleet one unit at a time: offline units are skipped, units with unconfirmed removals wait for you, and a failure on one unit never stops the others. A reboot is **never** run — when one is needed, the page says so. The page also turns the DGX Dashboard services (`dgx-dashboard.service`, `dgx-dashboard-admin.service`) on or off and shows their RAM use.
 
 ---
 

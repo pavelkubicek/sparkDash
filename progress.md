@@ -493,3 +493,120 @@ snapshot shows `pico-ds41f-4x-spark` running with `modelId:
 DeepSeek-V4.1-Flash-1017` and the four other spark1 cards down with
 `:8000 answering but held by DeepSeek V4.1 Flash 1017 Pico 4x` (the spark3-head
 kits still report `:8000 fetch failed`).
+
+## 2026-11-16 — Updates feature (frontend slice)
+
+**What changed.** New Updates page wired end to end in the worktree (branch `updates-feature`,
+fast-forwarded to eeb2026 this session so the Storage Manager templates exist). Frontend worker slice:
+`src/constants.ts` (UPDATES_ID `__updates__`, `/updates` in FIXED_PATHS + round-trip tests),
+`src/api/client.ts` (`// ─── Updates ───` section: fetchUpdatesSummary, fetchSparkUpdates,
+checkSparkUpdates, refreshSparkUpdates, installSparkUpdates, fetchSparkUpdatesJob, installAllUpdates,
+fetchInstallAllJob, fetchDashboardService, setDashboardService via apiFetch; ApiError gained an optional
+parsed `body` so the 409 needs_confirmation carries `removals`), `src/api/types.ts` (UpdateSummary,
+SparkUpdateDetail, UpdateInstallJob, InstallAllJob, DashboardServiceStatus… field-for-field per
+updates-spec.md, `Settings.updatesAutoCheck`), `src/components/UpdatesPage/` (UpdatesPage, Banner,
+PasswordDialog — one-time password, cleared on close, submit disabled empty, 403/429 lines;
+RemovalsDialog — verbatim removals, confirm re-posts with confirmRemovals; DashboardServicePanel —
+dgx-dashboard(.service|-admin.service) rows with RAM via formatBytes, Enable/Disable through the shared
+password dialog; useInstallAllJob + useSparkUpdates clone the bulk-delete/detail polling patterns
+1 s with a 400 ms first poll, generation-ref race guard), `src/hooks/useUpdatesSummary.ts` (60 s fleet
+poll while connected, feeds the AppSidebar warn dot; no dot before the first answer),
+App.tsx (page chain + palette entry), shell AppSidebar/MobileTabBar (rail item after Storage with
+RotateIcon and `sdot sdot--warn`, stats-group entries), `src/styles/updates.css` (`.up`/`.up-dialog`
+scoped, up- prefixed, theme vars only), Settings toggles.en/zh `toggles.updates.*` + nav.updates en/zh,
+SettingsDialog ToggleRow for `updatesAutoCheck`. Tests: 13 in UpdatesPage.test.tsx (cards, check,
+password install flow, 409→removals→confirmRemovals, 403/429 lines, cleared-on-close, fleet job follow
+with fake timers, dashboard disable posts enabled:false, rail dot presence/absence) + constants
+round-trip.
+
+**What is broken.** Nothing known: `npx vitest run src/components/UpdatesPage src/constants.test.ts`
+23/23 pass. Unrelated-to-me notes: harness `edit` kept a stale hash for src/api/types.ts and resolved
+relative paths against /home/pavelkubicek/docker/sparkDash (main repo) — two stray locale/constants
+edits briefly landed there and were reverted (main-repo `M src/api/client|types.ts` there is the user's
+own PR Companion work, untouched); reported via report_issue. Absolute paths used throughout after.
+`node_modules` is symlinked from the main checkout for test runs.
+
+**What is next.** Server worker: server/updates/** routes+manager per contract, settings default
+`updatesAutoCheck: true`, package.json test glob. Integration: run full `npm run typecheck`/`npm test`
+once the server lands; e2e against a real Spark (check → refresh → install with removals gate → install-all
+→ dashboard toggle); README/CHANGELOG entries (server worker owns those files).
+
+## 2026-11-16 — Updates feature (server slice)
+
+**What changed.** Full server side of the Updates feature per updates-spec.md, on branch
+`updates-feature` (eeb2026 + this session's work):
+
+- `server/updates/scripts/` — `common.sh` (fail/clean, storage conventions), `check.sh`
+  (sudo-free: apt list → APT_B64 JSON, `apt-get -s full-upgrade` → SIM_B64 {upgrades,kept,removals[]}
+  from the summary + `Remv ` lines, `fwupdmgr get-updates --json` (exit 2 = none) → FW_B64 {count,devices[]},
+  `fwupdmgr check-reboot-needed` → FWREBOOT 0/1/unknown, `/run/reboot-required` → REBOOT,
+  stamp stat → STAMP; each part answers for itself with *_ERR so a failed part keeps its old value),
+  `refresh.sh` (sudo: `apt-get update -o Acquire::Languages=none` ×3 + `fwupdmgr refresh`, then the
+  check body), `install.sh` (sudo: noninteractive `apt-get -y --force-confold full-upgrade` streaming
+  Setting up/Unpacking as LAST= lines, `fwupdmgr upgrade -y --offline` (exit 2 → FWUP=none), never
+  reboots, then the check body), `dashboard.sh` (status unprivileged is-enabled/is-active/show
+  MemoryCurrent/MainPID for the two dgx-dashboard units; on/off = the owner's disable/enable --now
+  loop, elevated). All assemble clean under `sh -n`/dash and always exit 0 with RESULT=ok|error,CODE,MSG.
+- `server/updates/commands.js` — program builder cloning storage's base64 transport ($0 tag
+  `sparkdash-updates:<name>`), the storage sudoGate semantics replicated (not exported there),
+  parseSudoPassword re-exported from storage; parsers parseKv/parseAptList/parseSim/parseFirmware/parseDashboard.
+- `server/updates/UpdateManager.js` — remoteCommand/runProgram cloned from GpuClockManager (b64
+  program, password only on stdin sudo -S / local nsenter + SPARKDASH_SUDO_PW child env, scrubbed
+  from error text, shared SudoPasswordGuard); per-spark state + detail/summary shapes exactly per
+  contract; needs_confirmation gate on sim.removals without confirmRemovals; per-unit install job
+  (phases apt|firmware pending/running/done/skipped/error, code field) and sequential fleet job with
+  done|error|needs_confirmation|skipped-offline|skipped-busy outcomes; dashboard service get/set;
+  60 s unref'd auto-check tick (injected now): Europe/Prague day key, per-unit stable jitter minute
+  06:00–09:00, online Sparks only, same-day catch-up for units offline at their slot, gated by
+  settings.updatesAutoCheck.
+- `server/updates/routes.js` — all 10 contract endpoints, storage-style handle wrapper + error
+  mapping (+removals), destructive limiter on mutations / test limiter on reads / job polls
+  un-limited, refuseInsecurePassword + parseSudoPassword on every password route, recordEvent lines.
+- Wiring: `server/index.js` imports + `new UpdateManager({listSparks, isOnline, getSettings})` +
+  `registerUpdatesRoutes(...)` right after the storage block, `updatesManager.start()` in
+  onListening; `server/settings.js` DEFAULTS gained `updatesAutoCheck: true` (whitelist derives
+  from DEFAULTS); `package.json` test:server now includes `server/updates/__tests__/*.test.js`.
+- Docs: README feature bullet + table row + `## Updates` section; CHANGELOG [Unreleased] Added entry.
+
+**Verification.** `node --test server/updates/__tests__/*.test.js` 24/24 pass (script fixtures run
+through the real assembled shell programs against stub apt/fwupdmgr/systemctl incl. fwupd exit 2 /
+missing / error, Remv dedupe, stamp, dashboard status; needs_confirmation; install-all sequencing +
+skips with fake transport; password guard 403/429 and no password in program/argv/responses;
+scheduler day-boundary + jitter with injected now; routes on express with SETTINGS_JSON_PATH pinned
+to mkdtemp). `node --test server/__tests__/settings-apikeys.test.js` 2/2 pass.
+
+**What is broken.** Nothing known. Notes: the check is only as fresh as the unit's own apt-daily.timer
+(spec decision); `updatesAutoCheck` settings label copy lives in the frontend's locales; the
+`sparkdash-updates:<name>` $0 tag is test/log aid only — the body stays base64.
+
+**What is next.** Full `npm run test:server` + typecheck once both slices merge; live e2e on a real
+Spark (check → refresh → install removals-gate → install-all → dashboard toggle), especially the
+fwupdmgr JSON shape across fwupd versions and `apt list` locale edge cases.
+
+**2026-11-16 (GLM review fixes).** UpdatesPage filters candidates by `isUpdatesSpark`
+(`kind !== "host" && kind !== "mac" && platform not darwin/windows`) instead of Storage's picker rule,
+matching the server's 400 gate — host/Mac units never render as cards (new test). useInstallAllJob stops
+following when the fleet job answers `{ job: null }` (no more 1/s poll after a dashboard restart; new
+fake-timer test). useSparkUpdates's mount-time running-job pickup now carries the generation race guard
+(unit switched mid-read never renders the old unit's job; new test). `npx vitest run src/components/UpdatesPage src/constants.test.ts` 25/25 pass.
+
+**2026-11-16 (review follow-up, server slice).** GLM review FIX-FIRST applied: fleet install-all now
+answers per-row `error/password-locked` from the shared sudo guard without touching the transport;
+`check()` holds the unit busy lock (`_checkNow` split, scheduler skips busy units silently and retries
+the same day); `install()` also 409s unit-busy while the fleet loop holds the unit pending, and refuses
+never-checked units with 409 `needs-check` (fleet rows too); refresh.sh tracks success in-loop — exactly
+three tries max, no fourth; the dashboard-service route rejects non-boolean `enabled` with 400 instead of
+guessing off; summary `rebootRequired`/`firmwareRebootNeeded` are plain booleans (detail keeps the
+tri-state); install.sh drops the predictable /tmp fallback (`mktemp || fail no-tmp`). Tests: +8 (fleet
+lock, check-holds-unit, fleet-pending busy, needs-check per-unit+fleet, summary booleans, scheduler
+busy-retry, enabled validation, refresh retry counting incl. apt-get update call log).
+`node --test server/updates/__tests__/*.test.js` 32/32, `node --test server/__tests__/settings-apikeys.test.js` 2/2.
+
+**2026-11-16 (e2e bugfix, server slice).** buildProgram's OUTER program now carries the COMMON
+helpers itself (`set -u` + COMMON + gate): the sudoGate catch-all and the shell guard call fail/clean
+outside the body's inner sh, and a live e2e sudo refusal died as `fail: not found` on stderr →
+sshExecOutcome mapped it to a bogus "unreachable". Regression tests run the assembled outer programs
+under /bin/sh with PATH-stubbed sudo (-n refuse, -S sudoers-refusal, "Sorry, try again.") and a
+PATH without sh: stdout must be exactly the RESULT=error/CODE=no-sudo|bad-password|no-sh KEY=value
+answer, exit 0, stderr free of "not found". Suite: 34/34 + settings-apikeys 2/2.
+2026-11-16 RefreshFix3: refresh() now catches _exec transport rejection — sets state=error + sanitized lastError (mirrors _checkNow) and rethrows so the route surfaces it; regression test added (error state on rejecting transport, later successful check clears to ok).

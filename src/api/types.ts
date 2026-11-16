@@ -1391,6 +1391,8 @@ export interface Settings {
   prometheusExport: boolean;
   /** Allow typing a sudo password over plain http from another machine. Off by default. */
   allowPlainSudoPassword?: boolean;
+  /** Gates the daily automatic apt+firmware check on each unit (manual actions always available). On by default. */
+  updatesAutoCheck?: boolean;
   /** Let the Intel (xe) probe read debugfs VRAM through sudo -n. Off by default. */
   intelVramSudo: boolean;
   /** VulnHunter scans, installs and harness-command changes are opt-in (off by default). */
@@ -4146,4 +4148,140 @@ export interface DockerBuilderPruneResult {
   olderThanDays: number;
   adapter: "buildx" | "daemon" | null;
   reclaimedBytes: number | null;
+}
+
+// ─── Updates (apt + firmware + DGX Dashboard service) ───
+
+/** Per-unit row of GET /api/updates/summary, the cheap badge feed. */
+export interface UpdateSummaryUnit {
+  id: string;
+  name: string;
+  online: boolean;
+  /** "idle": never checked, "checking": a check is running, "ok"/"error": the last check's outcome. */
+  state: "idle" | "checking" | "ok" | "error";
+  /** Upgradable apt packages from the last check (0 when never checked; `state` says which). */
+  aptCount: number;
+  /** Firmware updates from the last check. */
+  fwCount: number;
+  /** /run/reboot-required exists on the unit. */
+  rebootRequired: boolean;
+  /** fwupdmgr check-reboot-needed exited 0 (a firmware update waits for a reboot). */
+  firmwareRebootNeeded: boolean;
+  /** Server time of the last check, ms epoch, null when never checked. */
+  checkedAt: number | null;
+}
+
+/** GET /api/updates/summary: one cheap poll for the whole fleet (nav badge + page header). */
+export interface UpdateSummary {
+  now: number;
+  sparks: UpdateSummaryUnit[];
+  /** Any online unit has apt or firmware updates: the nav item carries a warn dot then. */
+  anyUpgradable: boolean;
+}
+
+/** One upgradable apt package as the dry-run reported it. */
+export interface AptUpdate {
+  name: string;
+  newVersion: string;
+  oldVersion: string;
+}
+
+/** The unprivileged `apt-get -s full-upgrade` dry-run behind the install gate. */
+export interface UpdateSim {
+  upgrades: number;
+  kept: number;
+  /** Packages the full-upgrade would remove; non-empty makes install answer needs_confirmation. */
+  removals: string[];
+}
+
+/** One device with a pending fwupd update. */
+export interface FirmwareDeviceUpdate {
+  name: string;
+  current: string;
+  available: string;
+}
+
+/** Firmware half of the detail: fwupdmgr may answer with no device list at all (null). */
+export interface FirmwareUpdateSection {
+  count: number;
+  devices: FirmwareDeviceUpdate[] | null;
+}
+
+/** GET/POST …/updates and …/updates/check|refresh: everything the page shows about one unit. */
+export interface SparkUpdateDetail {
+  now: number;
+  sparkId: string;
+  state: UpdateSummaryUnit["state"];
+  checkedAt: number | null;
+  /** Freshness of the unit's apt index (update-success-stamp); null when the stamp file is absent. */
+  index: { refreshedAt: number | null };
+  apt: AptUpdate[];
+  sim: UpdateSim;
+  firmware: FirmwareUpdateSection;
+  rebootRequired: boolean;
+  /** null when fwupdmgr could not be asked (unlike the summary, which says false). */
+  firmwareRebootNeeded: boolean | null;
+  /** Why the last check failed; a failed check keeps the previous state, it never reads as healthy. */
+  lastError: string | null;
+}
+
+/** One phase of a per-unit install job (the unit's own server-owned run). */
+export interface UpdateInstallPhase {
+  key: "apt" | "firmware";
+  state: "pending" | "running" | "done" | "skipped" | "error";
+  note?: string;
+}
+
+/** GET …/updates/job: the install job on one unit, or null when there is none. */
+export interface UpdateInstallJob {
+  id: string;
+  state: "running" | "done" | "error";
+  startedAt: number;
+  finishedAt: number | null;
+  phases: UpdateInstallPhase[];
+  rebootRequired: boolean;
+  firmwareRebootNeeded: boolean;
+  error?: string;
+}
+
+/** One unit's outcome inside the fleet install-all job. */
+export interface InstallAllUnit {
+  sparkId: string;
+  sparkName: string;
+  state: "pending" | "running" | "done" | "error" | "needs_confirmation" | "skipped-offline" | "skipped-busy";
+  /** Packages the install would remove (why the unit waits for an explicit confirmation). */
+  removals?: string[];
+  rebootRequired?: boolean;
+  error?: string;
+  /** Failure code when state is "error" (bad-password, password-locked, unreachable, timeout, unit-busy). */
+  code?: string;
+}
+
+/** GET /api/updates/install-all: the fleet job (units run one after another) or null. */
+export interface InstallAllJob {
+  id: string;
+  state: "running" | "done" | "error";
+  startedAt: number;
+  finishedAt: number | null;
+  units: InstallAllUnit[];
+  now?: number;
+}
+
+/** One DGX Dashboard systemd unit as systemctl sees it; enabled/active carry their raw strings. */
+export interface DashboardServiceUnit {
+  /** "dgx-dashboard.service" or "dgx-dashboard-admin.service". */
+  unit: string;
+  /** is-enabled output: "enabled" | "disabled" | "not-found" | another systemctl value. */
+  enabled: string;
+  /** is-active output: "active" | "inactive" | "failed" | another systemctl value. */
+  active: string;
+  /** MemoryCurrent bytes from systemctl show, null when the unit reports none. */
+  memoryBytes: number | null;
+  mainPid: number | null;
+}
+
+/** GET/POST …/updates/dashboard-service. */
+export interface DashboardServiceStatus {
+  units: DashboardServiceUnit[];
+  now: number;
 }

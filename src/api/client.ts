@@ -102,6 +102,11 @@ import type {
   StorageQuarantineItem,
   StorageQuarantineResult,
   StorageAdvice,
+  UpdateSummary,
+  SparkUpdateDetail,
+  UpdateInstallJob,
+  InstallAllJob,
+  DashboardServiceStatus,
 } from "./types";
 import { VulnHuntApiError } from "./types";
 import { authHeaders, reportAuthRequired } from "./authToken";
@@ -114,12 +119,15 @@ export class ApiError extends Error {
   readonly code: string | undefined;
   /** Set by delete routes when part of the work was done before the failure. */
   readonly partial: boolean;
-  constructor(message: string, status: number, code?: string, partial = false) {
+  /** The parsed error body, when the route sent extra fields (e.g. the install gate's `removals`). */
+  readonly body: unknown;
+  constructor(message: string, status: number, code?: string, partial = false, body?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.partial = partial;
+    this.body = body;
   }
 }
 
@@ -143,7 +151,8 @@ export async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> 
       body.error || `HTTP ${res.status}`,
       res.status,
       typeof body.code === "string" ? body.code : undefined,
-      body.partial === true
+      body.partial === true,
+      body
     );
   }
   return res.json();
@@ -1021,6 +1030,68 @@ export function removeDockerImages(id: string, body: StorageElevation & { ids: s
 /** Clear Docker's unused build cache last used more than `olderThanDays` (1 to 365) days ago, on the daemon's own builder. */
 export function pruneDockerBuilderCache(id: string, body: StorageElevation & { olderThanDays: number }): Promise<DockerBuilderPruneResult> {
   return apiFetch(storageUrl(id, "/docker/prune-builder-cache"), { method: "POST", body: JSON.stringify(body) });
+}
+
+// ─── Updates ─────────────────────────────────────────────
+const updatesUrl = (id: string, rest = "") => `/api/sparks/${encodeURIComponent(id)}/updates${rest}`;
+
+/** The cheap fleet-wide poll behind the nav warn dot and the page header. */
+export function fetchUpdatesSummary(): Promise<UpdateSummary> {
+  return apiFetch("/api/updates/summary");
+}
+
+/** Everything known about one unit: apt list, dry-run, firmware, reboot flags, last error. */
+export function fetchSparkUpdates(id: string): Promise<SparkUpdateDetail> {
+  return apiFetch(updatesUrl(id));
+}
+
+/** Run the sudo-free check now (409 unit-busy while an install job runs on the unit). */
+export function checkSparkUpdates(id: string): Promise<SparkUpdateDetail> {
+  return apiFetch(updatesUrl(id, "/check"), { method: "POST", body: JSON.stringify({}) });
+}
+
+/** sudo index refresh (apt-get update + fwupdmgr refresh) and a re-check. The password is used for this call only. */
+export function refreshSparkUpdates(id: string, sudoPassword: string): Promise<SparkUpdateDetail> {
+  return apiFetch(updatesUrl(id, "/refresh"), { method: "POST", body: JSON.stringify({ sudoPassword }) });
+}
+
+/**
+ * Start the install job on the unit. 409 unit-busy when a job runs; 409 needs_confirmation (with the
+ * removals on the error body) when the dry-run wants to remove packages and `confirmRemovals` is not true.
+ */
+export function installSparkUpdates(
+  id: string,
+  body: { sudoPassword: string; confirmRemovals?: boolean }
+): Promise<{ jobId: string }> {
+  return apiFetch(updatesUrl(id, "/install"), { method: "POST", body: JSON.stringify(body) });
+}
+
+/** The unit's install job (null when there is none). */
+export function fetchSparkUpdatesJob(id: string): Promise<{ job: UpdateInstallJob | null; now?: number }> {
+  return apiFetch(updatesUrl(id, "/job"));
+}
+
+/** Start the fleet install-all job (409 already-running when one runs). The password is used for this call only. */
+export function installAllUpdates(sudoPassword: string): Promise<{ jobId: string }> {
+  return apiFetch("/api/updates/install-all", { method: "POST", body: JSON.stringify({ sudoPassword }) });
+}
+
+/** The fleet job (running ones survive a tab close), or null. */
+export function fetchInstallAllJob(): Promise<{ job: InstallAllJob | null }> {
+  return apiFetch("/api/updates/install-all");
+}
+
+/** systemctl view of the two DGX Dashboard services (unprivileged). */
+export function fetchDashboardService(id: string): Promise<DashboardServiceStatus> {
+  return apiFetch(updatesUrl(id, "/dashboard-service"));
+}
+
+/** Enable or disable both DGX Dashboard services; answers with the status after applying. */
+export function setDashboardService(
+  id: string,
+  body: { enabled: boolean; sudoPassword: string }
+): Promise<DashboardServiceStatus> {
+  return apiFetch(updatesUrl(id, "/dashboard-service"), { method: "POST", body: JSON.stringify(body) });
 }
 
 // ─── Hermes update preview ───────────────────────────────

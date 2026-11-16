@@ -46,6 +46,8 @@ import { SudoVault } from "./storage/sudoVault.js";
 import { ElevatedDeleteAcks } from "./storage/ackStore.js";
 import { decryptSecret, encryptSecret } from "./secretsStore.js";
 import { registerStorageRoutes } from "./storage/routes.js";
+import { UpdateManager } from "./updates/UpdateManager.js";
+import { registerUpdatesRoutes } from "./updates/routes.js";
 import {
   backendForPort,
   decodeBenchManager,
@@ -2968,6 +2970,24 @@ registerStorageRoutes(app, {
   }),
 });
 
+// Updates page: a daily sudo-free check per Spark (apt + firmware), installs that run here with
+// one-time sudo passwords (never stored), and the DGX Dashboard service switch. Same auth and
+// limiters as the Storage Manager.
+const updatesManager = new UpdateManager({
+  listSparks: () => registry.sparks.map((s) => registry.getSpark(s.id)),
+  isOnline: (id) => Boolean(monitors.get(id)?.online),
+  getSettings,
+});
+registerUpdatesRoutes(app, {
+  manager: updatesManager,
+  registry,
+  recordEvent,
+  allowRead: (req) => allowTest(principalKey(req)),
+  allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
+  rejectLimited,
+  allowPlainPassword: () => getSettings().allowPlainSudoPassword === true,
+});
+
 app.post("/api/sparks/:id/wake", async (req, res) => {
   try {
     const spark = registry.getSpark(req.params.id);
@@ -3465,6 +3485,9 @@ if (!startupPreflight.fatal) {
     // AutoPower shares the "night shift" rationale: it must run with zero tabs
     // open — but only while the feature switch (AUTOPOWER_FEATURE) is on.
     if (AUTOPOWER_FEATURE) autoPower.start();
+    // The daily update check shares the "night shift" rationale: one sudo-free check per unit
+    // per day with zero tabs open (unref'd timer, gated by Settings → updatesAutoCheck).
+    updatesManager.start();
   }
 } else {
   process.exitCode = 1;

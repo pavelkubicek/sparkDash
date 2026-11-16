@@ -49,12 +49,14 @@ import {
   ExpandIcon,
   KeyIcon,
   DiskIcon,
+  RotateIcon,
 } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
 import {
   ACTIVITY_ID,
   STORAGE_ID,
+  UPDATES_ID,
   SHOWCASE_ID,
   ENERGY_ID,
   OVERVIEW_ID,
@@ -78,6 +80,7 @@ import { EnergyPage } from "./components/EnergyPage/EnergyPage";
 import { TempsPage } from "./components/TempsPage/TempsPage";
 import { ActivityPage } from "./components/ActivityPage/ActivityPage";
 import { StoragePage } from "./components/StoragePage/StoragePage";
+import { UpdatesPage } from "./components/UpdatesPage/UpdatesPage";
 import { BenchPage } from "./components/bench/BenchPage";
 import { BENCH_SPARK_KEY, NAV_BENCH_TYPES } from "./components/bench/benchCatalog";
 import { ToolsPage } from "./components/tools/ToolsPage";
@@ -87,6 +90,7 @@ import { AccessTokenPrompt } from "./components/AccessTokenDialog";
 import { onTokenChange } from "./api/authToken";
 import { isWorkerSpark } from "./api/sparkRole";
 import { useAppBadge } from "./hooks/useAppBadge";
+import { useUpdatesSummary } from "./hooks/useUpdatesSummary";
 
 /** Keep hidden worker ids in their original slots when the visible tabs are reordered. */
 function mergeTabOrderKeepingHidden(
@@ -217,6 +221,8 @@ function DashboardApp() {
 
   // Fleet tok/s on the PWA icon (Badging API; no-op on unsupported browsers).
   useAppBadge(sparks, connected);
+  // The Updates rail dot: the fleet's upgradability, polled once a minute while connected.
+  const updatesSummary = useUpdatesSummary(connected);
   const [telemetryNow, setTelemetryNow] = useState(Date.now());
   const { navigate, replace } = useRoute(setActiveId);
   const [showAdd, setShowAdd] = useState(false);
@@ -520,6 +526,7 @@ function DashboardApp() {
       { id: "nav:activity", group: t("commands.goTo"), label: t("nav.activity"), hint: t("commands.page"), icon: <ListIcon className="h-4 w-4" />, keywords: "Activity events log history recent", run: () => navigate(ACTIVITY_ID) },
       { id: "nav:kiosk", group: t("commands.goTo"), label: t("nav.kiosk"), hint: t("commands.wallDisplay"), icon: <ExpandIcon className="h-4 w-4" />, keywords: "Kiosk wall tv display fullscreen full screen", run: () => window.location.assign(idToPath(KIOSK_ID)) },
       { id: "nav:storage", group: "Go to", label: "Storage Manager", hint: "Page", icon: <DiskIcon className="h-4 w-4" />, keywords: "storage disk space folders files docker images delete clean cleanup du", run: () => navigate(STORAGE_ID) },
+      { id: "nav:updates", group: "Go to", label: "Updates", hint: "Page", icon: <RotateIcon className="h-4 w-4" />, keywords: "updates apt firmware upgrade dashboard service", run: () => navigate(UPDATES_ID) },
     );
     for (const s of displaySparks) {
       cmds.push({
@@ -584,6 +591,7 @@ function DashboardApp() {
           refreshInterval={refreshInterval}
           authMode={authMode}
           showApiKeys={apiKeysEnabled}
+          updatesWarn={updatesSummary?.anyUpgradable === true}
         />
         <div className="side-strip" aria-hidden={!sideHidden}>
           <button type="button" className="icon-circle" onClick={toggleSidebar} tabIndex={sideHidden ? 0 : -1} title={t("nav.showSidebarTitle")} aria-label={t("nav.showSidebar")}>
@@ -639,6 +647,8 @@ function DashboardApp() {
                 <ActivityPage sparks={displaySparks} onSelectSpark={navigate} />
               ) : activeId === STORAGE_ID ? (
                 <StoragePage sparks={displaySparks} />
+              ) : activeId === UPDATES_ID ? (
+                <UpdatesPage sparks={displaySparks} />
               ) : activeId === SHOWCASE_ID ? (
                 <ShowcaseView sparks={displaySparks} />
               ) : toolType ? (

@@ -81,6 +81,12 @@ const DEFAULTS = Object.freeze({
    * Off by default: without it VRAM falls back to the PCI BAR size and no sudo runs.
    */
   intelVramSudo: false,
+  /**
+   * The Updates page checks each online Spark once per day, sudo-free (apt + fwupd, at a
+   * jittered 06:00–09:00 local slot). On by default: the check only reads, nothing is ever
+   * installed by it. Turning it off leaves every manual action on the page available.
+   */
+  updatesAutoCheck: true,
   /** VulnHunter scans, installs and harness-command changes (they run an agent on a unit). Opt-in, off by default. */
   vulnhuntEnabled: false,
   /** REA (Tools): install, uploads and analysis runs on a unit. Opt-in, off by default. */
