@@ -773,3 +773,62 @@ check program through the real isLocal path on this host returned
 `{"RESULT":"ok","FWREBOOT":"0","REBOOT":"1","FW_STATE":"ok"}` — REBOOT=1 is
 honest: /run/reboot-required exists (kernel 7.0.0-43 staged over the running
 -42), so the dell card legitimately reads “Reboot required”.
+
+## 2026-11-17 — Upstream v2.90.1 merged in: spark-attic
+
+**Change.** `origin/main` (upstream v2.90.1, 28 commits) merged into
+`merge/v2.0.0` — 8 conflict files. The headline is **spark-attic**:
+`server/collectors/AtticProbe.js` reads atticd's keyless
+`/run/spark-attic/status.json` plus `attic.service` in one read-only shell
+line over the unit's existing SSH path, `server/attic/install.js` adds the
+confirmed one-click installer (`GET/POST /api/sparks/:id/attic/install`,
+`GET /api/sparks/:id/attic/status`), and **Edit Spark → spark-attic** with
+the **Install or retry spark-attic** button drives it; the card mounts under
+Resources when `atticMonitoring` is on (Linux Sparks only, default off).
+Behind it came the upstream time-of-use energy pricing, Storage Manager
+i18n, several i18n slices, the TensorFold `/metrics` scrape for Pico, the
+sidebar tab-order helper extraction and the case-collision renames.
+
+Conflict resolutions: `server/collectors/LlmProbe.js` keeps **both** Pico
+telemetry sources — the counter scrape wins while the front end publishes
+`tensorfold:` counters (rate, or a measured zero), and an older dsfront
+that 404s `/metrics` still falls back to dashboard stream → engine log →
+stream sample; `requestsWaiting` is cleared on a counter poll instead of
+replaying the log gate's last figure. `server/index.js`,
+`server/sparks/SparkRegistry.js`, `src/components/EditSparkDialog.tsx`,
+`src/components/SettingsDialog.tsx` and `src/App.tsx` keep both sides (CPU
+clock + attic routes, `gpuMonitoring` + `atticMonitoring`, localized sudo
+password toggle + Updates toggle, upstream's extracted `api/tabOrder` +
+the localized Updates palette entry). `CHANGELOG.md` / `README.md` keep the
+upstream 2.90.1 section and spark-attic section beside the fork's
+unreleased Updates and PR Companion prose.
+
+Two merged-tree fixes: the upstream
+`src/components/SettingsDialog.energyPrice.test.tsx` fixture now carries the
+fork's required `vulnhuntEnabled` / `reaEnabled`, and
+`server/collectors/__tests__/AtticProbe.test.js` runs each shell with its
+startup files off (`--norc` / `--no-rcs`, `BASH_ENV`/`ENV=/dev/null`,
+`ZDOTDIR` at the fixture root) — this host's `~/.bashrc` exports `PATH`
+above its interactivity guard, so a plain `bash -c` replaced the injected
+PATH and the host's real systemctl answered for `attic.service`; a shell
+that still ignores the shim now skips with the reason rather than asserting
+on an unrelated binary.
+
+**Verification.** `npm run typecheck`, `npm run build` and `npm test` all
+clean: backend 2476 tests (2450 pass, 26 skipped, 0 fail), frontend 1595
+tests in 213 files. Container restarted (`./server` and `./dist` are
+bind-mounted, no image change in this merge), 0 restarts, `/api/health`
+200, no errors in the log. Live read-only e2e of the new path on spark1:
+`GET /api/sparks/spark1-lan/attic/status` → `{"installed":false}`, and with
+monitoring ticked in the real Edit dialog the Resources card rendered
+**spark-attic (spare GPU memory) — not installed — attic.service not
+installed**, i.e. the probe ran over SSH against the unit and answered.
+Monitoring was ticked back off afterwards; `config/sparks.json` (gitignored)
+carries `atticMonitoring: false` for all five units, so nothing polls
+atticd until the operator opts a unit in.
+
+**Next.** Installing spark-attic on a Spark is deliberately untested here:
+it stops the display manager and runs the pinned upstream installer as
+root, so it stays an operator action from the Edit dialog. Upstream is now
+at v2.90.1; the fork's unreleased Updates/PR Companion work still needs a
+release bump before the next merge.
