@@ -732,3 +732,44 @@ Stray `companion.lan` comment mentions renamed to `pr-companion.lan`.
 rendered overview DOM carries `href="https://pr-companion.lan"` on the jump
 link. (The pr-companion.lan vhost on the LAN reverse proxy itself is outside
 this repo.)
+
+## 2026-11-17 — Updates: the dashboard's own machine is admitted
+
+**Change.** dell.lan (the Linux box the dashboard runs on, registered as
+`kind: "host"`, `isLocal: true`) now takes its full part in the Updates page —
+summary, detail, check, refresh, install, install-all fleet and the sudo-free
+daily auto-check (the check program is `elevate: false`, so the unattended
+path stays passwordless; installs remain operator-triggered). The server gate
+`updatesUnsupportedReason` (server/updates/UpdateManager.js) refuses only
+remote hosts: `spark.kind === "host" && !spark.isLocal`, exactly the Storage
+Manager admission of 1b9f906; the mac clause and the windows/darwin platform
+gates are untouched. The page mirrors it fail-closed — `isUpdatesSpark`
+admits a host only on a strict `spark.isLocal === true` (SparkSnapshot's
+isLocal is optional). `DashboardServicePanel` now mounts only for
+`kind === "spark"`: `dgx-dashboard.service`/`dgx-dashboard-admin.service`
+exist on a DGX only, so on dell the panel could only read not-found units and
+the toggle could only fail. Page copy says so (“each DGX Spark and this
+dashboard's own machine”, the service wording narrowed to the Sparks), the
+empty state no longer promises DGX Sparks only, and the shared PasswordDialog
+placeholder is unit-neutral (“Your password on the unit”) — the request type
+carries the unit name only inside the purpose sentence, and the dialog also
+fronts the fleet run. Unreleased CHANGELOG prose for the Updates feature
+amended in place.
+
+**Supersedes.** The 2026-11-16 note above (“GLM review fixes”): its
+`isUpdatesSpark` filter excluded all hosts because the server gate did; the
+gate has moved and the filter now mirrors the new one, same convention as
+Storage's `isStorageSpark`.
+
+**Verification.** `node --test server/updates/__tests__/routes.test.js
+server/updates/__tests__/updates.test.js` 38/38 (routes 10 incl. the two new
+admission tests — isLocal host in the summary, detail 200 not 400, check 200,
+install-all row reaches done — and the three untouched h1 refusal pins;
+updates 28 incl. the new direct `updatesUnsupportedReason` test). `npm test`:
+backend 2421 tests 0 fail (25 skipped), frontend 1543 pass / 202 files (the
+dell.lan exclusion pin flipped to admission, new DGX-Dashboard-panel test).
+`npm run typecheck` and `npm run build` clean. Live read-only e2e of the real
+check program through the real isLocal path on this host returned
+`{"RESULT":"ok","FWREBOOT":"0","REBOOT":"1","FW_STATE":"ok"}` — REBOOT=1 is
+honest: /run/reboot-required exists (kernel 7.0.0-43 staged over the running
+-42), so the dell card legitimately reads “Reboot required”.

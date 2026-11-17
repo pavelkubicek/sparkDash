@@ -96,7 +96,11 @@ const freshState = () => ({
 /** Why this unit cannot take update actions, or null when it can. */
 export function updatesUnsupportedReason(spark) {
   if (!spark) return "Spark not found";
-  if (spark.kind === "host" || spark.kind === "mac") return "Updates are only supported on Spark units";
+  // fork: the dashboard's own machine registers as kind "host" with isLocal: true (config/sparks.json),
+  // yet it is a local Linux apt box like any Spark, so it alone is admitted; remote hosts keep the refusal
+  // — the same gate the Storage Manager widened in 1b9f906.
+  if (spark.kind === "host" && !spark.isLocal) return "Updates are only supported on Spark units";
+  if (spark.kind === "mac") return "Updates are only supported on Spark units";
   if (spark.platform === "windows" || spark.platform === "darwin") return "Updates are only supported on Linux Spark units";
   return null;
 }
@@ -154,7 +158,7 @@ export class UpdateManager {
     if (reason) throw httpError(spark ? 400 : 404, reason);
   }
 
-  /** Spark units the page and the daily check work on (Linux Sparks; hosts and Macs are not apt machines). */
+  /** Units the page and the daily check work on: Linux Sparks and the dashboard's own machine (isLocal host); remote hosts and Macs are not apt machines. */
   _units() {
     let list = [];
     try {

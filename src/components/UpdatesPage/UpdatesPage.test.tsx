@@ -133,8 +133,8 @@ describe("UpdatesPage", () => {
     expect(text()).toContain("0 apt · 0 firmware");
     expect(text()).toContain("Checked 3h ago");
     expect(text()).toContain("Checked 60s ago");
-    // Non-DGX-Spark units (the dashboard's own host, Macs) are never offered: the routes 400 them.
-    expect(text()).not.toContain("dell.lan");
+    // The dashboard's own machine (isLocal host) is a candidate like any Spark; Macs are never offered: the routes 400 them.
+    expect(text()).toContain("dell.lan");
     expect(text()).not.toContain("Studio");
     // The reboot-required chip shows only on the unit that needs one.
     const picoCard = button("Pico");
@@ -144,6 +144,20 @@ describe("UpdatesPage", () => {
     act(() => button("Dell").click());
     await flush();
     expect(fetchSparkUpdates).toHaveBeenCalledWith("s2");
+  });
+
+  it("keeps the DGX Dashboard panel on the Sparks: the dashboard's own machine does not get it", async () => {
+    const localHost = { ...makeSpark("dell-lan"), kind: "host" as const, isLocal: true, platform: "linux" as const, name: "dell.lan" };
+    render(<UpdatesPage sparks={[...sparks(), localHost]} />);
+    await flush();
+    // Pico is the unit on screen: its DGX services are the page's business.
+    expect(document.body.querySelector('section[aria-label="DGX Dashboard"]')).toBeTruthy();
+    act(() => button("dell.lan").click());
+    await flush();
+    expect(fetchSparkUpdates).toHaveBeenCalledWith("dell-lan");
+    // Dell.lan is a plain Linux box: the dgx-dashboard units exist only on the DGX, so the panel must not even ask.
+    expect(document.body.querySelector('section[aria-label="DGX Dashboard"]')).toBeNull();
+    expect(fetchDashboardService).not.toHaveBeenCalledWith("dell-lan");
   });
 
   it("shows the last check failure as an error banner, never as healthy", async () => {

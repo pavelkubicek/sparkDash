@@ -60,8 +60,12 @@ const KNOWN = {
   h1: { id: "h1", name: "H1", kind: "host", platform: "linux" },
 };
 
-async function withApp({ run, allow = () => true, remoteAddr, plain = false }, fn) {
+/** The dashboard's own Linux machine, as config/sparks.json registers it. */
+const DELL_LOCAL = { id: "dell-lan", name: "dell.lan", kind: "host", isLocal: true, platform: "linux" };
+
+async function withApp({ run, allow = () => true, remoteAddr, plain = false, extraSparks = {}, online }, fn) {
   const events = [];
+  const units = { ...KNOWN, ...extraSparks };
   const app = express();
   app.use(express.json());
   if (remoteAddr) {
@@ -73,13 +77,13 @@ async function withApp({ run, allow = () => true, remoteAddr, plain = false }, f
   const manager = new UpdateManager({
     run,
     now: () => 1_700_000_000_000,
-    listSparks: () => Object.values(KNOWN),
-    isOnline: (id) => id === "s1",
+    listSparks: () => Object.values(units),
+    isOnline: online ?? ((id) => id === "s1"),
     getSettings: () => ({ updatesAutoCheck: true }),
   });
   registerUpdatesRoutes(app, {
     manager,
-    registry: { getSpark: (id) => KNOWN[id] },
+    registry: { getSpark: (id) => units[id] },
     recordEvent: (e) => events.push(e),
     allowRead: allow,
     allowChange: allow,
@@ -289,6 +293,49 @@ test("install-all: fleet job shape, already-running refusal and outcomes", async
       assert.equal(job.now, 1_700_000_000_000);
       const outcomes = Object.fromEntries(job.units.map((u) => [u.sparkId, u.state]));
       assert.deepEqual(Object.keys(outcomes).sort(), ["s1", "s2"], "hosts never enter the fleet");
+      assert.equal(outcomes.s1, "done");
+      assert.equal(outcomes.s2, "skipped-offline");
+      assert.ok(!JSON.stringify(job).includes("fleet-secret-pw"));
+    }
+  );
+});
+
+test("the dashboard's own machine (isLocal host) is admitted: summary, detail and check", async () => {
+  await withApp({ run: async () => CHECK_OK, extraSparks: { [DELL_LOCAL.id]: DELL_LOCAL } }, async (base) => {
+    const summary = await (await fetch(`${base}/updates/summary`)).json();
+    assert.deepEqual(summary.sparks.map((s) => s.id).sort(), ["dell-lan", "s1", "s2"], "the local host joins the units the remote host stays out of");
+    const detail = await fetch(`${base}/sparks/dell-lan/updates`);
+    assert.equal(detail.status, 200, "the local host passes the gate h1 fails");
+    assert.equal((await detail.json()).sparkId, "dell-lan");
+    const check = await fetch(`${base}/sparks/dell-lan/updates/check`, json({}));
+    assert.equal(check.status, 200, "the sudo-free check runs on the dashboard's own machine");
+    assert.equal((await check.json()).state, "ok");
+  });
+});
+
+test("install-all carries the dashboard's own machine (isLocal host) into the fleet", async () => {
+  await withApp(
+    {
+      run: async (s, program) => {
+        if (program.includes("sparkdash-updates:install")) {
+          return "STEP=apt\nLAST=x\nSTEP=firmware\nFWUP=none\n" + CHECK_OK;
+        }
+        return CHECK_OK;
+      },
+      extraSparks: { [DELL_LOCAL.id]: DELL_LOCAL },
+      online: (id) => id === "s1" || id === "dell-lan",
+    },
+    async (base, _e, manager) => {
+      // The fleet only installs units it has seen: check the two online units so their rows can reach done.
+      assert.equal((await fetch(`${base}/sparks/s1/updates/check`, json({}))).status, 200);
+      assert.equal((await fetch(`${base}/sparks/dell-lan/updates/check`, json({}))).status, 200);
+      const started = await fetch(`${base}/updates/install-all`, json({ sudoPassword: "fleet-secret-pw" }));
+      assert.equal(started.status, 202);
+      await manager.settled();
+      const { job } = await (await fetch(`${base}/updates/install-all`)).json();
+      const outcomes = Object.fromEntries(job.units.map((u) => [u.sparkId, u.state]));
+      assert.deepEqual(Object.keys(outcomes).sort(), ["dell-lan", "s1", "s2"], "the local host enters the fleet where the remote host stays out");
+      assert.equal(outcomes["dell-lan"], "done", "the dashboard's own machine updates like any Spark");
       assert.equal(outcomes.s1, "done");
       assert.equal(outcomes.s2, "skipped-offline");
       assert.ok(!JSON.stringify(job).includes("fleet-secret-pw"));

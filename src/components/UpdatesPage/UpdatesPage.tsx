@@ -76,18 +76,20 @@ interface UpdatesPageProps {
 }
 
 /**
- * The updates server supports DGX Spark units only: it refuses the dashboard's own Linux machine
- * (`isLocal` host), Macs and Windows hosts with 400, so the page must not offer them either.
+ * The updates server supports DGX Spark units plus the dashboard's own machine: it refuses Macs and
+ * remote hosts with 400, so the page must not offer them either. Fail-closed like Storage's picker:
+ * `isLocal` is optional on a snapshot, so only a strict true admits a host.
  */
 export function isUpdatesSpark(spark: SparkSnapshot): boolean {
-  return spark.kind !== "host" && spark.kind !== "mac" && spark.platform !== "darwin" && spark.platform !== "windows";
+  // fork: the dashboard's own machine is kind "host" too, but it is a local Linux box, so isLocal admits it.
+  return (spark.kind !== "host" || spark.isLocal === true) && spark.kind !== "mac" && spark.platform !== "darwin" && spark.platform !== "windows";
 }
 
 /**
- * Updates: check each DGX Spark for apt and firmware updates without a password, install what the
- * owner asks for with a one-time sudo password (per unit, or the whole fleet at once), and keep the
- * DGX Dashboard service on or off. The layout follows the Storage Manager; the jobs are the server's,
- * so closing the page never stops one.
+ * Updates: check each DGX Spark and the dashboard's own machine for apt and firmware updates without a
+ * password, install what the owner asks for with a one-time sudo password (per unit, or the whole fleet
+ * at once), and keep the DGX Dashboard service on or off on the Sparks. The layout follows the Storage
+ * Manager; the jobs are the server's, so closing the page never stops one.
  */
 export function UpdatesPage({ sparks }: UpdatesPageProps) {
   const candidates = useMemo(() => sparks.filter(isUpdatesSpark), [sparks]);
@@ -241,12 +243,12 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
         <div className="page-head">
           <div>
             <h1>Updates</h1>
-            <p className="page-head__sub">Check each DGX Spark for apt and firmware updates and install them when you say so.</p>
+            <p className="page-head__sub">Check each DGX Spark and this dashboard's own machine for apt and firmware updates and install them when you say so.</p>
           </div>
         </div>
         <section className="panel up-state" role="status">
-          <h2>No DGX Spark to look at</h2>
-          <p>Updates works with DGX Spark units. Add one from the sidebar and it will show up here.</p>
+          <h2>No unit to look at</h2>
+          <p>Updates works with DGX Spark units and this dashboard's own machine. Add one from the sidebar and it will show up here.</p>
         </section>
       </div>
     );
@@ -261,8 +263,8 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
         <div>
           <h1>Updates</h1>
           <p className="page-head__sub">
-            Check every DGX Spark for apt and firmware updates without a password, install what you ask for with a
-            one-time sudo password, and keep the DGX Dashboard service on or off.
+            Check every DGX Spark and this dashboard's own machine for apt and firmware updates without a password,
+            install what you ask for with a one-time sudo password, and keep the DGX Dashboard service on or off on the Sparks.
           </p>
         </div>
         <div className="page-head__tools">
@@ -463,7 +465,9 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
         </section>
       ) : null}
 
-      {selected ? (
+      {/* The dgx-dashboard.service/-admin.service units exist on a DGX Spark only: on the dashboard's
+          own machine the panel would read not-found units and the toggle could only fail. */}
+      {selected && selected.spark.kind === "spark" ? (
         <DashboardServicePanel
           sparkId={selected.spark.id}
           sparkName={selected.spark.name}

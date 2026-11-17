@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildProgram, parseKv, parseAptList, parseSim, parseFirmware, parseDashboard } from "../commands.js";
-import { UpdateManager, remoteCommand } from "../UpdateManager.js";
+import { UpdateManager, remoteCommand, updatesUnsupportedReason } from "../UpdateManager.js";
 
 // ─── shell fixtures ───────────────────────────────────────
 
@@ -345,6 +345,17 @@ test("the password never rides in the program text or the ssh command line", () 
   const remote = remoteCommand(program, false);
   assert.ok(remote.includes("base64 -d | sh"));
   assert.ok(!program.toLowerCase().includes("hunter2"));
+});
+
+// ─── the unit gate ────────────────────────────────────────
+
+test("updatesUnsupportedReason admits the dashboard's own machine and refuses the rest", () => {
+  assert.equal(updatesUnsupportedReason({ id: "l", kind: "host", isLocal: true, platform: "linux" }), null, "the local Linux host is an apt machine like any Spark");
+  // The Linux gate is untouched: even a local unit on another OS stays refused.
+  assert.match(updatesUnsupportedReason({ id: "l", kind: "host", isLocal: true, platform: "windows" }), /Linux Spark units/);
+  assert.match(updatesUnsupportedReason({ id: "h", kind: "host", platform: "linux" }), /only supported on Spark units/, "a remote host keeps the refusal");
+  assert.match(updatesUnsupportedReason({ id: "m", kind: "mac", platform: "darwin" }), /only supported on Spark units/);
+  assert.equal(updatesUnsupportedReason({ id: "s", kind: "spark", platform: "linux" }), null);
 });
 
 // ─── manager with a fake transport ────────────────────────

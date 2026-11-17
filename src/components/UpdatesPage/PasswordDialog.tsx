@@ -105,7 +105,7 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
               value={password}
               disabled={busy}
               autoFocus
-              placeholder="Your password on the Spark"
+              placeholder="Your password on the unit"
               aria-invalid={problem ? true : undefined}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => {
