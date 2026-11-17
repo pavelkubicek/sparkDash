@@ -98,7 +98,8 @@
 .up-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  padding: 12px 14px;
 }
 .up-panel__head {
   display: flex;
@@ -122,6 +123,18 @@
   font-size: 0.75rem;
   color: var(--color-muted);
 }
+/* Section headings inside the detail panel: between the h2 and the muted body text. */
+.up-h3 {
+  margin: 2px 0 -2px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-strong);
+  letter-spacing: 0.01em;
+}
+/* The meta line hugs its panel head; the panel gap spaces everything below. */
+.up-panel__head + .up-sub {
+  margin-top: -6px;
+}
 
 /* ─── Lists (apt packages, firmware devices, removals) ───── */
 .up-list {
@@ -135,17 +148,26 @@
 .up-list li {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 12px;
   font-size: 0.75rem;
+  line-height: 1.4;
   color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  padding: 5px 9px;
+  padding: 6px 12px;
   background: var(--color-surface-elevated);
+}
+.up-list li > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .up-list .up-from {
   color: var(--color-muted);
   font-size: 0.6875rem;
+  margin-left: auto;
+  text-align: right;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 .up-empty {
   font-size: 0.75rem;
@@ -292,19 +314,21 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
 }
 .up-svc__row {
   display: flex;
   align-items: baseline;
   gap: 10px;
   font-size: 0.75rem;
-  padding: 5px 9px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface-elevated);
+  padding: 8px 0;
+}
+/* Separators between the rows; the panel shell already draws the box. */
+.up-svc__row + .up-svc__row {
+  border-top: 1px solid var(--color-border);
 }
 .up-svc__unit {
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--color-text-strong);
   min-width: 0;
@@ -319,6 +343,14 @@
   color: var(--color-success);
 }
 .up-svc__cell.is-off {
+  color: var(--color-muted);
+}
+/* The RAM column rides to the right edge; tabular digits keep the values aligned. */
+.up-svc__ram {
+  margin-left: auto;
+  padding-left: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   color: var(--color-muted);
 }
 
@@ -347,4 +379,25 @@
 }
 .up-dialog .field-hint.is-warn {
   color: var(--color-warning);
+}
+
+/* ─── Phones: stack the package rows, tighten the rhythm ──────────── */
+@media (max-width: 640px) {
+  .up {
+    gap: 12px;
+  }
+  .up-panel {
+    padding: 10px 12px;
+  }
+  .up-list li {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+    padding: 7px 10px;
+  }
+  /* The version line sits under its name, left-aligned. */
+  .up-list .up-from {
+    margin-left: 0;
+    text-align: left;
+  }
 }

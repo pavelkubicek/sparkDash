@@ -107,7 +107,7 @@ export function DashboardServicePanel({ sparkId, sparkName, online, requirePassw
               <span className="up-svc__unit mono">{u.unit}</span>
               <span className={`up-svc__cell${u.enabled === "enabled" ? " is-on" : " is-off"}`}>{u.enabled}</span>
               <span className={`up-svc__cell${u.active === "active" ? " is-on" : " is-off"}`}>{u.active}</span>
-              <span className="up-svc__cell">{u.memoryBytes == null ? "\u2014 RAM" : `${formatBytes(u.memoryBytes)} RAM`}</span>
+              <span className="up-svc__cell up-svc__ram">{u.memoryBytes == null ? "\u2014 RAM" : `${formatBytes(u.memoryBytes)} RAM`}</span>
             </li>
           ))}
         </ul>

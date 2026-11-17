@@ -398,7 +398,7 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                 {detail.sim.removals.length > 0 ? <span className="up-chip">{detail.sim.removals.length} removals pending</span> : null}
               </div>
 
-              <h3 className="up-sub">System packages</h3>
+              <h3 className="up-h3">System packages</h3>
               {detail.apt.length === 0 ? (
                 <p className="up-empty">No apt packages are upgradable.</p>
               ) : (
@@ -423,7 +423,7 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                 </Banner>
               ) : null}
 
-              <h3 className="up-sub">Firmware</h3>
+              <h3 className="up-h3">Firmware</h3>
               {detail.firmware.devices == null ? (
                 <p className="up-empty">{detail.firmware.count > 0 ? `${detail.firmware.count} firmware updates (devices not reported)` : "No firmware updates."}</p>
               ) : detail.firmware.devices.length === 0 ? (
@@ -443,7 +443,7 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
 
               {updates.job ? (
                 <>
-                  <h3 className="up-sub">Install job</h3>
+                  <h3 className="up-h3">Install job</h3>
                   <ul className="up-job">
                     {updates.job.phases.map((phase) => (
                       <li key={phase.key} className="up-job__row">
