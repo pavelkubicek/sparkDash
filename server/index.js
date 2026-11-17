@@ -300,6 +300,10 @@ const allowTest = createRateLimiter(20, 60_000);
 // Storage Manager reads have their own bucket: opening the image dialog checks every other Spark at
 // once, and the page also polls, so sharing the 20-a-minute test bucket made those checks fail.
 const allowStorageRead = createRateLimiter(120, 60_000);
+// Updates reads (summary, per-unit detail, DGX Dashboard service status) have their own bucket for
+// the same reason: opening Settings reads the GPU and CPU clock of every unit and retries failed
+// reads, so sharing the 20-a-minute test bucket left the Updates page answering "Too many requests".
+const allowUpdatesRead = createRateLimiter(120, 60_000);
 const allowDestructive = createRateLimiter(10, 60_000);
 /** Decode + prefill starts per principal (retries that 400/409 do not count). */
 const allowBench = createRateLimiter(20, 60_000);
@@ -3017,10 +3021,10 @@ registerUpdatesRoutes(app, {
   manager: updatesManager,
   registry,
   recordEvent,
-  allowRead: (req) => allowTest(principalKey(req)),
   allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
   rejectLimited,
   allowPlainPassword: () => getSettings().allowPlainSudoPassword === true,
+  allowRead: (req) => allowUpdatesRead(principalKey(req)),
 });
 
 app.post("/api/sparks/:id/wake", async (req, res) => {
