@@ -89,7 +89,6 @@ import type { AuthMode, Settings, SparkSnapshot } from "./api/types";
 import { AccessTokenPrompt } from "./components/AccessTokenDialog";
 import { onTokenChange } from "./api/authToken";
 import { isWorkerSpark } from "./api/sparkRole";
-import { useAppBadge } from "./hooks/useAppBadge";
 import { useUpdatesSummary } from "./hooks/useUpdatesSummary";
 
 /** Keep hidden worker ids in their original slots when the visible tabs are reordered. */
@@ -219,8 +218,17 @@ function DashboardApp() {
   const sparks = snapSparks;
   const activeSpark = liveActive;
 
-  // Fleet tok/s on the PWA icon (Badging API; no-op on unsupported browsers).
-  useAppBadge(sparks, connected);
+  // The fleet tok/s app-badge feature is removed; clear a stale number a
+  // previous build may have left on the installed-app icon — on Windows it
+  // sticks there until the platform is asked to clear it.
+  useEffect(() => {
+    if (!("clearAppBadge" in navigator)) return;
+    try {
+      void Promise.resolve(navigator.clearAppBadge()).catch(() => {});
+    } catch {
+      // Best-effort decoration — ignore.
+    }
+  }, []);
   // The Updates rail dot: the fleet's upgradability, polled once a minute while connected.
   const updatesSummary = useUpdatesSummary(connected);
   const [telemetryNow, setTelemetryNow] = useState(Date.now());
