@@ -1,7 +1,8 @@
 /* /kiosk-kraken — the NZXT Kraken LCD wall. A round screen, so everything is sized in vmin
    (the display is square; the browser viewport is 480 × 480 CSS px). Four big tiles: the top
    row is static (tok/s, AI-proxy requests), the bottom row is a 3-second carousel (temperature
-   + tokens, orchestrator + auditor, models full width) with a slide-in fade. Icon above number. */
+   + tokens, the full-width AI-slots bar, models) with a slide-in fade. Icon above number; the
+   slots slide is a small "AI slots" caption over one large segmented bar on the shared orchestrator/auditor/companion pool. */
 
 .kiosk-kraken {
   display: flex;
@@ -95,7 +96,7 @@
   color: var(--color-text);
 }
 
-/* ── Carousel: groups swap every 3 s. Two slots per group; the models list takes the row. ── */
+/* ── Carousel: groups swap every 3 s. Two tiles per group; the AI-slots bar and the models list take the row. ── */
 .kk-carousel {
   position: relative;
   flex: 1;
@@ -110,15 +111,13 @@
   opacity: 0;
   pointer-events: none;
 }
-.kk-slide--temp,
-.kk-slide--orchestrator {
+.kk-slide--temp {
   left: 0;
 }
-.kk-slide--tokens,
-.kk-slide--auditor {
+.kk-slide--tokens {
   left: 50%;
 }
-/* The models list takes the whole row: one or two names, shrunk to fit. */
+/* The AI-slots bar and the models list take the whole row: one centred visual per group. */
 .kk-slide--models {
   left: 0;
   width: 100%;
@@ -126,16 +125,61 @@
 .kk-slide--models .kk-value {
   font-size: calc(9.5vmin + 1px);
 }
+/* ── The AI-slots bar: the carousel's centrepiece. One rounded track (the card track's border
+   token) over the shared slot pool; segment widths are set inline as pool percentages, paint
+   order green orchestrator (the theme's success token) → blue PR Companion → orange auditor,
+   under a small muted "AI slots" caption, with the numeric "used / total" readout under it. ── */
+.kk-slide--slots {
+  left: 0;
+  width: 100%;
+  justify-content: center;
+  gap: 3.5vmin;
+}
+/* The slide's caption: the dashboard card's section header shrunk for the round glass —
+   uppercase, tracked, muted. Decorative; the slide's aria-label already names the section. */
+.kk-slots-heading {
+  font-size: calc(2.5vmin + 1px);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+}
+
+/* Height is 2/3 of the original 10vmin; the +2px keeps the track's hairline. */
+.kk-slotbar {
+  display: flex;
+  flex: none;
+  width: 88%;
+  height: calc(6.667vmin + 2px);
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+.kk-slotbar-segment {
+  height: 100%;
+  flex: none;
+}
+.kk-slotbar-segment--orchestrator {
+  background: var(--color-success);
+}
+.kk-slotbar-segment--companion {
+  background: #4493f8;
+}
+.kk-slotbar-segment--auditor {
+  background: #f97316;
+}
+.kk-slide--slots .kk-value {
+  font-size: calc(12vmin + 1px);
+}
 .kk-slide.is-active {
   opacity: 1;
   pointer-events: auto;
 }
-.kk-slide.is-active.kk-slide--temp,
-.kk-slide.is-active.kk-slide--orchestrator {
+.kk-slide.is-active.kk-slide--temp {
   animation: kk-slide-in-left 0.45s ease;
 }
 .kk-slide.is-active.kk-slide--tokens,
-.kk-slide.is-active.kk-slide--auditor,
+.kk-slide.is-active.kk-slide--slots,
 .kk-slide.is-active.kk-slide--models {
   animation: kk-slide-in-right 0.45s ease;
 }

@@ -2,6 +2,7 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  OrchestratorRunningTask,
   PrCompanionPull,
   PrCompanionPullsResponse,
   PrCompanionRun,
@@ -16,6 +17,8 @@ let orchestratorStatus: Record<string, unknown> = { slots_used: 2, slots_total: 
 let auditorStatus: Record<string, unknown> = { slots_used: 0, slots_total: 2, analyzing: 0 };
 /** Flipped per test to simulate the companion bridge being unreachable. */
 let companionDown = false;
+/** Live orchestrator queue; tests push entries to drive the Active tab. */
+let orchestratorRunningTasks: OrchestratorRunningTask[] = [];
 
 const companionStatus: PrCompanionStatus = {
   running: true,
@@ -79,6 +82,22 @@ const queuedRun: PrCompanionRun = {
   started_at: null,
 };
 
+/** A queued task without a model slot: the daemon reports status running but
+ *  ai_state waiting, and the card must render it gray as "awaiting slot". */
+const waitingTask: OrchestratorRunningTask = {
+  task_id: "task-1",
+  name: "Wire storage retry budget",
+  status: "running",
+  attempt: 1,
+  max_attempts: 3,
+  ticket_id: "T-42",
+  ticket_name: "Storage retry budget",
+  ticket_status: "in_progress",
+  iteration: 0,
+  started_at: "2026-11-15T01:00:00Z",
+  ai_state: "waiting",
+};
+
 const openPulls: PrCompanionPull[] = [
   {
     id: "pr-1",
@@ -131,7 +150,7 @@ vi.mock("../../api/client", () => ({
     Promise.resolve(orchestratorStatus),
   fetchOrchestratorTickets: () => Promise.resolve([]),
   fetchOrchestratorPlans: () => Promise.resolve([]),
-  fetchOrchestratorRunningTasks: () => Promise.resolve([]),
+  fetchOrchestratorRunningTasks: () => Promise.resolve(orchestratorRunningTasks),
   fetchOrchestratorSlotsConfig: () => Promise.resolve(null),
   fetchAuditorStatus: () => Promise.resolve(auditorStatus),
   fetchAuditorStats: () => Promise.resolve({ by_status: {} }),
@@ -152,6 +171,7 @@ vi.mock("../../api/client", () => ({
 
 beforeEach(() => {
   companionDown = false;
+  orchestratorRunningTasks = [];
   orchestratorStatus = { slots_used: 2, slots_total: 8, tickets_active: 0 };
   auditorStatus = { slots_used: 0, slots_total: 2, analyzing: 0 };
 });
@@ -187,6 +207,14 @@ describe("AiDeveloperPanel — PR Companion integration", () => {
     // The blue companion segment exists in the footer bar.
     const footerBar = container.querySelector(".mt-auto .h-full.bg-\\[\\#4493f8\\]");
     expect(footerBar).not.toBeNull();
+    // Paint order is pinned: green orchestrator, then blue companion, then orange auditor.
+    const footerTrack = footerBar!.parentElement!;
+    expect(footerTrack.className).toBe("flex h-1.5 overflow-hidden rounded-full bg-border");
+    expect(Array.from(footerTrack.children).map((c) => c.className)).toEqual([
+      expect.stringContaining("bg-success"),
+      expect.stringContaining("bg-[#4493f8]"),
+      expect.stringContaining("bg-[#f97316]"),
+    ]);
   });
 
   it("renders the companion tab with the queue, open PRs and health strip", async () => {
@@ -248,5 +276,52 @@ describe("AiDeveloperPanel — PR Companion integration", () => {
     const footerBar = container.querySelector<HTMLDivElement>(".mt-auto .h-full.bg-\\[\\#4493f8\\]");
     expect(footerBar).not.toBeNull();
     expect(footerBar!.style.width).toBe("0%");
+    // Same paint order under the degraded companion: zero width, still present, still second.
+    const track = footerBar!.parentElement!;
+    expect(track.className).toBe("flex h-1.5 overflow-hidden rounded-full bg-border");
+    expect(Array.from(track.children).map((c) => c.className)).toEqual([
+      expect.stringContaining("bg-success"),
+      expect.stringContaining("bg-[#4493f8]"),
+      expect.stringContaining("bg-[#f97316]"),
+    ]);
+  });
+
+  it("renders an orchestrator task awaiting an AI slot in gray", async () => {
+    orchestratorRunningTasks = [waitingTask];
+    const { container } = render(<AiDeveloperPanel />);
+    await flush();
+    await flush();
+
+    // The orchestrator section shows; the empty auditor one is omitted.
+    expect(container.textContent).toContain("Orchestrator — running tasks (1)");
+    expect(container.textContent).not.toContain("Auditor — in progress");
+
+    // Wire status "running" would color the dot amber and label it Running —
+    // ai_state=waiting overrides both, exactly as the web UI grays it.
+    const dot = container.querySelector('span[title="awaiting slot"]');
+    expect(dot).not.toBeNull();
+    expect((dot as HTMLElement).style.backgroundColor).toBe("rgb(107, 114, 128)");
+    expect(container.textContent).toContain("awaiting slot · 1/3");
+    expect(container.textContent).not.toContain("Running · 1/3");
+  });
+
+  it("omits Active-tab sections whose app has nothing running", async () => {
+    const { container } = render(<AiDeveloperPanel />);
+    await flush();
+    await flush();
+
+    // Only the companion has live work (one running run); the orchestrator
+    // and auditor sections render nothing — not even a header.
+    expect(container.textContent).toContain("PR Companion — running (1)");
+    expect(container.textContent).not.toContain("Orchestrator — running tasks");
+    expect(container.textContent).not.toContain("Auditor — in progress");
+
+    // Tab strip follows the new order: Active, Auditor, Orchestrator, PR Companion.
+    const tabs = Array.from(container.querySelectorAll("button")).map((b) => b.textContent ?? "");
+    const auditorIdx = tabs.findIndex((t) => t.startsWith("Auditor"));
+    const orchIdx = tabs.findIndex((t) => t.startsWith("Orchestrator"));
+    expect(auditorIdx).toBeGreaterThanOrEqual(0);
+    expect(orchIdx).toBeGreaterThanOrEqual(0);
+    expect(auditorIdx).toBeLessThan(orchIdx);
   });
 });

@@ -2639,6 +2639,10 @@ export interface OrchestratorRunningTask {
   ticket_status: string;
   iteration: number;
   started_at: string | null;
+  /** Orchestrator AI-slot state (OpenAPI RunningTaskSummary): active = holds
+   *  an AI slot, waiting = awaits a free AI slot, idle = parked without a
+   *  slot; null/absent on older daemons. */
+  ai_state?: "active" | "waiting" | "idle" | null;
 }
 
 /** Slots configuration. */

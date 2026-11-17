@@ -3,8 +3,8 @@ import "../../styles/kiosk-kraken.css";
 import {
   fetchAiProxyStats,
   fetchAuditorStatus,
-  fetchOrchestratorPlans,
-  fetchOrchestratorRunningTasks,
+  fetchOrchestratorStatus,
+  fetchPrCompanionStatus,
   fetchSettings,
 } from "../../api/client";
 import { OVERVIEW_ID, idToPath } from "../../constants";
@@ -24,10 +24,10 @@ const BRIDGE_REFRESH_MS = 5_000;
 const DAY_REFRESH_MS = 60_000;
 /** How long one carousel group stays up before the next takes its place. */
 const SLIDE_MS = 3_000;
-/** Carousel groups: two tiles per group, except the models list which takes the whole row. */
-const SLIDE_GROUPS: ReadonlyArray<ReadonlyArray<"temp" | "tokens" | "orchestrator" | "auditor" | "models">> = [
+/** Carousel groups: two tiles per group; the AI-slots bar and the models list each take the whole row. */
+const SLIDE_GROUPS: ReadonlyArray<ReadonlyArray<"temp" | "tokens" | "slots" | "models">> = [
   ["temp", "tokens"],
-  ["orchestrator", "auditor"],
+  ["slots"],
   ["models"],
 ];
 
@@ -132,10 +132,11 @@ function useWakeLock() {
 
 /**
  * /kiosk-kraken: the wall for the round NZXT Kraken LCD. Four big tiles — the top row is
- * static (fleet tok/s, requests the serving engines run and wait on), the bottom row is a carousel that cycles
- * temperature, proxy tokens today, orchestrator running and auditor running jobs every 2 s
- * with a fade. Icon on the left, number on the right, nothing else; the sparkDash brand
- * sits above. Sized in vmin so it fills any square viewport. Like the big wall it holds
+ * static (fleet tok/s, requests the serving engines run and wait on), the bottom row is a carousel that
+ * cycles temperature + proxy tokens today, one full-width segmented bar of the AI slots acquired
+ * across the shared orchestrator/auditor/PR-Companion pool, and the models list, every 3 s with a
+ * fade. Tiles are icon + number; the slots slide is its "AI slots" caption, the big bar, and the "used / total" readout.
+ * Sized in vmin so it fills any square viewport. Like the big wall it holds
  * its last frame when a poll fails, and Esc returns to the dashboard.
  */
 export function KioskKrakenPage() {
@@ -186,20 +187,31 @@ export function KioskKrakenPage() {
   const totals = useMemo(() => computeFleetTotals(sparks), [sparks]);
   const stats = useMemo(() => kioskFleetStats(sparks), [sparks]);
 
-  const orchestratorRunning = usePolled(async () => (await fetchOrchestratorRunningTasks()).length, BRIDGE_REFRESH_MS);
-  // Queued work: open tickets + plans still being generated (the Overview panel's active count).
-  const orchestratorQueued = usePolled(async () => {
-    const plans = await fetchOrchestratorPlans();
-    return plans.filter((p) => p.status === "queued" || p.status === "processing" || p.status === "creating_ticket").length;
-  }, BRIDGE_REFRESH_MS);
-  // The auditor's own honest shared-pool occupancy: upstream computes
-  // slots_used = analyzing + checking + Tier-C hunts (running/stopping) + proof runs, so a
-  // fleet busy with hunts reads 0 in `analyzing` alone. `?? analyzing` keeps the old tile
-  // for a pre-shared-pool daemon that omits slots_used; nullish stays nullish → the tile
-  // renders "—", never a fabricated 0.
+  // The orchestrator, the auditor and the PR Companion SHARE one slot pool (the
+  // orchestrator owns the config), so the carousel shows one bar instead of per-service
+  // tiles — the AI developer card's footer math: acquired = each REACHABLE service's
+  // slots_used (unreachable → 0, never a fabricated fill), total = the orchestrator's
+  // slots_total, falling back to the auditor's, then the companion's. None reachable →
+  // "— / —" and an empty track; each poll holds its last good frame meanwhile.
+  const orchestratorStatus = usePolled(fetchOrchestratorStatus, BRIDGE_REFRESH_MS);
   const auditorStatus = usePolled(fetchAuditorStatus, BRIDGE_REFRESH_MS);
-  const auditorRunning = auditorStatus?.slots_used ?? auditorStatus?.analyzing;
-  const auditorQueued = auditorStatus?.reviews_queued;
+  const pcStatus = usePolled(fetchPrCompanionStatus, BRIDGE_REFRESH_MS);
+  const anyReachable = orchestratorStatus != null || auditorStatus != null || pcStatus != null;
+  const orchSlots = orchestratorStatus != null ? Math.max(0, orchestratorStatus.slots_used) : 0;
+  const audSlots = auditorStatus != null ? Math.max(0, auditorStatus.slots_used) : 0;
+  const pcSlots = pcStatus != null ? Math.max(0, pcStatus.slots_used) : 0;
+  const slotsUsed = orchSlots + audSlots + pcSlots;
+  const slotsTotal =
+    (orchestratorStatus != null ? orchestratorStatus.slots_total : undefined) ??
+    (auditorStatus != null ? auditorStatus.slots_total : undefined) ??
+    (pcStatus != null ? pcStatus.slots_total : undefined) ??
+    0;
+  // Segment widths in paint order — green orchestrator, blue companion, orange auditor —
+  // capped so the stacked trio can never overflow the track.
+  const orchPct = slotsTotal > 0 ? Math.min(100, Math.round((orchSlots / slotsTotal) * 100)) : 0;
+  const pcPct = slotsTotal > 0 ? Math.min(100 - orchPct, Math.round((pcSlots / slotsTotal) * 100)) : 0;
+  const audPct =
+    slotsTotal > 0 ? Math.min(100 - orchPct - pcPct, Math.round((audSlots / slotsTotal) * 100)) : 0;
   const tokensToday = usePolled(async () => {
     const today = dateStrInTZ(new Date());
     return (await fetchAiProxyStats(today, today)).totals.total_tokens;
@@ -212,65 +224,32 @@ export function KioskKrakenPage() {
   );
 
   // The carousel slides, in cycle order; all stay mounted so the fade is a class flip.
-  // Groups show two at a time — (temp, tokens), (orchestrator, auditor) — and the models
-  // list takes the whole row on its own.
+  // The first group shows two tiles — (temp, tokens) — while the AI-slots bar and the
+  // models list each take the whole row on their own.
   const slides: ReadonlyArray<{
-    key: "temp" | "tokens" | "orchestrator" | "auditor" | "models";
+    key: "temp" | "tokens" | "slots" | "models";
     label: string;
     icon: React.ReactNode;
     value: string;
-    /** Queued count shown as the small "/N" suffix beside the value. */
-    queued: string | null;
   }> = [
     {
       key: "temp",
       label: "Hottest GPU temperature",
       icon: <ThermometerIcon className="kk-icon" />,
       value: stats.gpuTempMaxC == null ? "—" : tempText(stats.gpuTempMaxC, tempUnit),
-      queued: null,
     },
     {
       key: "tokens",
       label: "Proxy tokens today",
       icon: <TokensIcon className="kk-icon" />,
       value: tokensToday == null ? "—" : formatTokensCompact(tokensToday),
-      queued: null,
     },
     {
-      key: "orchestrator",
-      label: "Orchestrator running tasks",
-      // Orchestrator mark — its repo favicon (green DGX-Spark network on the dark app tile).
-      icon: (
-        <svg className="kk-icon" viewBox="0 0 32 32" aria-hidden>
-          <rect width="32" height="32" rx="6" fill="#0d1117" />
-          <circle cx="16" cy="16" r="3" fill="#76b900" />
-          <circle cx="10" cy="10" r="2" fill="#76b900" opacity="0.8" />
-          <circle cx="22" cy="10" r="2" fill="#76b900" opacity="0.8" />
-          <circle cx="10" cy="22" r="2" fill="#76b900" opacity="0.8" />
-          <circle cx="22" cy="22" r="2" fill="#76b900" opacity="0.8" />
-          <line x1="13.5" y1="13.5" x2="12" y2="12" stroke="#76b900" strokeWidth="1" opacity="0.6" />
-          <line x1="18.5" y1="13.5" x2="20" y2="12" stroke="#76b900" strokeWidth="1" opacity="0.6" />
-          <line x1="13.5" y1="18.5" x2="12" y2="20" stroke="#76b900" strokeWidth="1" opacity="0.6" />
-          <line x1="18.5" y1="18.5" x2="20" y2="20" stroke="#76b900" strokeWidth="1" opacity="0.6" />
-        </svg>
-      ),
-      value: orchestratorRunning == null ? "—" : String(orchestratorRunning),
-      queued: orchestratorQueued ? String(orchestratorQueued) : null,
-    },
-    {
-      key: "auditor",
-      label: "Auditor running jobs",
-      // Auditor mark — its repo favicon (orange scan hexagon on the dark app tile).
-      icon: (
-        <svg className="kk-icon" viewBox="0 0 32 32" aria-hidden>
-          <rect width="32" height="32" rx="6" fill="#0d1117" />
-          <path d="M16 4 L26 10 L26 22 L16 28 L6 22 L6 10 Z" fill="none" stroke="#f97316" strokeWidth="1.6" strokeLinejoin="round" />
-          <path d="M16 10 L16 19" stroke="#f97316" strokeWidth="1.6" />
-          <circle cx="16" cy="22.5" r="1.8" fill="#f97316" />
-        </svg>
-      ),
-      value: auditorRunning == null ? "—" : String(auditorRunning),
-      queued: auditorQueued ? String(auditorQueued) : null,
+      key: "slots",
+      label: "AI slots in use across the shared pool",
+      // No icon — the captioned full-width bar below is the visual, with the readout under it.
+      icon: null,
+      value: anyReachable ? `${slotsUsed} / ${slotsTotal}` : "— / —",
     },
     {
       key: "models",
@@ -278,7 +257,6 @@ export function KioskKrakenPage() {
       icon: <ServerIcon className="kk-icon" />,
       // One or two long names: shrink to fit — the row is wide enough for the pair at half scale.
       value: activeModels == null ? "—" : activeModels.length ? activeModels.join(" · ") : "none",
-      queued: null,
     },
   ];
 
@@ -316,13 +294,32 @@ export function KioskKrakenPage() {
               aria-label={s.label}
               aria-hidden={!SLIDE_GROUPS[slide].includes(s.key)}
             >
-              {s.icon}
-              <span className="kk-read">
-                <span className="kk-value">
-                  {s.value}
-                  {s.queued ? <small className="kk-waiting">/{s.queued}</small> : null}
-                </span>
-              </span>
+              {s.key === "slots" ? (
+                <>
+                  {/* The slide's caption, above the bar; the section's aria-label already
+                      names the slide, so the heading stays decorative. */}
+                  <span className="kk-slots-heading" aria-hidden>AI slots</span>
+                  {/* The centrepiece bar: fills sized inline as pool percentages; no fill at
+                      all when no bridge is reachable — the track never fabricates a reading. */}
+                  <span className="kk-slotbar" aria-hidden>
+                    {orchPct > 0 && <span className="kk-slotbar-segment kk-slotbar-segment--orchestrator" style={{ width: `${orchPct}%` }} />}
+                    {pcPct > 0 && <span className="kk-slotbar-segment kk-slotbar-segment--companion" style={{ width: `${pcPct}%` }} />}
+                    {audPct > 0 && <span className="kk-slotbar-segment kk-slotbar-segment--auditor" style={{ width: `${audPct}%` }} />}
+                  </span>
+                  <span className="kk-read">
+                    <span className="kk-value">{s.value}</span>
+                  </span>
+                </>
+              ) : (
+                <>
+                  {s.icon}
+                  <span className="kk-read">
+                    <span className="kk-value">
+                      {s.value}
+                    </span>
+                  </span>
+                </>
+              )}
             </section>
           ))}
         </div>
