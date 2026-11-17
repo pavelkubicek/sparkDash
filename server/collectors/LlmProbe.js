@@ -1355,27 +1355,61 @@ export class LlmProbe {
 
     if (this.backendType === "vllm") await this._refreshEngineVersion();
 
-    // Pico has no live counters. Its engine log has one line per finished request with
-    // the measured rates and token counts; read that first. A dashboard benchmark or
-    // Showcase stream is more current while it runs, and the opt-in stream sample is the
-    // last resort. A rate from a completed request belongs only to the hold window; after
-    // that the panel says not measured rather than claiming the engine is idle.
+    // Pico has no live counters of its own… unless the front end is a build that
+    // publishes them: pico-dgx-ds4 >= f36af01 serves `GET /metrics` with
+    // tensorfold:-prefixed counters (Picom-code/pico-dgx-ds4#12), which is the series
+    // set the TensorFold reader below already parses. An older dsfront answers 404,
+    // and then the engine log is the record: it has one line per finished request with
+    // the measured rates and token counts. A dashboard benchmark or Showcase stream is
+    // more current while it runs, and the opt-in stream sample is the last resort. A
+    // rate from a completed request belongs only to the hold window; after that the
+    // panel says not measured rather than claiming the engine is idle.
     if (this.backendType === "pico") {
+      // Clear first: a rate left by the previous poll's sample must not be mistaken
+      // for a counter-derived one, and a failed scrape must not keep a stale figure.
       this.generationTps = 0;
+      this.generationTpsSource = null;
+      this.decodeActive = false;
       this.prefillTps = 0;
       this.prefillTpsSource = null;
       this.perStreamTps = null;
-      const liveTps = this._liveDecodeTps?.(this.port);
-      if (Number.isFinite(liveTps) && liveTps >= 0) {
-        this.generationTps = liveTps;
-        this.generationTpsSource = "dashboard-stream";
-        this.decodeActive = liveTps > 0;
+      // The engine log's gate is the only source of the waiting count; a poll that
+      // reads the counters instead of the log must not replay last poll's figure.
+      this.requestsWaiting = null;
+      this._tensorfoldScrapedCounters = false;
+      await this._applyTensorFoldMetrics(dtSec);
+      // Only this scrape counts: counters seen on an earlier poll say nothing about a failed one.
+      const hadCounters = this._tensorfoldScrapedCounters === true;
+      if (this.generationTps > 0) {
+        // Counter-diff window: real tokens, but it only advances when a request
+        // finishes (this engine publishes no in-flight generation counter), so the
+        // figure is honest and lumpy rather than a smooth live rate.
+        this.generationTpsSource = "window";
+        this.decodeActive = true;
+      } else if (hadCounters) {
+        // The engine publishes counters and produced nothing this window: a measured
+        // zero, not a missing figure. Labelling it "dashboard-stream" would claim a
+        // source that did not measure it, and the engine log's held rate would speak
+        // for a window the counters just measured empty.
+        this.generationTpsSource = "window";
+        this.decodeActive = false;
       } else {
-        const log = await this._readPicoLog();
-        if (!this._applyPicoLog(log)) {
-          await this._maybeStreamSample();
-          if (this._liveDecodeTps && this.generationTpsSource == null) {
-            this.generationTpsSource = "dashboard-stream";
+        // No counters published: a dashboard stream is the most current figure.
+        const liveTps = this._liveDecodeTps?.(this.port);
+        if (Number.isFinite(liveTps) && liveTps >= 0) {
+          this.generationTps = liveTps;
+          this.generationTpsSource = "dashboard-stream";
+          this.decodeActive = liveTps > 0;
+        } else {
+          const log = await this._readPicoLog();
+          if (!this._applyPicoLog(log)) {
+            // A sample belongs only to the poll that measured it; replaying it on later
+            // polls makes an idle engine look busy forever.
+            this.generationTps = 0;
+            await this._maybeStreamSample();
+            if (this._liveDecodeTps && this.generationTpsSource == null) {
+              this.generationTpsSource = "dashboard-stream";
+            }
           }
         }
       }
@@ -2393,6 +2427,14 @@ export class LlmProbe {
       this.requestsRunning = Math.round(conns);
       this.slotsActive = Math.round(conns);
     }
+    // A build that publishes `live` and no `streams` block (this engine) leaves prefillActive to
+    // the streams field, so a long prompt pass reads as "not measured live" for minutes while the
+    // GPU is pegged. An open connection that is decoding nothing is a prompt pass; the vLLM path
+    // already marks prefill the same way (running > 0 and no new output). An idle but still-open
+    // connection reads the same way: it shows as a prompt pass until the connection closes.
+    if (data.streams == null && Number.isFinite(conns) && conns > 0 && decode === 0) {
+      this.prefillActive = true;
+    }
   }
 
   /**
@@ -2775,6 +2817,7 @@ export class LlmProbe {
       // tokens of an in-flight request. The rate fallback below keeps `produced`.
       this.generationProgressTokens =
         Number.isFinite(inFlight) && inFlight >= 0 ? produced : null;
+      this._tensorfoldScrapedCounters = true;
       const prev = this._tensorfoldPromProduced;
       this._tensorfoldPromProduced = produced;
       if (!preserveLiveDecode && prev != null && Number.isFinite(dtSec) && dtSec > 0) {

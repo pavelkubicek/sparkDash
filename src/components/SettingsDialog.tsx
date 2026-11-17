@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { isValidTimeZone, listTimeZones } from "../shared/timeZone";
 import { reloadPage } from "../shared/reloadPage";
 import { fetchSettings, updateSettings } from "../api/client";
+import { EnergyPriceSetting, energyPeriodsMessage } from "./EnergyPriceSetting";
 import { clearToken, getToken, onTokenChange, requestTokenPrompt } from "../api/authToken";
 import type { Settings } from "../api/types";
 import { useModalPresence } from "../hooks/useModalPresence";
@@ -22,6 +23,8 @@ interface SettingsDialogProps {
   onClose: () => void;
   onSaved: (settings: Settings) => void;
   onOpenHarness?: () => void;
+  /** Open at this section (id "settings-section-<section>"), e.g. "energy"; see hooks/settingsLink. */
+  section?: string | null;
   /** Version reported by the running server; absent when health could not be read. */
   serverVersion?: string | null;
 }
@@ -127,7 +130,7 @@ const AGE_PRESETS = [
   { unit: "days", count: 14, value: 14 * 24 * 60 * 60 * 1000 },
 ];
 
-export function SettingsDialog({ open, onClose, onSaved, onOpenHarness, serverVersion }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose, onSaved, onOpenHarness, section = null, serverVersion }: SettingsDialogProps) {
   const { t } = useTranslation("settings");
   /** The server's own version wins: a stale dist must not report its build as the server's. */
   const displayVersion = serverVersion || packageJson.version;
@@ -174,6 +177,16 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness, serverVe
   useEscape(closeOnEscape);
 
   useEffect(() => onTokenChange((token) => setTokenSet(token !== "")), []);
+
+  // Opened at a section: bring it into view once the settings have loaded, and focus its main field.
+  const settingsReady = open && !loading && settings != null;
+  useEffect(() => {
+    if (!settingsReady || !section) return;
+    const el = document.getElementById(`settings-section-${section}`);
+    if (!el) return;
+    el.scrollIntoView?.({ block: "start" });
+    el.querySelector<HTMLElement>("[data-settings-focus]")?.focus({ preventScroll: true });
+  }, [settingsReady, section]);
 
   useEffect(() => {
     if (!open) {
@@ -251,6 +264,12 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness, serverVe
     if (tempsError) {
       setInvalidTimeZone(null);
       setError(tempsError);
+      return;
+    }
+    const periodsError = energyPeriodsMessage(settings, t);
+    if (periodsError) {
+      setInvalidTimeZone(null);
+      setError(periodsError);
       return;
     }
     setSaving(true);
@@ -554,8 +573,8 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness, serverVe
                 onChange={(v) => update({ updatesAutoCheck: v })}
               />
               <ToggleRow
-                title="Allow sudo password over plain http"
-                help="Lets you type a sudo password in the dashboard (Storage Manager, GPU clock cap) when you open it over plain http from another machine. The password then crosses your network unencrypted, so turn this on only on a network you trust. Off by default: a password is otherwise only accepted over https or from the Spark itself. The page reloads when you save this."
+                title={t("toggles.allowPlainSudoPassword.title")}
+                help={t("toggles.allowPlainSudoPassword.help")}
                 checked={Boolean(settings.allowPlainSudoPassword)}
                 onChange={(v) => update({ allowPlainSudoPassword: v })}
               />
@@ -677,40 +696,7 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness, serverVe
                 checked={Boolean(settings.showFleetEnergy)}
                 onChange={(v) => update({ showFleetEnergy: v })}
               />
-              <SettingRow
-                title={t("electricityPrice.title")}
-                help={t("electricityPrice.help")}
-                htmlFor="settings-energy-price"
-              >
-                <div className="set-price">
-                  <input
-                    id="settings-energy-currency"
-                    type="text"
-                    aria-label={t("electricityPrice.currency")}
-                    maxLength={4}
-                    value={settings.energyCurrency ?? "$"}
-                    onChange={(e) => update({ energyCurrency: e.target.value })}
-                    className="field-input field-input--currency"
-                  />
-                  <input
-                    id="settings-energy-price"
-                    type="number"
-                    min={0}
-                    max={100}
-                    step="0.01"
-                    inputMode="decimal"
-                    placeholder="0.15"
-                    value={settings.energyPricePerKwh ?? ""}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      if (raw === "") return update({ energyPricePerKwh: null });
-                      const val = parseFloat(raw);
-                      if (!isNaN(val)) update({ energyPricePerKwh: val });
-                    }}
-                    className="field-input field-input--price"
-                  />
-                </div>
-              </SettingRow>
+              <EnergyPriceSetting settings={settings} update={update} />
               <ToggleRow
                 title={t("toggles.llmTokenTotals.title")}
                 help={t("toggles.llmTokenTotals.help")}

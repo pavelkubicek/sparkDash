@@ -1,6 +1,7 @@
 // First on purpose: imports are evaluated in order, and config.js, settings.js
 // and the bench modules read process.env while they load.
 import "dotenv/config";
+import { registerAtticInstallRoute } from "./attic/install.js";
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
@@ -2963,6 +2964,14 @@ registerGpuClockRoutes(app, {
   rejectLimited,
   getSchedule: getGpuClockSchedule,
   allowPlainPassword: () => getSettings().allowPlainSudoPassword === true,
+});
+
+registerAtticInstallRoute(app, {
+  registry,
+  allowRead: (req) => allowTest(principalKey(req)),
+  allowPlainPassword: () => getSettings().allowPlainSudoPassword === true,
+  allowChange: (req) => allowDestructive(principalKey(req)) && allowGlobalDestructive(clientKey(req)),
+  rejectLimited,
 });
 
 // CPU maximum-frequency cap (cpupower -c all frequency-set -u <MHz>MHz). The same
