@@ -13,9 +13,14 @@ export interface PasswordRequest {
   purpose: string;
   /**
    * Run the action with the typed password. Return null to close the dialog, or the sentence to show
-   * under the box ("That password was not accepted", the 429 wait, a plain failure).
+   * under the box ("That password was not accepted", the 429 wait, a plain failure). When the dialog
+   * shows the remember tick box, it hands the second argument too.
    */
-  submit: (password: string) => Promise<string | null>;
+  submit: (password: string, remember?: boolean) => Promise<string | null>;
+  /** Show the "remember" tick box (only for actions whose password the server can store for the daily refresh). */
+  allowRemember?: boolean;
+  /** What the tick box says when shown, e.g. "Remember for the daily refresh". */
+  rememberLabel?: string;
 }
 
 interface PasswordDialogProps {
@@ -32,6 +37,7 @@ interface PasswordDialogProps {
 export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
   const open = request != null;
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const titleId = useId();
@@ -58,10 +64,11 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
     };
   }, [mounted]);
 
-  // One-time passwords: the box is wiped the moment the dialog closes, whoever closed it.
+  // One-time passwords: the box (and a ticked remember) is wiped the moment the dialog closes, whoever closed it.
   useEffect(() => {
     if (open) return;
     setPassword("");
+    setRemember(false);
     setProblem(null);
     setBusy(false);
   }, [open]);
@@ -72,7 +79,7 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
     if (!password || busy) return;
     setBusy(true);
     setProblem(null);
-    const text = await request.submit(password);
+    const text = await request.submit(password, request.allowRemember ? remember : undefined);
     if (text == null) {
       // The action took it: close (and the close effect wipes the box).
       onCancel();
@@ -121,7 +128,17 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
               </p>
             ) : null}
           </div>
-          <p className="up-pw__note">Your sudo password is used once for this action and never stored on the dashboard.</p>
+          {request.allowRemember ? (
+            <label className="check-row">
+              <input type="checkbox" checked={remember} disabled={busy} onChange={(e) => setRemember(e.target.checked)} />
+              <span>{request.rememberLabel ?? "Remember for the daily refresh"}</span>
+            </label>
+          ) : null}
+          <p className="up-pw__note">
+            {request.allowRemember
+              ? "Your sudo password is used once for this action. Ticked, the dashboard keeps it encrypted for the daily index refresh: used server-side only, never sent back to the browser, dropped if a check rejects it."
+              : "Your sudo password is used once for this action and never stored on the dashboard."}
+          </p>
         </div>
         <div className="modal-sheet__footer">
           <div className="modal-sheet__footer-actions">

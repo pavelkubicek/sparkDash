@@ -8,6 +8,15 @@ const PASSWORD_LOCK_MS = 5 * 60_000;
 /** Across all units. */
 const PASSWORD_ATTEMPTS_GLOBAL = 9;
 
+/** What a password is a guess against: the account on the machine, not the registry entry.
+ * This same key addresses the remembered password in the shared sudo vault (storage/sudoVault.js),
+ * so every feature derives it through here — never a second format. */
+export function sudoAccountKey(spark) {
+  if (spark.isLocal) return "local";
+  const ssh = spark.ssh || {};
+  return `${ssh.user || ""}@${ssh.host || spark.lanIp || spark.id}:${ssh.port || 22}`.toLowerCase();
+}
+
 export class SudoPasswordGuard {
   /** @param {{ now?: () => number }} [opts] */
   constructor({ now = Date.now } = {}) {
@@ -16,11 +25,8 @@ export class SudoPasswordGuard {
     this._fails = new Map();
   }
 
-  /** What a password is a guess against: the account on the machine, not the registry entry. */
   key(spark) {
-    if (spark.isLocal) return "local";
-    const ssh = spark.ssh || {};
-    return `${ssh.user || ""}@${ssh.host || spark.lanIp || spark.id}:${ssh.port || 22}`.toLowerCase();
+    return sudoAccountKey(spark);
   }
 
   /** @returns {number} seconds left on the lock, 0 when attempts are allowed */

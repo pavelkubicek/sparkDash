@@ -63,7 +63,7 @@ const KNOWN = {
 /** The dashboard's own Linux machine, as config/sparks.json registers it. */
 const DELL_LOCAL = { id: "dell-lan", name: "dell.lan", kind: "host", isLocal: true, platform: "linux" };
 
-async function withApp({ run, allow = () => true, remoteAddr, plain = false, extraSparks = {}, online }, fn) {
+async function withApp({ run, allow = () => true, remoteAddr, plain = false, extraSparks = {}, online, vault = null }, fn) {
   const events = [];
   const units = { ...KNOWN, ...extraSparks };
   const app = express();
@@ -80,6 +80,7 @@ async function withApp({ run, allow = () => true, remoteAddr, plain = false, ext
     listSparks: () => Object.values(units),
     isOnline: online ?? ((id) => id === "s1"),
     getSettings: () => ({ updatesAutoCheck: true }),
+    vault,
   });
   registerUpdatesRoutes(app, {
     manager,
@@ -110,7 +111,7 @@ test("summary and detail answer with the contract shapes; unknown and host units
     assert.equal(summary.anyUpgradable, false);
     assert.deepEqual(summary.sparks.map((s) => s.id).sort(), ["s1", "s2"], "hosts are not update machines");
     const s1 = summary.sparks.find((s) => s.id === "s1");
-    assert.deepEqual(Object.keys(s1).sort(), ["aptCount", "checkedAt", "firmwareRebootNeeded", "fwCount", "id", "name", "online", "rebootRequired", "state"]);
+    assert.deepEqual(Object.keys(s1).sort(), ["aptCount", "checkedAt", "firmwareRebootNeeded", "fwCount", "id", "indexAutoRefresh", "name", "online", "rebootRequired", "state"]);
     assert.equal(s1.state, "idle");
     assert.equal(s1.online, true);
     assert.equal(summary.sparks.find((s) => s.id === "s2").online, false);
@@ -371,6 +372,86 @@ test("the dashboard-service POST refuses a non-boolean enabled instead of guessi
       const real = await fetch(`${base}/sparks/s1/updates/dashboard-service`, json({ enabled: false, sudoPassword: "a-secret-pw" }));
       assert.equal(real.status, 200);
       assert.equal(touched, 1);
+    }
+  );
+});
+
+test("refresh-all starts the shared fleet job in refresh mode, refusing concurrent jobs and insecure passwords", async () => {
+  const pw = "fleet-refresh-pw";
+  let release;
+  const gate = new Promise((r) => (release = r));
+  await withApp(
+    {
+      plain: true,
+      run: async (s, program) => {
+        if (program.includes("sparkdash-updates:refresh")) {
+          if (s.id === "s1") await gate;
+          return "REFRESHED=ok\n" + CHECK_OK;
+        }
+        return CHECK_OK;
+      },
+    },
+    async (base, events, manager) => {
+      const started = await fetch(`${base}/updates/refresh-all`, json({ sudoPassword: pw, remember: true }));
+      assert.equal(started.status, 202);
+      const { jobId } = await started.json();
+      const dup = await fetch(`${base}/updates/refresh-all`, json({ sudoPassword: pw }));
+      assert.equal(dup.status, 409);
+      assert.equal((await dup.json()).code, "already-running");
+      // One shared fleet job: the fleet install is refused while the refresh runs.
+      const cross = await fetch(`${base}/updates/install-all`, json({ sudoPassword: pw }));
+      assert.equal(cross.status, 409);
+      assert.equal((await cross.json()).code, "already-running");
+      release();
+      await manager.settled();
+      const { job } = await (await fetch(`${base}/updates/install-all`)).json();
+      assert.equal(job.id, jobId);
+      assert.equal(job.mode, "refresh", "the GET says which fleet job ran");
+      assert.equal(job.state, "done");
+      const outcomes = Object.fromEntries(job.units.map((u) => [u.sparkId, u.state]));
+      assert.deepEqual(Object.keys(outcomes).sort(), ["s1", "s2"], "hosts never enter the fleet");
+      assert.equal(outcomes.s1, "done");
+      assert.equal(outcomes.s2, "skipped-offline");
+      assert.ok(!JSON.stringify(job).includes(pw), "the password appears nowhere in the job");
+      assert.equal(events.some((e) => e.type === "updates.refresh-all"), true);
+    }
+  );
+  // Insecure transport: refused before anything runs, the same 400 install-all answers.
+  await withApp({ run: async () => CHECK_OK, remoteAddr: "192.168.1.20" }, async (base) => {
+    const r = await fetch(`${base}/updates/refresh-all`, json({ sudoPassword: pw }));
+    assert.equal(r.status, 400);
+    assert.equal((await r.json()).code, "insecure-transport");
+  });
+});
+
+test("the vault decides indexAutoRefresh on summary and detail", async () => {
+  const vault = { has: (k) => k === "u@s1.lan:22", get: () => null, set: () => {}, delete: () => false };
+  await withApp({ run: async () => CHECK_OK, vault }, async (base) => {
+    const summary = await (await fetch(`${base}/updates/summary`)).json();
+    assert.equal(summary.sparks.find((s) => s.id === "s1").indexAutoRefresh, "stored-password");
+    assert.equal(summary.sparks.find((s) => s.id === "s2").indexAutoRefresh, "check-only");
+    const detail = await (await fetch(`${base}/sparks/s1/updates`)).json();
+    assert.equal(detail.indexAutoRefresh, "stored-password");
+    const other = await (await fetch(`${base}/sparks/s2/updates`)).json();
+    assert.equal(other.indexAutoRefresh, "check-only");
+  });
+});
+
+test("a refresh with remember stores only a sudo-accepted password", async () => {
+  const pw = "remember-me-pw";
+  const set = [];
+  const vault = { has: () => false, get: () => null, set: (k, v) => set.push([k, v]), delete: () => false };
+  await withApp({ plain: true, vault, run: async () => "REFRESHED=ok\n" + CHECK_OK }, async (base) => {
+    const ok = await fetch(`${base}/sparks/s1/updates/refresh`, json({ sudoPassword: pw, remember: true }));
+    assert.equal(ok.status, 200);
+    assert.deepEqual(set, [["u@s1.lan:22", pw]]);
+  });
+  await withApp(
+    { plain: true, vault, run: async () => "RESULT=error\nCODE=bad-password\nMSG=The sudo password was not accepted\n" },
+    async (base) => {
+      const bad = await fetch(`${base}/sparks/s1/updates/refresh`, json({ sudoPassword: "wrong-guess-xx", remember: true }));
+      assert.equal(bad.status, 403);
+      assert.equal(set.length, 1, "the refused password was never stored");
     }
   );
 });

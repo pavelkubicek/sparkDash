@@ -27,16 +27,16 @@ export function passwordProblem(err: unknown): string {
   return err instanceof Error ? err.message : "The action failed.";
 }
 
-/** One row of the fleet install-all panel: the unit, its outcome, its removals while it waits. */
-function FleetUnitRow({ unit }: { unit: InstallAllUnit }) {
+/** One row of the fleet install-all / refresh-all panel: the unit, its outcome, its removals while it waits. */
+function FleetUnitRow({ unit, refresh }: { unit: InstallAllUnit; refresh: boolean }) {
   const tone =
     unit.state === "done" ? "is-done"
       : unit.state === "error" || unit.state === "needs_confirmation" ? "is-error"
         : unit.state === "running" ? "" : "is-warn";
   const label =
     unit.state === "pending" ? "Queued"
-      : unit.state === "running" ? "Installing…"
-        : unit.state === "done" ? "Updated"
+      : unit.state === "running" ? (refresh ? "Refreshing…" : "Installing…")
+        : unit.state === "done" ? (refresh ? "Refreshed" : "Updated")
           : unit.state === "error" ? `Failed${unit.code ? ` (${unit.code})` : ""}`
             : unit.state === "needs_confirmation" ? "Needs confirmation"
               : unit.state === "skipped-offline" ? "Skipped — offline" : "Skipped — busy";
@@ -59,11 +59,11 @@ function FleetUnitRow({ unit }: { unit: InstallAllUnit }) {
   );
 }
 
-/** What finished look like: one count per outcome that happened. */
+/** What finished look like: one count per outcome that happened (a refresh run refreshed, an install run updated). */
 function finishLine(job: InstallAllJob): string {
   const n = (s: InstallAllUnit["state"]) => job.units.filter((u) => u.state === s).length;
   const parts: string[] = [];
-  if (n("done")) parts.push(`${n("done")} updated`);
+  if (n("done")) parts.push(`${n("done")} ${job.mode === "refresh" ? "refreshed" : "updated"}`);
   if (n("error")) parts.push(`${n("error")} failed`);
   if (n("needs_confirmation")) parts.push(`${n("needs_confirmation")} waiting for confirmation`);
   const skipped = n("skipped-offline") + n("skipped-busy");
@@ -135,6 +135,20 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
   const updates = useSparkUpdates(selectedId);
   const fleet = useInstallAllJob();
   const fleetRunning = fleet.job?.state === "running";
+  const fleetRefresh = fleet.job?.mode === "refresh";
+  const anyOnline = candidates.some((s) => s.online);
+
+  // A fleet run that settles here (install-all or refresh-all) moves counts on the cards and the open
+  // unit: re-read both, once per job. A run picked up already finished on mount is left as it reads.
+  const settledFleetId = useRef<string | null>(null);
+  useEffect(() => {
+    const job = fleet.job;
+    if (!job || job.state === "running") return;
+    if (settledFleetId.current === job.id) return;
+    settledFleetId.current = job.id;
+    void loadSummary();
+    void updates.refresh();
+  }, [fleet.job, loadSummary, updates.refresh]);
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [pwRequest, setPwRequest] = useState<PasswordRequest | null>(null);
@@ -161,9 +175,11 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
     requirePassword({
       title: "Refresh the index",
       purpose: `to refresh the package index on ${name}`,
-      submit: async (password) => {
+      allowRemember: true,
+      rememberLabel: "Remember for the daily refresh",
+      submit: async (password, remember) => {
         try {
-          const detail = await refreshSparkUpdates(id, password);
+          const detail = await refreshSparkUpdates(id, password, remember);
           updates.applyDetail(detail);
           void loadSummary();
           return null;
@@ -232,6 +248,26 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
       },
     });
 
+  const askRefreshAll = () =>
+    requirePassword({
+      title: "Refresh all machines",
+      purpose: "to refresh the package index on every online unit, one after another",
+      allowRemember: true,
+      rememberLabel: "Remember for the daily refresh",
+      submit: async (password, remember) => {
+        try {
+          await fleet.startRefresh(password, remember);
+          void loadSummary();
+          return null;
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409 && err.code === "already-running") {
+            return "A fleet job is already running.";
+          }
+          return passwordProblem(err);
+        }
+      },
+    });
+
   const age = (at: number | null): string | null => {
     const s = formatSince(at, summary?.now);
     return s == null ? null : s === "0s" ? "just now" : `${s} ago`;
@@ -270,6 +306,14 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
         <div className="page-head__tools">
           <button
             type="button"
+            className="btn"
+            disabled={fleetRunning || !anyOnline}
+            onClick={askRefreshAll}
+          >
+            Refresh all machines
+          </button>
+          <button
+            type="button"
             className="btn btn--primary"
             disabled={summary?.anyUpgradable !== true || fleetRunning}
             onClick={askInstallAll}
@@ -286,18 +330,18 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
       ) : null}
 
       {fleet.job ? (
-        <section className="panel up-panel" aria-label="Update all machines">
+        <section className="panel up-panel" aria-label={fleetRefresh ? "Refresh all machines" : "Update all machines"}>
           <div className="up-panel__head">
-            <h2>Update all machines</h2>
+            <h2>{fleetRefresh ? "Refresh all machines" : "Update all machines"}</h2>
             {fleetRunning ? (
               <span className="up-sub">
-                <i className="up-spin" aria-hidden /> Running
+                <i className="up-spin" aria-hidden /> {fleetRefresh ? "Refreshing machines…" : "Running"}
               </span>
             ) : null}
           </div>
           <ul className="up-job">
             {fleet.job.units.map((u) => (
-              <FleetUnitRow key={u.sparkId} unit={u} />
+              <FleetUnitRow key={u.sparkId} unit={u} refresh={fleetRefresh} />
             ))}
           </ul>
           {fleet.job.state !== "running" ? <p className="up-summary">{finishLine(fleet.job)}</p> : null}
@@ -388,7 +432,10 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                   return [
                     checkedAge ? `Checked ${checkedAge}` : "Never checked",
                     indexAge ? `index refreshed ${indexAge}` : "index age unknown",
-                  ].join(" · ");
+                    detail.indexAutoRefresh === "check-only" ? "daily refresh off — no stored sudo password" : null,
+                  ]
+                    .filter((s): s is string => s != null)
+                    .join(" · ");
                 })()}
                 {detail.rebootRequired ? " · Reboot required" : ""}
               </p>

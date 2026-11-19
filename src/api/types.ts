@@ -1476,6 +1476,11 @@ export interface Settings {
   allowPlainSudoPassword?: boolean;
   /** Gates the daily automatic apt+firmware check on each unit (manual actions always available). On by default. */
   updatesAutoCheck?: boolean;
+  /**
+   * Lets the daily check also refresh the apt index with a sudo password remembered on the Updates
+   * page (indexes only, never installs; units without a remembered password stay sudo-free). On by default.
+   */
+  updatesAutoRefresh?: boolean;
   /** Let the Intel (xe) probe read debugfs VRAM through sudo -n. Off by default. */
   intelVramSudo: boolean;
   /** VulnHunter scans, installs and harness-command changes are opt-in (off by default). */
@@ -4375,6 +4380,8 @@ export interface UpdateSummaryUnit {
   firmwareRebootNeeded: boolean;
   /** Server time of the last check, ms epoch, null when never checked. */
   checkedAt: number | null;
+  /** How the daily slot treats this unit's apt index: a stored password refreshes it, otherwise the check stays sudo-free. */
+  indexAutoRefresh: "stored-password" | "check-only";
 }
 
 /** GET /api/updates/summary: one cheap poll for the whole fleet (nav badge + page header). */
@@ -4421,6 +4428,8 @@ export interface SparkUpdateDetail {
   checkedAt: number | null;
   /** Freshness of the unit's apt index (update-success-stamp); null when the stamp file is absent. */
   index: { refreshedAt: number | null };
+  /** How the daily slot treats this unit's apt index: a stored password refreshes it, otherwise the check stays sudo-free. */
+  indexAutoRefresh: "stored-password" | "check-only";
   apt: AptUpdate[];
   sim: UpdateSim;
   firmware: FirmwareUpdateSection;
@@ -4463,10 +4472,12 @@ export interface InstallAllUnit {
   code?: string;
 }
 
-/** GET /api/updates/install-all: the fleet job (units run one after another) or null. */
+/** GET /api/updates/install-all: the fleet job (install-all or refresh-all; units run one after another) or null. */
 export interface InstallAllJob {
   id: string;
   state: "running" | "done" | "error";
+  /** What the run does: installs, or refreshes the apt index only. Optional: a job stored before refresh runs existed has none, and the page reads that as "install". */
+  mode?: "install" | "refresh";
   startedAt: number;
   finishedAt: number | null;
   units: InstallAllUnit[];

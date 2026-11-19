@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, fetchInstallAllJob, installAllUpdates } from "../../api/client";
+import { ApiError, fetchInstallAllJob, installAllUpdates, refreshAllUpdates } from "../../api/client";
 import type { InstallAllJob } from "../../api/types";
 
 /** How often a running fleet job is read again (the first time sooner: short runs end within a second). */
@@ -11,6 +11,8 @@ export interface InstallAll {
   job: InstallAllJob | null;
   /** Start a run with the one-time password and follow it. Rejects when the dashboard refuses it. */
   start: (sudoPassword: string) => Promise<void>;
+  /** Start a refresh-only run (apt index, never installs) and follow it; `remember` stores the password for the daily refresh. */
+  startRefresh: (sudoPassword: string, remember?: boolean) => Promise<void>;
 }
 
 /**
@@ -87,11 +89,22 @@ export function useInstallAllJob(): InstallAll {
       // Throws when the dashboard refuses the run (already-running, a bad password); the dialog shows it.
       const res = await installAllUpdates(sudoPassword);
       if (!mounted.current) return;
-      setJob({ id: res.jobId, state: "running", startedAt: Date.now(), finishedAt: null, units: [] });
+      setJob({ id: res.jobId, mode: "install", state: "running", startedAt: Date.now(), finishedAt: null, units: [] });
       follow();
     },
     [follow]
   );
 
-  return { job, start };
+  const startRefresh = useCallback(
+    async (sudoPassword: string, remember?: boolean) => {
+      // Same shared fleet job, refresh mode; the same refusals (already-running, a bad password).
+      const res = await refreshAllUpdates({ sudoPassword, remember });
+      if (!mounted.current) return;
+      setJob({ id: res.jobId, mode: "refresh", state: "running", startedAt: Date.now(), finishedAt: null, units: [] });
+      follow();
+    },
+    [follow]
+  );
+
+  return { job, start, startRefresh };
 }

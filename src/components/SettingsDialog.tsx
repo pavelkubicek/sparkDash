@@ -573,6 +573,12 @@ export function SettingsDialog({ open, onClose, onSaved, onOpenHarness, section 
                 onChange={(v) => update({ updatesAutoCheck: v })}
               />
               <ToggleRow
+                title={t("toggles.updatesRefresh.title")}
+                help={t("toggles.updatesRefresh.help")}
+                checked={settings.updatesAutoRefresh ?? true}
+                onChange={(v) => update({ updatesAutoRefresh: v })}
+              />
+              <ToggleRow
                 title={t("toggles.allowPlainSudoPassword.title")}
                 help={t("toggles.allowPlainSudoPassword.help")}
                 checked={Boolean(settings.allowPlainSudoPassword)}

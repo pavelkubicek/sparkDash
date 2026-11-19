@@ -5,8 +5,11 @@
  * Transport is the GpuClockManager pattern (server/gpuclock/GpuClockManager.js): the program text
  * travels base64-encoded (`echo b64 | base64 -d | sh`), a sudo password — when the action has one —
  * rides on stdin to `sudo -S -p ''` (remote) or in the child's environment (local, through the host
- * mount namespace). It is never part of an argv, never stored (there is no sudo vault here), never
- * logged, and stripped from any message that might echo it. Wrong guesses are braked by the shared
+ * mount namespace). It is never part of an argv and never logged, and it is stripped from any
+ * message that might echo it. The one authorized exception is a password the person chose to
+ * remember: encrypted at rest in the shared sudo vault (server/storage/sudoVault.js, keyed by the
+ * account key of util/sudoPasswordGuard.js), used only by the daily index refresh and remembered
+ * actions, and never sent back to the browser. Wrong guesses are braked by the shared
  * SudoPasswordGuard, keyed user@host:port.
  */
 import { execFile } from "node:child_process";
@@ -14,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { sshExec } from "../collectors/ssh.js";
 import { hostMountNs } from "../shutdown.js";
 import { scrubbedChildEnv } from "../llmlaunch/childEnv.js";
-import { SudoPasswordGuard } from "../util/sudoPasswordGuard.js";
+import { SudoPasswordGuard, sudoAccountKey } from "../util/sudoPasswordGuard.js";
 import { buildProgram, parseKv, parseAptList, parseSim, parseFirmware, parseDashboard } from "./commands.js";
 
 const CHECK_TIMEOUT_MS = 90_000;
@@ -108,15 +111,18 @@ export function updatesUnsupportedReason(spark) {
 export class UpdateManager {
   /**
    * @param {{ run?: typeof runProgram, now?: () => number, listSparks?: () => object[],
-   *   isOnline?: (id: string) => boolean, getSettings?: () => object, tz?: string }} [opts]
-   *   All of it is injectable for tests; production wiring lives in server/index.js.
+   *   isOnline?: (id: string) => boolean, getSettings?: () => object, tz?: string,
+   *   vault?: import("../storage/sudoVault.js").SudoVault | null }} [opts]
+   *   All of it is injectable for tests; production wiring lives in server/index.js. `vault` is
+   *   the shared remembered-sudo-password vault (nullable): every path works without it.
    */
-  constructor({ run = runProgram, now = Date.now, listSparks = () => [], isOnline = () => false, getSettings = () => ({}), tz = AUTO_CHECK_TZ } = {}) {
+  constructor({ run = runProgram, now = Date.now, listSparks = () => [], isOnline = () => false, getSettings = () => ({}), tz = AUTO_CHECK_TZ, vault = null } = {}) {
     this._run = run;
     this._now = now;
     this._listSparks = listSparks;
     this._isOnline = isOnline;
     this._getSettings = getSettings;
+    this._vault = vault;
     this._pwGuard = new SudoPasswordGuard({ now });
     this._tz = tz;
     /** @type {Map<string, object>} per-spark update state */
@@ -140,6 +146,8 @@ export class UpdateManager {
     });
     /** @type {ReturnType<typeof setInterval>|null} */
     this._timer = null;
+    /** One scheduler tick at a time (the AutoPowerManager._running pattern). */
+    this._ticking = false;
   }
 
   // ─── state access ───────────────────────────────────────
@@ -179,6 +187,7 @@ export class UpdateManager {
       state: st.state,
       checkedAt: st.checkedAt,
       index: { refreshedAt: st.index.refreshedAt },
+      indexAutoRefresh: this._vault?.has(sudoAccountKey(spark)) ? "stored-password" : "check-only",
       apt: st.apt.map((r) => ({ ...r })),
       sim: { upgrades: st.sim.upgrades, kept: st.sim.kept, removals: [...st.sim.removals] },
       firmware: { count: st.firmware.count, devices: st.firmware.devices ? st.firmware.devices.map((d) => ({ ...d })) : null },
@@ -202,6 +211,7 @@ export class UpdateManager {
         rebootRequired: st.rebootRequired === true,
         firmwareRebootNeeded: st.firmwareRebootNeeded === true,
         checkedAt: st.checkedAt,
+        indexAutoRefresh: this._vault?.has(sudoAccountKey(s)) ? "stored-password" : "check-only",
       };
     });
     const anyUpgradable = sparks.some((s) => s.online && (s.aptCount > 0 || s.fwCount > 0));
@@ -311,35 +321,57 @@ export class UpdateManager {
     return this.detail(spark);
   }
 
-  /** Sudo index refresh (apt-get update ×3 + fwupdmgr refresh), then the fresh check. */
-  async refresh(spark, { sudoPassword = null } = {}) {
+  /** Remember a sudo password the unit accepted, when the person asked for it; a vault write never fails the action. */
+  _rememberPassword(spark, password) {
+    if (!this._vault || !password) return;
+    try {
+      this._vault.set(sudoAccountKey(spark), password);
+    } catch (err) {
+      console.error(`[updates] Could not remember the sudo password: ${err.message}`);
+    }
+  }
+
+  /**
+   * The refresh program itself: apt-get update ×3 + fwupdmgr refresh, then the fresh check merged
+   * into the unit's state. The caller holds the unit's busy lock and ran the password-lock check;
+   * the route path and the daily tick share this core. Throws on transport and program errors.
+   */
+  async _runRefresh(spark, sudoPassword) {
+    const st = this._state(spark.id);
+    st.state = "checking";
+    let res;
+    try {
+      res = await this._exec(spark, buildProgram("refresh", { password: sudoPassword != null }), REFRESH_TIMEOUT_MS, sudoPassword);
+    } catch (err) {
+      st.state = "error";
+      st.lastError = err.message;
+      throw err;
+    }
+    if (res.RESULT !== "ok") {
+      st.state = "error";
+      st.lastError = res.MSG || "the refresh failed on the unit";
+      if (res.CODE === "bad-password") this._notePassword(spark, true);
+      throw this._fail(res);
+    }
+    this._notePassword(spark, false);
+    const errs = this._applyCheck(st, res);
+    if (res.REFRESH_ERR) errs.unshift(res.REFRESH_ERR);
+    st.state = "ok";
+    st.checkedAt = this._now();
+    st.lastError = errs.length ? errs.join("; ") : null;
+    return res;
+  }
+
+  /** Sudo index refresh (apt-get update ×3 + fwupdmgr refresh), then the fresh check. `remember`: keep an accepted password in the shared vault. */
+  async refresh(spark, { sudoPassword = null, remember = false } = {}) {
     this._assert(spark);
     this._refuseBusy(spark);
     if (sudoPassword != null) this._checkPasswordLock(spark);
-    const st = this._state(spark.id);
     this._busy.add(spark.id);
     try {
-      st.state = "checking";
-      let res;
-      try {
-        res = await this._exec(spark, buildProgram("refresh", { password: sudoPassword != null }), REFRESH_TIMEOUT_MS, sudoPassword);
-      } catch (err) {
-        st.state = "error";
-        st.lastError = err.message;
-        throw err;
-      }
-      if (res.RESULT !== "ok") {
-        st.state = "error";
-        st.lastError = res.MSG || "the refresh failed on the unit";
-        if (res.CODE === "bad-password") this._notePassword(spark, true);
-        throw this._fail(res);
-      }
-      this._notePassword(spark, false);
-      const errs = this._applyCheck(st, res);
-      if (res.REFRESH_ERR) errs.unshift(res.REFRESH_ERR);
-      st.state = "ok";
-      st.checkedAt = this._now();
-      st.lastError = errs.length ? errs.join("; ") : null;
+      const res = await this._runRefresh(spark, sudoPassword);
+      // Sudo accepted the password — that is the moment worth remembering; a later apt failure is no password fault.
+      if (remember) this._rememberPassword(spark, sudoPassword);
       if (res.REFRESH_ERR) {
         // The index itself could not be brought up to date — say so, even though the check ran.
         throw httpError(502, res.REFRESH_ERR, "apt-update-failed");
@@ -493,7 +525,7 @@ export class UpdateManager {
       sparkName: s.name || s.id,
       state: "pending",
     }));
-    const job = { id: randomUUID(), state: "running", startedAt: this._now(), finishedAt: null, units };
+    const job = { id: randomUUID(), mode: "install", state: "running", startedAt: this._now(), finishedAt: null, units };
     this._fleetJob = job;
     void this._executeInstallAll(job, sudoPassword);
     return { jobId: job.id };
@@ -560,6 +592,74 @@ export class UpdateManager {
     job.finishedAt = this._now();
   }
 
+  /**
+   * The fleet index refresh: the exact installAll machinery — one shared fleet job with a `mode`
+   * (so starting one kind while the other runs is the same already-running refusal), units one at
+   * a time, offline and busy units skipped, a locked sudo account an outcome not a stall — but
+   * what runs per unit is the sudo refresh + fresh check, and an accepted password is remembered
+   * per unit when asked.
+   */
+  refreshAll({ sudoPassword = null, remember = false } = {}) {
+    if (this._fleetJob && this._fleetJob.state === "running") {
+      throw httpError(409, "A fleet update job is already running", "already-running");
+    }
+    const units = this._units().map((s) => ({
+      sparkId: s.id,
+      sparkName: s.name || s.id,
+      state: "pending",
+    }));
+    const job = { id: randomUUID(), mode: "refresh", state: "running", startedAt: this._now(), finishedAt: null, units };
+    this._fleetJob = job;
+    void this._executeRefreshAll(job, sudoPassword, remember);
+    return { jobId: job.id };
+  }
+
+  async _executeRefreshAll(job, password, remember) {
+    for (const row of job.units) {
+      const spark = (this._listSparks() ?? []).find((s) => s && s.id === row.sparkId);
+      if (!spark || !this._isOnline(row.sparkId)) {
+        row.state = "skipped-offline";
+        continue;
+      }
+      if (this._busy.has(row.sparkId)) {
+        row.state = "skipped-busy";
+        continue;
+      }
+      // The shared brute-force brake applies per unit too: a locked account is an outcome, not a stall.
+      const secs = this._pwGuard.lockedForSeconds(spark);
+      if (secs > 0) {
+        row.state = "error";
+        row.code = "password-locked";
+        row.error = `Too many wrong sudo passwords. Try again in ${secs} s.`;
+        continue;
+      }
+      row.state = "running";
+      this._busy.add(row.sparkId);
+      try {
+        // A refresh needs no prior check: it answers with its own fresh state.
+        const res = await this._runRefresh(spark, password);
+        // Sudo accepted: remember it for the unit's account when asked (same moment as the route path).
+        if (remember) this._rememberPassword(spark, password);
+        if (res.REFRESH_ERR) {
+          // sudo passed and the check ran, but the index itself could not be brought up to date.
+          row.state = "error";
+          row.code = "apt-update-failed";
+          row.error = res.REFRESH_ERR;
+          continue;
+        }
+        row.state = "done";
+      } catch (err) {
+        row.state = "error";
+        row.error = err.message;
+        row.code = err.code || "unreachable";
+      } finally {
+        this._busy.delete(row.sparkId);
+      }
+    }
+    job.state = "done";
+    job.finishedAt = this._now();
+  }
+
   /** GET /api/updates/install-all. */
   fleetJob() {
     if (!this._fleetJob) return { job: null };
@@ -610,7 +710,7 @@ export class UpdateManager {
     }
   }
 
-  // ─── daily sudo-free auto-check ─────────────────────────
+  // ─── daily auto-check and index refresh ─────────────────
 
   start(tickMs = AUTO_CHECK_TICK_MS) {
     if (this._timer) return;
@@ -653,12 +753,39 @@ export class UpdateManager {
   }
 
   /**
-   * One scheduler tick (also the test seam — `nowMs` is injected): every online Spark unit that
-   * has not been auto-checked on this local day and is past its jittered 06:00–09:00 slot gets
-   * the sudo-free check. A unit offline at its slot is caught on the next tick it is online
-   * that day. Settings' `updatesAutoCheck` gates the whole thing; manual checks always work.
+   * One scheduler tick (also the test seam — `nowMs` is injected), guarded so a slow refresh
+   * never stacks the minute ticks behind it (the AutoPowerManager `_running` pattern).
    */
   async runTick(nowMs = this._now()) {
+    if (this._ticking) return 0;
+    this._ticking = true;
+    try {
+      return await this._runTickOnce(nowMs);
+    } finally {
+      this._ticking = false;
+    }
+  }
+
+  /** The password the daily slot would refresh with, or null when the unit stays sudo-free: setting not on, no vault, no remembered password, account locked, or the entry undecryptable. Strict like `updatesAutoCheck`: only a real true turns the refresh on (a hand-edited truthy string disables it). */
+  _autoRefreshPassword(spark) {
+    if (this._getSettings().updatesAutoRefresh !== true) return null;
+    if (!this._vault) return null;
+    const key = sudoAccountKey(spark);
+    if (!this._vault.has(key)) return null;
+    if (this._pwGuard.lockedForSeconds(spark) > 0) return null;
+    return this._vault.get(key);
+  }
+
+  /**
+   * Every online Spark unit that has not been auto-checked on this local day and is past its
+   * jittered 06:00–09:00 slot gets its daily work: with Settings' `updatesAutoRefresh` on and a
+   * sudo password remembered for the unit's account, the sudo index refresh (indexes and
+   * metadata only, never installs), falling back to the sudo-free check when the unit stops
+   * accepting it; otherwise the sudo-free check itself. A unit offline at its slot is caught on
+   * the next tick it is online that day. Settings' `updatesAutoCheck` gates the whole thing;
+   * manual checks always work.
+   */
+  async _runTickOnce(nowMs) {
     if (this._getSettings().updatesAutoCheck !== true) return 0;
     const { dayKey, minutes } = this._localTime(nowMs);
     let started = 0;
@@ -668,9 +795,22 @@ export class UpdateManager {
       if (minutes < AUTO_CHECK_START_MINUTES + this._jitter(unit.id, dayKey)) continue;
       if (this._busy.has(unit.id)) continue; // busy: skip this tick in silence, retry on the next
       this._busy.add(unit.id); // hold it now: nothing else may slip onto the unit in between
-      this._autoDay.set(unit.id, dayKey); // once per local day, even when the check fails
+      this._autoDay.set(unit.id, dayKey); // once per local day, even when the work fails
       started += 1;
-      this._checkNow(unit).catch(() => {}).finally(() => this._busy.delete(unit.id));
+      const stored = this._autoRefreshPassword(unit);
+      if (stored == null) {
+        this._checkNow(unit).catch(() => {}).finally(() => this._busy.delete(unit.id));
+        continue;
+      }
+      this._runRefresh(unit, stored)
+        .catch((err) => {
+          if (err?.code !== "bad-password") return; // any other failure keeps its error state: never a healthy guess
+          // sudo no longer accepts the remembered password: drop it (the wrong guess is already on
+          // the guard from _runRefresh) and still take the day's data with the sudo-free check.
+          this._vault?.delete(sudoAccountKey(unit));
+          return this._checkNow(unit).catch(() => {});
+        })
+        .finally(() => this._busy.delete(unit.id));
     }
     return started;
   }

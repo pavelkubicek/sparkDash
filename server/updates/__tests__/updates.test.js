@@ -243,6 +243,23 @@ test("refresh.sh tries apt-get update at most three times and reports honestly",
   assert.equal(fs.readFileSync(log2, "utf8").trim().split("\n").length, 3, "exactly three tries");
 });
 
+test("refresh.sh marks the success stamp after a successful update, never after a failed one", async () => {
+  const base = {
+    STUB_APT_LIST: "Listing...\n",
+    STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+    STUB_FW_RC: "2",
+    STUB_FW_JSON: "{}",
+  };
+  // The stamp path is overridable so the fixture never touches the machine's real /var/lib/apt.
+  const good = path.join(tmp, `stamp-ok-${Math.random().toString(36).slice(2)}`, "periodic", "update-success-stamp");
+  await runShell(buildProgram("refresh"), { ...base, STUB_APT_UPDATE_RC: "0", SPARKDASH_APT_STAMP: good });
+  assert.ok(fs.existsSync(good), "the check's STAMP and the UI's index age tell the truth after a dashboard refresh");
+  const failed = path.join(tmp, `stamp-bad-${Math.random().toString(36).slice(2)}`, "periodic", "update-success-stamp");
+  const r = parseKv(await runShell(buildProgram("refresh"), { ...base, STUB_APT_UPDATE_RC: "100", SPARKDASH_APT_STAMP: failed }));
+  assert.ok(r.REFRESH_ERR);
+  assert.equal(fs.existsSync(failed), false, "a failed apt run marks nothing");
+});
+
 test("the outer program is self-sufficient: sudo refusals answer with the real code, not a crash", async () => {
   const base = {
     STUB_APT_LIST: "Listing...\n",
@@ -403,6 +420,7 @@ test("check fills the detail shape exactly as the contract lists it", async () =
     "firmware",
     "firmwareRebootNeeded",
     "index",
+    "indexAutoRefresh",
     "lastError",
     "now",
     "rebootRequired",
@@ -799,4 +817,250 @@ test("the scheduler skips a busy unit without burning its day and checks it once
   assert.equal(await m.runTick(late), 1);
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(checked, ["a"], "the busy tick did not spend the day's check");
+});
+
+// ─── daily auto index refresh (shared sudo vault) ────────
+
+/** A vault stand-in with the SudoVault surface, recording the calls (no files in these tests). */
+function fakeVault(entries = {}) {
+  const map = new Map(Object.entries(entries));
+  const calls = { set: [], delete: [] };
+  return {
+    calls,
+    has: (key) => map.has(key),
+    get: (key) => map.get(key) ?? null,
+    set: (key, pw) => {
+      map.set(key, pw);
+      calls.set.push([key, pw]);
+    },
+    delete: (key) => {
+      const had = map.delete(key);
+      calls.delete.push(key);
+      return had;
+    },
+  };
+}
+
+/** A manager on the daily-scheduler rails: records every transport call, vault injectable. */
+function refreshManager({ vault, settings = { updatesAutoCheck: true, updatesAutoRefresh: true }, run, online = () => true, units = [spark("a")] } = {}) {
+  const calls = [];
+  const m = new UpdateManager({
+    run:
+      run ??
+      (async (s, program, opts) => {
+        calls.push({ id: s.id, program, input: opts?.input });
+        if (program.includes("sparkdash-updates:refresh")) return "REFRESHED=ok\n" + checkLines({ stamp: "1700000000" });
+        return checkLines({});
+      }),
+    now: () => Date.now(),
+    listSparks: () => units,
+    isOnline: online,
+    getSettings: () => settings,
+    vault,
+  });
+  return { m, calls };
+}
+
+const PAST_THE_SLOT = () => atPrague(2026, 11, 20, 12, 0); // well past any jittered slot
+
+test("the daily slot refreshes with the remembered password, check and all", async () => {
+  const vault = fakeVault({ "u@a.lan:22": "stored-hunter" });
+  const { m, calls } = refreshManager({ vault });
+  assert.equal(await m.runTick(PAST_THE_SLOT()), 1);
+  await m.settled();
+  assert.equal(calls.length, 1, "the refresh program carries the check: no second run");
+  assert.equal(calls[0].input, "stored-hunter", "the remembered password is the one sent");
+  assert.ok(calls[0].program.includes("sparkdash-updates:refresh"));
+  const decoded = Buffer.from(calls[0].program.match(/BODY=\$\(dec '([^']+)'\)/)[1], "base64").toString("utf8");
+  assert.match(decoded, /apt-get update/, "the refresh body runs");
+  assert.match(decoded, /apt list --upgradable/, "and the check body rides along for the fresh state");
+  assert.equal(m.detail(spark("a")).indexAutoRefresh, "stored-password");
+  assert.equal(m.detail(spark("a")).index.refreshedAt, 1700000000 * 1000, "the refresh answered with its own fresh state");
+});
+
+test("a remembered password the unit stops accepting is dropped; the day still gets its check", async () => {
+  const vault = fakeVault({ "u@a.lan:22": "stale-pw" });
+  const { m, calls } = refreshManager({
+    vault,
+    run: async (s, program, opts) => {
+      calls.push({ id: s.id, program, input: opts?.input });
+      if (program.includes("sparkdash-updates:refresh")) return "RESULT=error\nCODE=bad-password\nMSG=The sudo password was not accepted\n";
+      return checkLines({});
+    },
+  });
+  assert.equal(await m.runTick(PAST_THE_SLOT()), 1);
+  await m.settled();
+  assert.deepEqual(vault.calls.delete, ["u@a.lan:22"], "the stale entry is dropped");
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].program.includes("sparkdash-updates:refresh"));
+  assert.ok(calls[1].program.includes("sparkdash-updates:check"), "the sudo-free fallback ran: the day has data");
+  assert.equal(calls[1].input ?? null, null, "the fallback carries no password");
+  assert.equal(m.detail(spark("a")).state, "ok");
+  assert.equal(m._pwGuard._fails.get("u@a.lan:22").n, 1, "the one wrong guess counts against the guard exactly once");
+});
+
+test("no stored password, the setting off, or a locked account keep the day sudo-free", async () => {
+  for (const scenario of [
+    { name: "no stored password", vault: fakeVault(), settings: { updatesAutoCheck: true, updatesAutoRefresh: true } },
+    { name: "auto-refresh off", vault: fakeVault({ "u@a.lan:22": "stored" }), settings: { updatesAutoCheck: true, updatesAutoRefresh: false } },
+    { name: "auto-refresh not a real true", vault: fakeVault({ "u@a.lan:22": "stored" }), settings: { updatesAutoCheck: true, updatesAutoRefresh: "yes" } },
+  ]) {
+    const { m, calls } = refreshManager({ vault: scenario.vault, settings: scenario.settings });
+    assert.equal(await m.runTick(PAST_THE_SLOT()), 1, scenario.name);
+    await m.settled();
+    assert.equal(calls.length, 1, scenario.name);
+    assert.ok(calls[0].program.includes("sparkdash-updates:check"), scenario.name);
+    assert.equal(calls[0].input ?? null, null, scenario.name);
+  }
+  // A locked sudo account: the check runs, the stored password is left where it is.
+  const vault = fakeVault({ "u@a.lan:22": "stored" });
+  const { m, calls } = refreshManager({ vault });
+  for (let i = 0; i < 3; i += 1) m._pwGuard.note(spark("a"), true);
+  assert.equal(await m.runTick(PAST_THE_SLOT()), 1);
+  await m.settled();
+  assert.ok(calls.every((c) => c.program.includes("sparkdash-updates:check")), "the locked account never reaches the unit with a password");
+  assert.deepEqual(vault.calls.delete, []);
+  assert.deepEqual(vault.calls.set, []);
+});
+
+test("the auto-refresh leaves offline and busy units alone", async () => {
+  const vault = fakeVault({ "u@a.lan:22": "stored", "u@b.lan:22": "stored" });
+  const { m, calls } = refreshManager({ vault, units: [spark("a"), spark("b")], online: (id) => id !== "b" });
+  assert.equal(await m.runTick(PAST_THE_SLOT()), 1);
+  await m.settled();
+  assert.deepEqual(calls.map((c) => c.id), ["a"], "the offline unit waits for its catch-up tick");
+  // A busy unit: skipped in silence, its day not spent.
+  const busy = refreshManager({ vault: fakeVault({ "u@a.lan:22": "stored" }) });
+  busy.m._busy.add("a");
+  assert.equal(await busy.m.runTick(PAST_THE_SLOT()), 0);
+  busy.m._busy.delete("a");
+  assert.equal(await busy.m.runTick(PAST_THE_SLOT()), 1, "free by the next tick: the day is still its own");
+  await busy.m.settled();
+  assert.equal(busy.calls.length, 1);
+  assert.ok(busy.calls[0].program.includes("sparkdash-updates:refresh"));
+});
+
+test("a tick in flight blocks the next minute tick from stacking", async () => {
+  const { m, calls } = refreshManager({ vault: fakeVault() });
+  m._ticking = true; // the minute timer firing while a slow previous tick is still at work
+  assert.equal(await m.runTick(PAST_THE_SLOT()), 0);
+  assert.equal(calls.length, 0);
+  m._ticking = false;
+  assert.equal(await m.runTick(PAST_THE_SLOT()), 1);
+  await m.settled();
+});
+
+// ─── remember and the fleet refresh ───────────────────────
+
+test("remember stores only when sudo accepted the password", async () => {
+  const mk = (run) => {
+    const vault = fakeVault();
+    const m = new UpdateManager({ run, now: () => 5, listSparks: () => [spark("s1")], isOnline: () => true, getSettings: () => ({}), vault });
+    return { m, vault };
+  };
+  const ok = mk(async () => "REFRESHED=ok\n" + checkLines({}));
+  await ok.m.refresh(spark("s1"), { sudoPassword: "hunter2long", remember: true });
+  assert.deepEqual(ok.vault.calls.set, [["u@s1.lan:22", "hunter2long"]]);
+
+  const noAsk = mk(async () => "REFRESHED=ok\n" + checkLines({}));
+  await noAsk.m.refresh(spark("s1"), { sudoPassword: "hunter2long" });
+  assert.deepEqual(noAsk.vault.calls.set, [], "without the ask, nothing is kept");
+
+  const bad = mk(async () => "RESULT=error\nCODE=bad-password\nMSG=The sudo password was not accepted\n");
+  await assert.rejects(bad.m.refresh(spark("s1"), { sudoPassword: "wrong-guess", remember: true }), (e) => e.status === 403);
+  assert.deepEqual(bad.vault.calls.set, [], "a refused password is never stored");
+
+  const unreachable = mk(async () => {
+    throw new Error("SSH to s1.lan:22 failed");
+  });
+  await assert.rejects(unreachable.m.refresh(spark("s1"), { sudoPassword: "hunter2long", remember: true }), (e) => e.status === 502);
+  assert.deepEqual(unreachable.vault.calls.set, [], "no answer proves nothing");
+
+  // Sudo said yes and apt failed afterwards: the password is worth keeping, the failure still speaks.
+  const aptFailed = mk(async () => "REFRESH_ERR=apt-get update failed after 3 tries\n" + checkLines({}));
+  await assert.rejects(aptFailed.m.refresh(spark("s1"), { sudoPassword: "hunter2long", remember: true }), (e) => e.code === "apt-update-failed");
+  assert.deepEqual(aptFailed.vault.calls.set, [["u@s1.lan:22", "hunter2long"]], "sudo's yes counts, apt's no does not");
+
+  // A vault that cannot write must never fail the refresh itself.
+  const throwing = mk(async () => "REFRESHED=ok\n" + checkLines({}));
+  throwing.vault.set = () => {
+    throw new Error("disk full");
+  };
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    assert.equal((await throwing.m.refresh(spark("s1"), { sudoPassword: "hunter2long", remember: true })).state, "ok");
+  } finally {
+    console.error = orig;
+  }
+});
+
+test("refresh-all walks the fleet with installAll's outcome semantics, in refresh mode", async () => {
+  const units = [spark("a"), spark("b"), spark("c"), spark("d")];
+  const running = new Set();
+  let maxConcurrent = 0;
+  const vault = fakeVault();
+  const m = new UpdateManager({
+    run: async (s, program) => {
+      running.add(s.id);
+      maxConcurrent = Math.max(maxConcurrent, running.size);
+      await new Promise((r) => setTimeout(r, 5));
+      running.delete(s.id);
+      if (!program.includes("sparkdash-updates:refresh")) return checkLines({});
+      if (s.id === "a") return "RESULT=error\nCODE=bad-password\nMSG=The sudo password was not accepted\n";
+      if (s.id === "c") return "REFRESH_ERR=apt-get update failed after 3 tries\n" + checkLines({});
+      return "REFRESHED=ok\n" + checkLines({});
+    },
+    now: () => 5,
+    listSparks: () => units,
+    isOnline: (id) => id !== "b",
+    getSettings: () => ({}),
+    vault,
+  });
+  m._busy.add("d"); // a per-unit job already holds d: the fleet must skip it, not queue behind it
+  const { jobId } = m.refreshAll({ sudoPassword: "secret-pw", remember: true });
+  while (m.fleetJob().job?.state !== "done") await new Promise((r) => setTimeout(r, 5));
+  m._busy.delete("d");
+  const { job } = m.fleetJob();
+  assert.equal(job.id, jobId);
+  assert.equal(job.mode, "refresh");
+  assert.equal(job.state, "done");
+  assert.deepEqual(
+    job.units.map((u) => [u.sparkId, u.state, u.code ?? null]),
+    [
+      ["a", "error", "bad-password"],
+      ["b", "skipped-offline", null],
+      ["c", "error", "apt-update-failed"],
+      ["d", "skipped-busy", null],
+    ]
+  );
+  assert.equal(job.units.find((u) => u.sparkId === "c").error, "apt-get update failed after 3 tries");
+  assert.equal(maxConcurrent, 1, "units run one at a time");
+  assert.deepEqual(vault.calls.set, [["u@c.lan:22", "secret-pw"]], "only the sudo-accepted unit gets remembered");
+  assert.ok(!JSON.stringify(job).includes("secret-pw"), "the job never echoes the password");
+});
+
+test("the fleet job is shared: install-all and refresh-all refuse each other until done", async () => {
+  const units = [spark("f1"), spark("f2")];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const m = new UpdateManager({
+    run: async (s, program) => {
+      if (program.includes("sparkdash-updates:install") || program.includes("sparkdash-updates:refresh")) await gate;
+      return "STEP=apt\nLAST=x\nSTEP=firmware\nFWUP=none\n" + checkLines({});
+    },
+    now: () => 7,
+    listSparks: () => units,
+    isOnline: () => true,
+    getSettings: () => ({}),
+  });
+  await m.check(spark("f1"));
+  await m.check(spark("f2"));
+  m.refreshAll({ sudoPassword: "pw" });
+  assert.throws(() => m.installAll({ sudoPassword: "pw" }), (e) => e.status === 409 && e.code === "already-running");
+  release();
+  while (m.fleetJob().job?.state !== "done") await new Promise((r) => setTimeout(r, 5));
+  m.installAll({ sudoPassword: "pw" });
+  assert.throws(() => m.refreshAll({ sudoPassword: "pw" }), (e) => e.status === 409 && e.code === "already-running");
+  while (m.fleetJob().job?.state !== "done") await new Promise((r) => setTimeout(r, 5));
 });

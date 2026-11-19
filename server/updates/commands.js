@@ -5,7 +5,10 @@
  * Nothing from a request ever reaches a shell as script text. The script body and each argument
  * travel base64-encoded and are decoded into variables, then handed to the script as positional
  * parameters. Privilege: root runs it directly, anyone else uses `sudo -S` with a password typed
- * in the dashboard (one action at a time, never remembered — there is no sudo vault here). That
+ * in the dashboard (one action at a time). An accepted password the person asked to keep is
+ * remembered encrypted in the shared sudo vault (server/storage/sudoVault.js, keyed by the account
+ * key of util/sudoPasswordGuard.js) and used only by the daily index refresh and remembered
+ * actions — never sent back to the browser. That
  * password arrives in $SPARKDASH_SUDO_PW (set by the runner from stdin), is moved to a plain
  * variable at once and is only ever piped to sudo. Same semantics as server/storage/commands.js.
  */

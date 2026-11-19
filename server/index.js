@@ -44,6 +44,7 @@ import { registerGpuClockFleetRoute, registerGpuClockRoutes, registerGpuClockSch
 import { getGpuClockSchedule, loadGpuClockSchedule, saveGpuClockSchedule } from "./gpuclock/scheduleStore.js";
 import { StorageManager } from "./storage/StorageManager.js";
 import { SudoVault } from "./storage/sudoVault.js";
+import { sudoAccountKey } from "./util/sudoPasswordGuard.js";
 import { ElevatedDeleteAcks } from "./storage/ackStore.js";
 import { decryptSecret, encryptSecret } from "./secretsStore.js";
 import { registerStorageRoutes } from "./storage/routes.js";
@@ -374,6 +375,12 @@ const eventLog = new EventLog({
 // ever blocking a poll loop (the client retries on its own in the meantime).
 const mqttPublisher = new MqttPublisher({ getSettings });
 eventLog.subscribe((event) => mqttPublisher.publishEvent(event));
+
+// ─── Remembered sudo passwords (shared vault) ────────────
+// One vault instance for both the Storage Manager and the Updates page: the same account
+// (user@host:port, see util/sudoPasswordGuard.js) has exactly one remembered password on disk,
+// and whichever feature sees sudo stop accepting it is the one that drops it.
+const sudoVault = new SudoVault({ file: STORAGE_SUDO_JSON_PATH, encrypt: encryptSecret, decrypt: decryptSecret });
 
 // ─── Unit history (so a fresh page can draw the last hours at once) ─────
 // GPU: a dense ~2 s series for 8 h (Overview/Spark charts) and a minute-resolution series for
@@ -1188,6 +1195,10 @@ app.patch("/api/sparks/:id", (req, res) => {
 
 app.delete("/api/sparks/:id", (req, res) => {
   try {
+    // One shared sudo vault: a removed unit takes its remembered sudo password with it (the
+    // registry's own purge covers SSH passwords and API keys; the vault stays out of it).
+    const unit = registry.getSpark(req.params.id);
+    if (unit) sudoVault.delete(sudoAccountKey(unit));
     const removed = registry.removeSpark(req.params.id);
     if (!removed) return res.status(404).json({ error: "Spark not found" });
     fleetEnergyTracker.invalidateMembership(registry.sparkIds);
@@ -3000,7 +3011,7 @@ registerCpuClockRoutes(app, {
 registerStorageRoutes(app, {
   manager: new StorageManager({
     scansFile: STORAGE_SCANS_JSON_PATH,
-    vault: new SudoVault({ file: STORAGE_SUDO_JSON_PATH, encrypt: encryptSecret, decrypt: decryptSecret }),
+    vault: sudoVault,
     acks: new ElevatedDeleteAcks({ file: STORAGE_ACKS_JSON_PATH }),
     // A delete on the machine the dashboard runs on never removes or reaches into its own config or install.
     protectedPaths: [path.dirname(STORAGE_SCANS_JSON_PATH), ROOT],
@@ -3018,13 +3029,14 @@ registerStorageRoutes(app, {
   }),
 });
 
-// Updates page: a daily sudo-free check per Spark (apt + firmware), installs that run here with
-// one-time sudo passwords (never stored), and the DGX Dashboard service switch. Same auth and
-// limiters as the Storage Manager.
+// Updates page: a daily sudo-free check per Spark (apt + firmware), index refreshes and installs
+// that run here with a one-time sudo password — or the one remembered encrypted in the shared
+// vault — and the DGX Dashboard service switch. Same auth and limiters as the Storage Manager.
 const updatesManager = new UpdateManager({
   listSparks: () => registry.sparks.map((s) => registry.getSpark(s.id)),
   isOnline: (id) => Boolean(monitors.get(id)?.online),
   getSettings,
+  vault: sudoVault,
 });
 registerUpdatesRoutes(app, {
   manager: updatesManager,

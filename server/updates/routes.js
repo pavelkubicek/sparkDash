@@ -90,7 +90,7 @@ export function registerUpdatesRoutes(app, { manager, registry, recordEvent = ()
       if (!allowChange(req)) return rejectLimited(res, "Too many update requests, try again in a minute");
       if (refuseInsecurePassword(req, res)) return;
       const sudoPassword = parseSudoPassword(req.body?.sudoPassword);
-      res.json(await manager.refresh(spark, { sudoPassword }));
+      res.json(await manager.refresh(spark, { sudoPassword, remember: req.body?.remember === true }));
     })
   );
 
@@ -124,6 +124,20 @@ export function registerUpdatesRoutes(app, { manager, registry, recordEvent = ()
       const sudoPassword = parseSudoPassword(req.body?.sudoPassword);
       const started = manager.installAll({ sudoPassword });
       recordEvent({ type: "updates.install-all", severity: "info", message: "Started the software update on all Sparks" });
+      res.status(202).json(started);
+    })
+  );
+
+  // The fleet index refresh: the same shared fleet job as install-all (a running job of either
+  // kind refuses the other), running the sudo refresh + fresh check on every unit in turn.
+  app.post(
+    "/api/updates/refresh-all",
+    handleGlobal(async (req, res) => {
+      if (!allowChange(req)) return rejectLimited(res, "Too many update requests, try again in a minute");
+      if (refuseInsecurePassword(req, res)) return;
+      const sudoPassword = parseSudoPassword(req.body?.sudoPassword);
+      const started = manager.refreshAll({ sudoPassword, remember: req.body?.remember === true });
+      recordEvent({ type: "updates.refresh-all", severity: "info", message: "Started the index refresh on all Sparks" });
       res.status(202).json(started);
     })
   );

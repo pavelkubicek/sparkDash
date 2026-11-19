@@ -19,6 +19,14 @@ REFRESH_RC=0
 if [ "$ok" = 0 ]; then
   REFRESH_RC=1
 fi
+# A plain apt-get update never writes apt.systemd.daily's success stamp, so the check's STAMP
+# (and the UI's "index refreshed" age) would keep telling the night's last run after a dashboard
+# refresh: mark it ourselves. Guarded — a read-only unit or a layout without the dir is left as is.
+if [ "$ok" = 1 ]; then
+  APT_STAMP="${SPARKDASH_APT_STAMP-/var/lib/apt/periodic/update-success-stamp}"
+  mkdir -p "$(dirname "$APT_STAMP")" >/dev/null 2>&1 || true
+  touch "$APT_STAMP" >/dev/null 2>&1 || true
+fi
 # fwupdmgr refresh is best effort: a unit without fwupd, or with an unreachable remote, still
 # gets its apt index refreshed and the fresh check below reports what it can.
 if command -v fwupdmgr >/dev/null 2>&1; then

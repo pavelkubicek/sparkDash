@@ -95,6 +95,14 @@ const DEFAULTS = Object.freeze({
    * installed by it. Turning it off leaves every manual action on the page available.
    */
   updatesAutoCheck: true,
+  /**
+   * The Updates page's daily slot also brings the apt index up to date with the sudo password
+   * remembered for that unit (Settings keeps it encrypted in the shared sudo vault) — indexes
+   * and metadata only, never installs. On by default; a stored password the unit stops accepting
+   * is dropped and that day falls back to the sudo-free check. Turning it off leaves the plain
+   * daily check and every manual action on the page.
+   */
+  updatesAutoRefresh: true,
   /** VulnHunter scans, installs and harness-command changes (they run an agent on a unit). Opt-in, off by default. */
   vulnhuntEnabled: false,
   /** REA (Tools): install, uploads and analysis runs on a unit. Opt-in, off by default. */

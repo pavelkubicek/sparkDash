@@ -1054,9 +1054,12 @@ export function checkSparkUpdates(id: string): Promise<SparkUpdateDetail> {
   return apiFetch(updatesUrl(id, "/check"), { method: "POST", body: JSON.stringify({}) });
 }
 
-/** sudo index refresh (apt-get update + fwupdmgr refresh) and a re-check. The password is used for this call only. */
-export function refreshSparkUpdates(id: string, sudoPassword: string): Promise<SparkUpdateDetail> {
-  return apiFetch(updatesUrl(id, "/refresh"), { method: "POST", body: JSON.stringify({ sudoPassword }) });
+/**
+ * sudo index refresh (apt-get update + fwupdmgr refresh) and a re-check. The password is used for this
+ * call; `remember` (from the dialog's tick box) additionally asks the server to store it for the daily refresh.
+ */
+export function refreshSparkUpdates(id: string, sudoPassword: string, remember?: boolean): Promise<SparkUpdateDetail> {
+  return apiFetch(updatesUrl(id, "/refresh"), { method: "POST", body: JSON.stringify({ sudoPassword, remember }) });
 }
 
 /**
@@ -1078,6 +1081,14 @@ export function fetchSparkUpdatesJob(id: string): Promise<{ job: UpdateInstallJo
 /** Start the fleet install-all job (409 already-running when one runs). The password is used for this call only. */
 export function installAllUpdates(sudoPassword: string): Promise<{ jobId: string }> {
   return apiFetch("/api/updates/install-all", { method: "POST", body: JSON.stringify({ sudoPassword }) });
+}
+
+/**
+ * Start the fleet refresh-all job (409 already-running when one runs): apt-get update + fwupdmgr refresh on
+ * each online unit, one after another, never an install. `remember` stores the password for the daily refresh.
+ */
+export function refreshAllUpdates(body: { sudoPassword: string; remember?: boolean }): Promise<{ jobId: string }> {
+  return apiFetch("/api/updates/refresh-all", { method: "POST", body: JSON.stringify(body) });
 }
 
 /** The fleet job (running ones survive a tab close), or null. */

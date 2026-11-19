@@ -10,6 +10,7 @@ import {
   fetchUpdatesSummary,
   installAllUpdates,
   installSparkUpdates,
+  refreshAllUpdates,
   refreshSparkUpdates,
   setDashboardService,
 } from "../../api/client";
@@ -28,6 +29,7 @@ vi.mock("../../api/client", async (importOriginal) => ({
   installSparkUpdates: vi.fn(),
   fetchSparkUpdatesJob: vi.fn(),
   installAllUpdates: vi.fn(),
+  refreshAllUpdates: vi.fn(),
   fetchInstallAllJob: vi.fn(),
   fetchDashboardService: vi.fn(),
   setDashboardService: vi.fn(),
@@ -39,8 +41,8 @@ const H = 3_600_000;
 const SUMMARY: UpdateSummary = {
   now: NOW,
   sparks: [
-    { id: "s1", name: "Pico", online: true, state: "ok", aptCount: 3, fwCount: 1, rebootRequired: true, firmwareRebootNeeded: false, checkedAt: NOW - 3 * H },
-    { id: "s2", name: "Dell", online: true, state: "ok", aptCount: 0, fwCount: 0, rebootRequired: false, firmwareRebootNeeded: false, checkedAt: NOW - 60_000 },
+    { id: "s1", name: "Pico", online: true, state: "ok", aptCount: 3, fwCount: 1, rebootRequired: true, firmwareRebootNeeded: false, checkedAt: NOW - 3 * H, indexAutoRefresh: "stored-password" },
+    { id: "s2", name: "Dell", online: true, state: "ok", aptCount: 0, fwCount: 0, rebootRequired: false, firmwareRebootNeeded: false, checkedAt: NOW - 60_000, indexAutoRefresh: "stored-password" },
   ],
   anyUpgradable: true,
 };
@@ -51,6 +53,7 @@ const DETAIL: SparkUpdateDetail = {
   state: "ok",
   checkedAt: NOW - 3 * H,
   index: { refreshedAt: NOW - 2 * H },
+  indexAutoRefresh: "stored-password",
   apt: [
     { name: "curl", newVersion: "8.5.0-2", oldVersion: "8.5.0-1" },
     { name: "libssl3", newVersion: "3.0.11", oldVersion: "3.0.10" },
@@ -115,6 +118,7 @@ beforeEach(() => {
   vi.mocked(installSparkUpdates).mockResolvedValue({ jobId: "j1" });
   vi.mocked(fetchSparkUpdatesJob).mockResolvedValue({ job: null });
   vi.mocked(installAllUpdates).mockResolvedValue({ jobId: "f1" });
+  vi.mocked(refreshAllUpdates).mockResolvedValue({ jobId: "r1" });
   vi.mocked(fetchInstallAllJob).mockResolvedValue({ job: null });
   vi.mocked(fetchDashboardService).mockResolvedValue(DASH);
   vi.mocked(setDashboardService).mockResolvedValue(DASH);
@@ -193,8 +197,110 @@ describe("UpdatesPage", () => {
     expect(confirm.disabled ?? button("Confirm").disabled).toBe(false);
     act(() => button("Confirm").click());
     await flush();
-    expect(refreshSparkUpdates).toHaveBeenCalledWith("s1", "hunter2");
+    expect(refreshSparkUpdates).toHaveBeenCalledWith("s1", "hunter2", false);
     expect(input.value === "hunter2" || dialog() == null).toBe(true);
+  });
+
+  it("Refresh index offers the remember tick and passes it through", async () => {
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Refresh index").click());
+    expect(dialog()).toBeTruthy();
+    expect(dialog()!.textContent).toContain("Remember for the daily refresh");
+    const box = dialog()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => box.click());
+    typePassword("hunter2");
+    act(() => button("Confirm").click());
+    await flush();
+    expect(refreshSparkUpdates).toHaveBeenCalledWith("s1", "hunter2", true);
+  });
+
+  it("the remember tick is wiped when the dialog closes, like the password box", async () => {
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Refresh index").click());
+    const box = dialog()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => box.click());
+    expect(box.checked).toBe(true);
+    typePassword("hunter2");
+    act(() => button("Cancel").click());
+    await flush();
+    act(() => button("Refresh index").click());
+    const again = dialog()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(again.checked).toBe(false);
+    expect((dialog()!.querySelector('input[type="password"]') as HTMLInputElement).value).toBe("");
+  });
+
+  it("the unit panel says when the daily index refresh runs only as a sudo-free check", async () => {
+    vi.mocked(fetchSparkUpdates).mockResolvedValue({ ...DETAIL, indexAutoRefresh: "check-only" });
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    expect(text()).toContain("daily refresh off — no stored sudo password");
+    vi.mocked(fetchSparkUpdates).mockResolvedValue(DETAIL);
+    act(() => button("Check now").click());
+    await flush();
+    expect(text()).not.toContain("daily refresh off");
+  });
+
+  it("Refresh all machines starts the shared job in refresh mode and follows it with refresh wording", async () => {
+    vi.useFakeTimers();
+    try {
+      const running: InstallAllJob = {
+        id: "r1",
+        mode: "refresh",
+        state: "running",
+        startedAt: NOW,
+        finishedAt: null,
+        units: [
+          { sparkId: "s1", sparkName: "Pico", state: "running" },
+          { sparkId: "s2", sparkName: "Dell", state: "pending" },
+        ],
+      };
+      const done: InstallAllJob = {
+        id: "r1",
+        mode: "refresh",
+        state: "done",
+        startedAt: NOW,
+        finishedAt: NOW + 5000,
+        units: [
+          { sparkId: "s1", sparkName: "Pico", state: "done" },
+          { sparkId: "s2", sparkName: "Dell", state: "skipped-offline" },
+        ],
+      };
+      render(<UpdatesPage sparks={sparks()} />);
+      await flush();
+      act(() => button("Refresh all machines").click());
+      expect(dialog()).toBeTruthy();
+      expect(dialog()!.textContent).toContain("Remember for the daily refresh");
+      const box = dialog()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+      act(() => box.click());
+      typePassword("hunter2");
+      act(() => button("Confirm").click());
+      await flush();
+      expect(refreshAllUpdates).toHaveBeenCalledWith({ sudoPassword: "hunter2", remember: true });
+      vi.mocked(fetchInstallAllJob).mockResolvedValueOnce({ job: running }).mockResolvedValueOnce({ job: done });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(text()).toContain("Refreshing machines…");
+      expect(text()).toContain("Refreshing…");
+      expect(text()).toContain("Queued");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(text()).toContain("Refreshed");
+      expect(text()).toContain("Finished: 1 refreshed, 1 skipped.");
+      // With the run settled, both fleet buttons answer to the summary again.
+      expect(button("Refresh all machines").disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the Refresh all machines button is disabled while no unit is online", async () => {
+    render(<UpdatesPage sparks={[makeSpark("s1", false), makeSpark("s2", false)]} />);
+    await flush();
+    expect(button("Refresh all machines").disabled).toBe(true);
   });
 
   it("Install updates opens the password dialog and posts the typed password", async () => {
