@@ -71,6 +71,11 @@ function finishLine(job: InstallAllJob): string {
   return job.state === "error" && parts.length === 0 ? "The run stopped with an error." : `Finished: ${parts.join(", ") || "nothing to do"}.`;
 }
 
+/** How often the cards and the open unit are read again while a fleet run walks the units one after
+ * another: the first re-read a second after the run is seen, then every five seconds. */
+const FLEET_REREAD_MS = 5000;
+const FLEET_FIRST_REREAD_MS = 1000;
+
 interface UpdatesPageProps {
   sparks: SparkSnapshot[];
 }
@@ -149,6 +154,29 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
     void loadSummary();
     void updates.refresh();
   }, [fleet.job, loadSummary, updates.refresh]);
+
+  // A run that is still walking the units moves their states mid-job, so the job-start snapshot the
+  // cards and the open unit are holding goes stale: re-read both on a cadence while it runs. The
+  // settle effect above still does the final re-read, once per job.
+  useEffect(() => {
+    if (!fleetRunning) return;
+    let cancelled = false;
+    const reread = () => {
+      if (cancelled) return;
+      void loadSummary();
+      void updates.refresh();
+    };
+    let interval: number | null = null;
+    const first = window.setTimeout(() => {
+      reread();
+      if (!cancelled) interval = window.setInterval(reread, FLEET_REREAD_MS);
+    }, FLEET_FIRST_REREAD_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(first);
+      if (interval != null) window.clearInterval(interval);
+    };
+  }, [fleetRunning, loadSummary, updates.refresh]);
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [pwRequest, setPwRequest] = useState<PasswordRequest | null>(null);

@@ -297,6 +297,81 @@ describe("UpdatesPage", () => {
     }
   });
 
+  it("re-reads the cards and the open unit while a fleet refresh is still walking the units", async () => {
+    vi.useFakeTimers();
+    try {
+      const running: InstallAllJob = {
+        id: "r1",
+        mode: "refresh",
+        state: "running",
+        startedAt: NOW,
+        finishedAt: null,
+        units: [
+          { sparkId: "s1", sparkName: "Pico", state: "running" },
+          { sparkId: "s2", sparkName: "Dell", state: "pending" },
+        ],
+      };
+      const done: InstallAllJob = {
+        id: "r1",
+        mode: "refresh",
+        state: "done",
+        startedAt: NOW,
+        finishedAt: NOW + 9000,
+        units: [
+          { sparkId: "s1", sparkName: "Pico", state: "done" },
+          { sparkId: "s2", sparkName: "Dell", state: "skipped-offline" },
+        ],
+      };
+      render(<UpdatesPage sparks={sparks()} />);
+      await flush();
+      act(() => button("Refresh all machines").click());
+      typePassword("hunter2");
+      act(() => button("Confirm").click());
+      await flush();
+      // The run keeps answering "running" for the whole walk; the page follows it every second.
+      let live: InstallAllJob = running;
+      vi.mocked(fetchInstallAllJob).mockImplementation(async () => ({ job: live }));
+      // The first follow tick lands; the reads so far are only the mount ones plus the one the
+      // submit fires right after the job starts — the frozen snapshot this test is about.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      const summaryAtStart = vi.mocked(fetchUpdatesSummary).mock.calls.length;
+      const detailAtStart = vi.mocked(fetchSparkUpdates).mock.calls.length;
+      expect(summaryAtStart).toBe(2);
+      expect(detailAtStart).toBe(1);
+      // Two cadence ticks (the first ~1s after the run is seen, then every 5s) while it is still running.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(text()).toContain("Refreshing machines…");
+      expect(vi.mocked(fetchUpdatesSummary).mock.calls.length).toBeGreaterThanOrEqual(summaryAtStart + 2);
+      expect(vi.mocked(fetchSparkUpdates).mock.calls.length).toBeGreaterThanOrEqual(detailAtStart + 2);
+      expect(vi.mocked(fetchSparkUpdates)).toHaveBeenLastCalledWith("s1");
+      // Settle: the run finishes and the settle effect re-reads, once, as before.
+      live = done;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(text()).toContain("Finished: 1 refreshed, 1 skipped.");
+      const summaryAfterSettle = vi.mocked(fetchUpdatesSummary).mock.calls.length;
+      const detailAfterSettle = vi.mocked(fetchSparkUpdates).mock.calls.length;
+      expect(summaryAfterSettle).toBeGreaterThanOrEqual(summaryAtStart + 3);
+      expect(detailAfterSettle).toBeGreaterThanOrEqual(detailAtStart + 3);
+      // Nothing keeps polling once the run is over.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(vi.mocked(fetchUpdatesSummary).mock.calls.length).toBe(summaryAfterSettle);
+      expect(vi.mocked(fetchSparkUpdates).mock.calls.length).toBe(detailAfterSettle);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("the Refresh all machines button is disabled while no unit is online", async () => {
     render(<UpdatesPage sparks={[makeSpark("s1", false), makeSpark("s2", false)]} />);
     await flush();
