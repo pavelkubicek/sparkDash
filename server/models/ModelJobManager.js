@@ -65,6 +65,14 @@ const FINISHED_TTL_MS = 30 * 60_000;
 /** Transcript lines the ring buffer keeps at most (chars are the hard cap). */
 const LINE_MAX = 4000;
 
+/** Wording of the "requested" event, mirroring the LLM launcher's verbs. */
+const EVENT_VERB = {
+  start: "Starting",
+  stop: "Stopping",
+  restart: "Restarting",
+  logs: "Opening output of",
+};
+
 function err400(msg) {
   const e = new Error(msg);
   e.status = 400;
@@ -182,12 +190,19 @@ export class ModelJobManager {
    *   server can force a WS broadcast.
    * @param {(jobId: string) => Promise<void>|void} [opts.afterSettle] hook run
    *   when a job finishes (the server uses it to re-probe liveness immediately).
+   * @param {(event: object) => void} [opts.onEvent] fleet event-log sink; every
+   *   emission is defensive — a broken sink must never break a job path.
    */
   constructor(opts = {}) {
     this.getModel = opts.getModel || (() => null);
     this.getSpark = opts.getSpark || (() => null);
+    // Documented above and called by _notify(): the server's "job state
+    // changed — broadcast and re-reconcile the Spark roles" hook. Reading it
+    // here is what makes that hook live at all.
+    this.onChange = opts.onChange || (() => {});
     this.afterSettle = opts.afterSettle || (async () => {});
     this.activePath = opts.activePath || ACTIVE_PATH;
+    this.onEvent = opts.onEvent || (() => {});
     /** @type {Map<string, object>} jobId → job */
     this.jobs = new Map();
     /** @type {Map<string, string>} modelId → newest job id (any action) */
@@ -372,6 +387,7 @@ export class ModelJobManager {
     this._checkpointActive();
     this._notify();
     this._spawnJob(job, [{ target, cmd }], timeoutMs);
+    this._emitRequested(job);
 
     return { jobId: job.jobId, status: "running", stoppingJobId: null };
   }
@@ -383,6 +399,7 @@ export class ModelJobManager {
       jobId: randomUUID(),
       modelId: model.id,
       modelName: model.name || model.id,
+      sparkId: model.sparkId || null,
       action,
       status: "running",
       script: model[`${action}Script`] || model.startScript || null,
@@ -518,6 +535,12 @@ export class ModelJobManager {
     job._resolveDone?.();
     this._mutating.delete(job.jobId);
     this._checkpointActive();
+    // The job's one terminal event. `interruptAll()` is the only other path out
+    // of "running" and deliberately stays silent: shutdown flushes the event log
+    // (server/index.js eventLog.flush()) before it interrupts the jobs, so a line
+    // written there could never persist — the next boot reports the job as
+    // `model.job.recovered` instead, which is the honest version.
+    this._emitTerminal(job);
     this._notify(true);
   }
 
@@ -597,6 +620,21 @@ export class ModelJobManager {
       this.jobs.set(job.jobId, job);
       this.latestByModel.set(job.modelId, job.jobId);
       console.warn(`[ModelJobs] recovered interrupted ${snap.action} job for ${snap.modelId}`);
+      this._emit({
+        type: "model.job.recovered",
+        severity: "warn",
+        // Checkpoints written today carry no sparkId (publicJob omits it), so
+        // fall back to the registry — without it the event sits in the
+        // Activity page's "no Spark" bucket with no sparkName.
+        sparkId: job.sparkId ?? this.getModel(job.modelId)?.sparkId ?? null,
+        message: `${snap.model || snap.modelId}: interrupted ${snap.action || "script"} job was recovered after a server restart`,
+        data: {
+          modelId: snap.modelId,
+          action: snap.action || null,
+          jobId: snap.jobId,
+          source: snap.source || null,
+        },
+      });
     }
     this._writeActiveFile([]);
   }
@@ -618,6 +656,78 @@ export class ModelJobManager {
     } catch (err) {
       console.warn("[ModelJobs] failed to save active jobs:", err?.message || err);
     }
+  }
+
+  // ─── Fleet events (Activity page) ───────────────────────
+  // The same envelope SparkMonitor and the LLM launcher use:
+  // { type, severity, message, sparkId?, data? }. Every emission is defensive:
+  // an event sink that throws must never break a job path.
+
+  _emit(event) {
+    try {
+      this.onEvent(event);
+    } catch {
+      /* the event log is best-effort */
+    }
+  }
+
+  /** A job was accepted: the model's script is about to run. */
+  _emitRequested(job, extra = {}) {
+    this._emit({
+      type: `model.${job.action}.requested`,
+      severity: "info",
+      sparkId: job.sparkId ?? null,
+      message: `${EVENT_VERB[job.action] || "Running"} ${job.modelName}`,
+      data: {
+        modelId: job.modelId,
+        action: job.action,
+        source: job.source,
+        jobId: job.jobId,
+        ...extra,
+      },
+    });
+  }
+
+  /**
+   * The job's terminal event, guarded so it fires exactly once. `done` with a
+   * non-zero exit code IS reported as a failure: job status deliberately
+   * ignores the code (start.sh ends in `docker logs -f`), the Activity page
+   * must not ignore it too.
+   */
+  _emitTerminal(job) {
+    if (job._eventEmitted) return;
+    job._eventEmitted = true;
+    const badExit = job.status === "done" && Number.isInteger(job.exitCode) && job.exitCode !== 0;
+    const stage =
+      job.status === "cancelled" ? "cancelled" : job.status === "done" && !badExit ? "finished" : "failed";
+    this._emit({
+      type: `model.${job.action}.${stage}`,
+      severity: stage === "failed" ? "error" : stage === "finished" ? "success" : "info",
+      sparkId: job.sparkId ?? null,
+      message: this._eventMessage(job, stage),
+      data: {
+        modelId: job.modelId,
+        action: job.action,
+        source: job.source,
+        jobId: job.jobId,
+        jobStatus: job.status,
+        exitCode: job.exitCode,
+      },
+    });
+  }
+
+  /** Human line for the terminal event, in the launcher's style. */
+  _eventMessage(job, stage) {
+    const what = job.modelName || job.modelId;
+    if (job.action === "logs") {
+      if (stage === "finished") return `Output of ${what} closed`;
+      if (stage === "cancelled") return `Output of ${what} cancelled`;
+      return `Output of ${what} failed`;
+    }
+    const verb = job.action === "stop" ? "stop" : job.action === "restart" ? "restart" : "start";
+    if (stage === "finished") return `${what}: ${verb} script finished`;
+    if (stage === "cancelled") return `${what}: ${verb} script cancelled`;
+    return `${what}: ${verb} script failed${job.exitCode != null ? ` (exit ${job.exitCode})` : ""}`;
   }
 
   // ─── Internals ──────────────────────────────────────────
@@ -756,6 +866,7 @@ export class ModelJobManager {
       })),
       MODEL_JOB_TIMEOUT_MS
     );
+    this._emitRequested(job, { stopFirstIds });
     return { jobId: job.jobId, status: "running", stoppingJobIds: stopFirstIds };
   }
 

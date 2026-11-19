@@ -30,14 +30,17 @@ import { MODEL_PROBE_INTERVAL_MS } from "../config.js";
 
 export class ModelLauncher {
   /**
-   * @param {{ onStatusChange?: () => void, getSpark?: (id: string) => object|null }} [hooks]
+   * @param {{ onStatusChange?: () => void, getSpark?: (id: string) => object|null, onEvent?: (event: object) => void }} [hooks]
    *   server callbacks — `onStatusChange` forces a WS broadcast; `getSpark`
    *   is the SparkRegistry lookup INCLUDING ssh.password that decides WHERE
    *   every model's scripts run (the model's assigned Spark, over SSH).
+   *   `onEvent` is the fleet event-log sink (the Activity page) — model
+   *   start/stop/restart/logs, recovery and scheduler decisions land there.
    */
   constructor(hooks = {}) {
     this.onStatusChange = hooks.onStatusChange || (() => {});
     this.getSpark = hooks.getSpark || (() => null);
+    this.onEvent = hooks.onEvent || (() => {});
     /** A model's run target is its assigned Spark — never the dashboard's box. */
     this._targetFor = (model) => resolveRunTarget(model, this.getSpark);
     /** Liveness follows the cluster HEAD, not the script host: the head
@@ -52,6 +55,7 @@ export class ModelLauncher {
     this.jobs = new ModelJobManager({
       getModel: (id) => this.registry.getModel(id),
       getSpark: (id) => this.getSpark(id),
+      onEvent: (event) => this.onEvent(event),
       onChange: () => {
         // A job starting/settling changes both the payload and who owns the
         // Sparks — refresh roles the moment the job state flips, not on the
@@ -80,6 +84,7 @@ export class ModelLauncher {
       status: () => this._status,
       getConfig: () => getSchedulerConfig(),
       log: (m) => console.log(`[ModelLauncher] ${m}`),
+      onEvent: (event) => this.onEvent(event),
     });
     /** @type {Record<string, object>} */
     this._status = {};

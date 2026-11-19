@@ -63,6 +63,9 @@ export function categorize(type: string): CategoryId {
   if (type.startsWith("bench.")) return "bench";
   if (type.startsWith("power.")) return "power";
   if (type.startsWith("llm.")) return "llm";
+  // The Model Loader runs LLM kits too — folding model.* into "llm" keeps the
+  // category set stable instead of inventing a near-duplicate filter chip.
+  if (type.startsWith("model.")) return "llm";
   return "other";
 }
 
@@ -90,11 +93,20 @@ const KNOWN_LABELS: Record<string, string> = {
   "alert.notify.failed": "Notification failed",
   "power.shutdown": "Shutdown",
   "power.wake": "Wake",
+  // Model Loader (server/models) — same "LLM models" category as llm.*.
+  "model.job.recovered": "Model job recovered",
+  "model.schedule.start": "Scheduled model start",
+  "model.schedule.stop": "Scheduled model stop",
+  "model.schedule.blocked": "Scheduled start blocked",
+  "model.schedule.start.failed": "Scheduled model start failed",
+  "model.schedule.stop.failed": "Scheduled model stop failed",
 };
 
 const BENCH_NAME: Record<string, string> = { decode: "Decode bench", prefill: "Prefill bench", quality: "Quality bench" };
 const BENCH_STAGE: Record<string, string> = { finished: "", failed: " failed", cancelled: " cancelled" };
 const LLM_ACTION: Record<string, string> = { start: "LLM start", stop: "LLM stop", attach: "LLM attach" };
+const MODEL_ACTION: Record<string, string> = { start: "Model start", stop: "Model stop", restart: "Model restart", logs: "Model logs" };
+const MODEL_STAGE: Record<string, string> = { requested: " requested", finished: " finished", failed: " failed", cancelled: " cancelled" };
 
 function sentence(s: string): string {
   const t = s.replace(/[._-]+/g, " ").trim();
@@ -110,6 +122,9 @@ export function typeLabel(type: string): string {
   }
   if (parts[0] === "llm" && parts.length === 3 && LLM_ACTION[parts[1]]) {
     return `${LLM_ACTION[parts[1]]} ${parts[2]}`;
+  }
+  if (parts[0] === "model" && parts.length === 3 && MODEL_ACTION[parts[1]] && parts[2] in MODEL_STAGE) {
+    return MODEL_ACTION[parts[1]] + MODEL_STAGE[parts[2]];
   }
   return sentence(type);
 }

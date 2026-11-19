@@ -48,6 +48,9 @@ const STATE_PATH =
   process.env.MODEL_SCHEDULER_STATE_PATH ||
   path.join(ROOT, "config", "model-scheduler-state.json");
 
+/** Repeated identical scheduler outcomes are logged at most this often. */
+const SCHEDULER_EVENT_COOLDOWN_MS = 10 * 60_000;
+
 export class ModelScheduler {
   /**
    * @param {object} deps
@@ -59,12 +62,24 @@ export class ModelScheduler {
    * @param {string} [deps.tz]
    * @param {() => {enabled:boolean, tz:string}} [deps.getConfig] scheduler config
    *   source (the server owns it; tests inject a plain object)
+   * @param {(event: object) => void} [deps.onEvent] fleet event-log sink
+   *   (the Activity page); never allowed to break a tick
+   * @param {() => number} [deps.now] clock for the event cooldown
+   * @param {number} [deps.eventCooldownMs] repeat window for an identical
+   *   outcome — tests shrink it, production keeps the 10-minute default
    */
   constructor(deps) {
     this.registry = deps.registry;
     this.jobs = deps.jobs;
     this.status = deps.status || (() => ({}));
     this.log = deps.log || ((m) => console.log(`[ModelScheduler] ${m}`));
+    this.onEvent = deps.onEvent || (() => {});
+    this.now = deps.now || Date.now;
+    this.eventCooldownMs = Number.isFinite(deps.eventCooldownMs)
+      ? deps.eventCooldownMs
+      : SCHEDULER_EVENT_COOLDOWN_MS;
+    /** @type {Map<string, number>} "modelId | kind | reason" → last emitted ms */
+    this._emittedAt = new Map();
     this.statePath = deps.statePath || STATE_PATH;
     this.getConfig =
       deps.getConfig ||
@@ -231,6 +246,15 @@ export class ModelScheduler {
       };
       this._state.lastDecision = d;
       this.log(`cannot start ${target.name}: ${d.reason}`);
+      // A "cannot start" that changes nothing is still worth one line in the
+      // Activity log — the cooldown keeps a 30-second tick from flooding it.
+      this._emitRepeated(targetId, "blocked", d.reason, {
+        type: "model.schedule.blocked",
+        severity: "warn",
+        sparkId: target.sparkId ?? null,
+        message: `Cannot start ${target.name}: ${d.reason}`,
+        data: { modelId: targetId, action: "start", source: "scheduler", sparkId: target.sparkId ?? null, blockedBy: d.blockedBy },
+      });
       return d;
     }
 
@@ -272,21 +296,86 @@ export class ModelScheduler {
   async _enqueueStop(modelId, source) {
     try {
       const r = this.jobs.start(modelId, "stop", { source });
+      this._emitScheduled("stop", modelId, source);
       await this._awaitJob(r.jobId);
     } catch (err) {
-      this.log(`stop ${modelId} failed: ${err?.message || err}`);
+      const reason = String(err?.message || err);
+      this.log(`stop ${modelId} failed: ${reason}`);
+      this._emitFailure("stop", modelId, source, reason);
     }
   }
 
   async _enqueueStart(modelId, source) {
     try {
       const r = this.jobs.start(modelId, "start", { source });
+      this._emitScheduled("start", modelId, source);
       // Do NOT await: a start script tails the container logs forever, so
       // awaiting it would block the swap chain indefinitely. Readiness comes
       // from the probe; the next tick sees the model up and goes idle.
       void this._awaitJob(r.jobId);
     } catch (err) {
-      this.log(`start ${modelId} failed: ${err?.message || err}`);
+      const reason = String(err?.message || err);
+      this.log(`start ${modelId} failed: ${reason}`);
+      this._emitFailure("start", modelId, source, reason);
+    }
+  }
+
+  // ─── Fleet events (Activity page) ───────────────────────
+  // Every one of these goes through _emitRepeated: the tick is 30 s and a
+  // start script that fails fast (port held, bad compose, failed pull) is
+  // re-accepted on the next one, so an ungated line here — success or
+  // failure — would put ~360 events an hour into the 2000-entry ring. The
+  // per-job `model.<action>.requested` / terminal events from ModelJobManager
+  // still record EVERY attempt, which is where the retry story is told.
+
+  /** The scheduler acted on a window: `Scheduled start of X`. */
+  _emitScheduled(kind, modelId, source) {
+    const model = this.registry.getModel?.(modelId) || null;
+    const sparkId = model?.sparkId ?? null;
+    this._emitRepeated(modelId, kind, "", {
+      type: `model.schedule.${kind}`,
+      severity: "info",
+      sparkId,
+      message: `Scheduled ${kind} of ${model?.name || modelId}`,
+      data: { modelId, action: kind, source, sparkId },
+    });
+  }
+
+  /** `jobs.start()` refused (or threw): the window is not being honoured. */
+  _emitFailure(kind, modelId, source, reason) {
+    const model = this.registry.getModel?.(modelId) || null;
+    const sparkId = model?.sparkId ?? null;
+    this._emitRepeated(modelId, `${kind}-failed`, reason, {
+      type: `model.schedule.${kind}.failed`,
+      severity: "error",
+      sparkId,
+      message: `Scheduled ${kind} of ${model?.name || modelId} failed: ${reason}`,
+      data: { modelId, action: kind, source, sparkId, error: reason },
+    });
+  }
+
+  /**
+   * Repeated-outcome gate: the same model + kind + reason is emitted at most
+   * once per cooldown, while a CHANGED reason/outcome is not a repeat and is
+   * emitted immediately. Every scheduler event carries `sparkId` so the
+   * Activity page can filter by unit and recordEvent can name it — a model
+   * that has left the registry has none, and null is the honest answer.
+   */
+  _emitRepeated(modelId, kind, reason, event) {
+    try {
+      const key = `${modelId ?? ""}\u0000${kind}\u0000${reason ?? ""}`;
+      const ts = this.now();
+      const last = this._emittedAt.get(key);
+      if (last != null && ts >= last && ts - last < this.eventCooldownMs) return;
+      this._emittedAt.set(key, ts);
+      // Same bound EventLog puts on its own dedupe map: a changing reason must
+      // not grow this forever.
+      if (this._emittedAt.size > 200) {
+        for (const [k, t] of this._emittedAt) if (ts - t >= this.eventCooldownMs) this._emittedAt.delete(k);
+      }
+      this.onEvent(event);
+    } catch {
+      /* the event log is best-effort; a tick must never fail on it */
     }
   }
 

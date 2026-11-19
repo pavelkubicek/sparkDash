@@ -1,5 +1,57 @@
 # Progress log
 
+## 2026-11-19 — Model Loader events in the fleet Activity log
+
+**What changed.** `server/models` now records its lifecycle in the fleet event log the Activity
+page browses: `model.<action>.requested` for every accepted start/stop/restart/logs job (exclusive
+start carries the incumbents in `data`), exactly one terminal `model.<action>.finished|failed|cancelled`
+per job — a `done` job with a non-zero exit code reports `failed`, because start scripts tail
+`docker logs` and job status ignores exit codes — `model.job.recovered` after boot recovery, and
+the scheduler's `model.schedule.start|stop|blocked` plus `model.schedule.<action>.failed`. Repeated
+identical scheduler outcomes (same model + kind + reason) are throttled to one event per 10 minutes
+so the 30 s tick cannot fill the 2,000-entry ring; a changed reason reports immediately. Every event
+carries the model's Spark, shares the Activity page's LLM models category, and is labelled in en and
+zh-CN. Wired via `initModelLauncher({ onEvent: recordEvent })`. Also fixed: `ModelJobManager` never
+assigned its documented `onChange` hook, so the launcher's WS broadcast and Spark role reconcile
+never ran when a job flipped; they do now.
+
+**What is broken.** Nothing known — typecheck clean, build clean, `npm test` green (server 2501 /
+0 fail / 26 env-skips, frontend 1600 pass), 12 new regression tests in
+`server/models/__tests__/modelJobEvents.test.js`.
+
+**What is next.** Deploy: production runs `node server/index.js` without watch, so
+`docker restart sparkDash` ships it (server and dist are bind-mounted; dist already rebuilt on the
+host). Note: the model scheduler is currently disabled in its config (`lastDecision.action:
+"disabled"`), so `model.schedule.*` events only appear once it is enabled.
+
+## 2026-11-18 — Updates: daily apt index refresh + refresh-all (server half)
+
+**What changed.** The daily slot can now refresh the apt index, and the fleet has a refresh-all.
+One `SudoVault` instance (`server/index.js`, same file/key as the Storage Manager's) is shared by
+`StorageManager` and `UpdateManager`; vault keys come from `sudoAccountKey()` exported by
+`server/util/sudoPasswordGuard.js` (the single derivation, also used by storage). `UpdateManager`:
+refresh core extracted to `_runRefresh`, `refresh(..., { remember })` stores only a sudo-accepted
+password, `refreshAll` mirrors `installAll` on the one shared fleet job now carrying
+`mode: "install" | "refresh"`, `runTick` gained the `_ticking` in-flight guard and, per due unit,
+runs the stored-password refresh when Settings' `updatesAutoRefresh === true` (strict, like
+`updatesAutoCheck`) and the account is not locked — a rejected stored password is deleted and the
+day falls back to the sudo-free `_checkNow`; other failures keep their error state. Summary/detail
+rows carry `indexAutoRefresh: "stored-password" | "check-only"`. Routes: `POST /api/updates/refresh-all`
+(mirrors install-all incl. insecure-transport refusal) and `remember` on the per-unit refresh body.
+`DELETE /api/sparks/:id` purges the removed unit's vault key (registry stays secret-agnostic).
+`refresh.sh` marks `/var/lib/apt/periodic/update-success-stamp` after a successful update (guarded,
+test-override `SPARKDASH_APT_STAMP`) so the UI's index age is truthful. CODEBASE.md table row added;
+CHANGELOG entry under Unreleased/Added. Tests: +14 (tick branches, remember semantics, fleet
+serialization/mutual-exclusion, routes, spawned-server vault purge).
+
+**What is broken.** Nothing known — `npm run typecheck` clean, `npm run build` clean, `npm test`
+fully green (server 2501+/0 fail/26 skip, frontend all pass).
+
+**What is next.** The frontend mirror (already landing in parallel): the Remember checkbox
+("Remember for the daily refresh"), the Refresh-all button polling `GET /api/updates/install-all`
+and honoring `job.mode`, `indexAutoRefresh` rendering, and the Settings toggle for
+`updatesAutoRefresh`. No server follow-ups owed.
+
 ## 2026-11-07 — AiProxyPanel: stale queue rows + queued/running duplicates (fix)
 
 **Symptom.** When only the AI proxy queue endpoint failed (e.g. proxy observer

@@ -34,6 +34,20 @@ describe("categorize / typeLabel", () => {
     expect(categorize("alert.notify.sent")).toBe("alerts");
     expect(categorize("alert.notify.failed")).toBe("alerts");
     expect(typeLabel("alert.notify.failed")).toBe("Notification failed");
+    // Model Loader (server/models) reports under the same "LLM models" category.
+    expect(categorize("model.start.requested")).toBe("llm");
+    expect(categorize("model.stop.requested")).toBe("llm");
+    expect(categorize("model.restart.requested")).toBe("llm");
+    expect(categorize("model.logs.requested")).toBe("llm");
+    expect(categorize("model.start.finished")).toBe("llm");
+    expect(categorize("model.start.failed")).toBe("llm");
+    expect(categorize("model.stop.cancelled")).toBe("llm");
+    expect(categorize("model.job.recovered")).toBe("llm");
+    expect(categorize("model.schedule.start")).toBe("llm");
+    expect(categorize("model.schedule.stop")).toBe("llm");
+    expect(categorize("model.schedule.blocked")).toBe("llm");
+    expect(categorize("model.schedule.start.failed")).toBe("llm");
+    expect(categorize("model.schedule.stop.failed")).toBe("llm");
   });
   it("falls back to other for unknown types", () => {
     expect(categorize("weird.thing")).toBe("other");
@@ -47,6 +61,17 @@ describe("categorize / typeLabel", () => {
     expect(typeLabel("llm.attach.detached")).toBe("LLM attach detached");
     expect(typeLabel("gpu.throttle.thermal")).toBe("Thermal throttle");
     expect(typeLabel("power.shutdown")).toBe("Shutdown");
+    expect(typeLabel("model.start.requested")).toBe("Model start requested");
+    expect(typeLabel("model.start.finished")).toBe("Model start finished");
+    expect(typeLabel("model.stop.failed")).toBe("Model stop failed");
+    expect(typeLabel("model.restart.cancelled")).toBe("Model restart cancelled");
+    expect(typeLabel("model.logs.requested")).toBe("Model logs requested");
+    expect(typeLabel("model.job.recovered")).toBe("Model job recovered");
+    expect(typeLabel("model.schedule.start")).toBe("Scheduled model start");
+    expect(typeLabel("model.schedule.stop.failed")).toBe("Scheduled model stop failed");
+    expect(typeLabel("model.schedule.blocked")).toBe("Scheduled start blocked");
+    // An unknown stage falls back to the generic sentence, not a made-up label.
+    expect(typeLabel("model.start.mystery")).toBe("Model start mystery");
   });
   it("humanises unknown types without throwing", () => {
     expect(typeLabel("foo.bar_baz")).toBe("Foo bar baz");

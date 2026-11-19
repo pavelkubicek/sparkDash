@@ -3096,6 +3096,10 @@ app.post("/api/sparks/:id/wake", async (req, res) => {
 const modelLauncher = initModelLauncher({
   onStatusChange: () => forceBroadcast(),
   getSpark: (id) => registry.getSpark(id),
+  // Model start/stop/restart/logs, boot recovery and the scheduler's own
+  // decisions land in the fleet event log (Activity page), exactly like the
+  // per-Spark LLM launcher's `llm.*` events above.
+  onEvent: (event) => recordEvent(event),
   // The role coordinator configures Spark cards (Head/Worker/Standalone) to
   // match what is actually running. Applying a patch restarts that unit's
   // monitor so the collectors follow the new role, exactly like the Spark

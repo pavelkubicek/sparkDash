@@ -45,6 +45,13 @@ export function useActivityLabels() {
     "alert.notify.failed": t("type.notifyFailed"),
     "power.shutdown": t("type.shutdown"),
     "power.wake": t("type.wake"),
+    // Model Loader (server/models) — reported under the LLM models category.
+    "model.job.recovered": t("type.modelRecovered"),
+    "model.schedule.start": t("type.modelScheduleStart"),
+    "model.schedule.stop": t("type.modelScheduleStop"),
+    "model.schedule.blocked": t("type.modelScheduleBlocked"),
+    "model.schedule.start.failed": t("type.modelScheduleStartFailed"),
+    "model.schedule.stop.failed": t("type.modelScheduleStopFailed"),
   };
   const bench: Record<string, string> = {
     decode: t("type.benchDecode"),
@@ -56,9 +63,16 @@ export function useActivityLabels() {
     stop: t("type.llmStop"),
     attach: t("type.llmAttach"),
   };
+  const modelAction: Record<string, string> = {
+    start: t("type.modelStart"),
+    stop: t("type.modelStop"),
+    restart: t("type.modelRestart"),
+    logs: t("type.modelLogs"),
+  };
   const stage: Record<string, string> = {
     requested: t("stage.requested"),
     completed: t("stage.completed"),
+    finished: t("stage.finished"),
     cancelled: t("stage.cancelled"),
     failed: t("stage.failed"),
     detached: t("stage.detached"),
@@ -72,6 +86,7 @@ export function useActivityLabels() {
       if (status === "cancelled") return t("type.benchCancelled", { name: bench[name] });
     }
     if (!rest.length && kind === "llm" && action[name] && status) return t("type.llmAction", { action: action[name], stage: stage[status] ?? status });
+    if (!rest.length && kind === "model" && modelAction[name] && status) return t("type.llmAction", { action: modelAction[name], stage: stage[status] ?? status });
     return type ? typeLabel(type) : t("type.event");
   };
   return { severityLabels, categoryLabels, eventType };
