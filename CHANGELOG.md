@@ -11,6 +11,7 @@ Format: version sections are listed newest first.
 
 ### Changed
 - Install spark-attic v0.1.6 (was v0.1.4). It adds the Ubuntu firmware-console display fix from 0.1.5; the status file and the installer's `--check`/`--plain` flags are unchanged.
+- Install spark-attic v0.1.7 (was v0.1.6). The daemon is unchanged from 0.1.6; the installer is more robust — a signal during validation now preserves the candidate reports under `/var/log/spark-attic/failed-<UTC stamp>/` (mode 0700).
 
 ### Added
 
