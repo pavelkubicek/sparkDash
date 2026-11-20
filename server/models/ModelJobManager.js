@@ -464,13 +464,14 @@ export class ModelJobManager {
       spawned: true,
       error: null,
     };
-    for (const chunk of chunks) {
+    for (const [ci, chunk] of chunks.entries()) {
       // Audit line: which machine executes this chunk.
       job.transcript.append(
         `» ${chunk.target.kind === "ssh" ? "ssh" : "host"} · ${chunk.target.label}\n`
       );
       if (job._abort.signal.aborted) {
         res = { code: null, signal: null, timedOut: false, cancelled: true, spawned: true, error: null };
+        this._attributeChainStops(job, ci, res);
         break;
       }
       let chunkTimeout = 0; // 0 = no cap (tail-until-cancelled, or untimed job)
@@ -478,6 +479,7 @@ export class ModelJobManager {
         chunkTimeout = deadline - Date.now();
         if (chunkTimeout <= 0) {
           res = { code: null, signal: null, timedOut: true, cancelled: false, spawned: true, error: null };
+          this._attributeChainStops(job, ci, res);
           break;
         }
       }
@@ -489,6 +491,9 @@ export class ModelJobManager {
           job._child = child;
         },
       });
+      // Chunk-progressive stop bookkeeping (takeover chains): settle this
+      // chunk's stop steps while its outcome is the freshest fact we have.
+      this._attributeChainStops(job, ci, res);
       if (res.cancelled || res.timedOut) break;
     }
 
@@ -541,6 +546,11 @@ export class ModelJobManager {
     // written there could never persist — the next boot reports the job as
     // `model.job.recovered` instead, which is the honest version.
     this._emitTerminal(job);
+    // …then the stops the chain performed, each with the stage the chunk
+    // runner proved for it (fail-closed: an unproven stop never says
+    // finished). _settle early-returns once the job left "running", so
+    // this fires exactly once per chain.
+    this._emitChainStopTerminals(job);
     this._notify(true);
   }
 
@@ -730,6 +740,96 @@ export class ModelJobManager {
     return `${what}: ${verb} script failed${job.exitCode != null ? ` (exit ${job.exitCode})` : ""}`;
   }
 
+  /**
+   * Chunk-progressive attribution for takeover chains (see startExclusive):
+   * _spawnJob calls this with the chunk that just resolved and its spawn
+   * result, and ONLY that chunk's stop steps are written from it. Chained
+   * commands are ";"-joined and the chunk loop only breaks on cancel/
+   * timeout, so later chunks still run after a failed chunk — each chunk's
+   * stops therefore report that chunk's own outcome; pre-marking later
+   * chunks from an earlier failure would report a step as never-run when it
+   * demonstrably ran. Within a chunk the per-step exit codes are not
+   * provable (one merged transcript, the last step's code propagated), so
+   * the chunk's exit code decides for all of its stop steps. Stages are
+   * monotone (null → terminal, written once); steps whose chunk never
+   * resolved fall back to the job's overall outcome at settle
+   * (_emitChainStopTerminals). Only a chunk that PROVED success (exit 0, no
+   * error/timeout/cancel) writes "finished" — or the readiness release, and
+   * ONLY when it lands on the chain's LAST chunk: releaseReadyStart probes
+   * the TARGET's readiness and has no sawDown gate for plain starts, so a
+   * stale container can answer the probe while a stop chunk is still in
+   * flight. A release on the target's own tail proves every still-null
+   * stop (earlier chunks resolved before it; in a single-chunk chain the
+   * stops ran, ";"-joined, before the tail). A release anywhere earlier
+   * proves nothing — normal result handling applies, so that chunk
+   * honestly reports its stops cancelled and later chunks stay null.
+   * @param {object} job @param {number} chunkIndex @param {object} res
+   */
+  _attributeChainStops(job, chunkIndex, res) {
+    const stops = job.chainStops;
+    const map = job.chainStopChunks;
+    if (!Array.isArray(stops) || !stops.length || !Array.isArray(map)) return;
+    if (job.releaseReason === "ready" && chunkIndex === map.length - 1) {
+      // The target's own tail was in flight when readiness released the job
+      // — every stop ran before it and is proven done.
+      for (const step of stops) if (step.stage === null) step.stage = "finished";
+      return;
+    }
+    const mark = (indices, stage) => {
+      for (const i of indices) if (stops[i] && stops[i].stage === null) stops[i].stage = stage;
+    };
+    const own = map[chunkIndex] || [];
+    if (res.cancelled) {
+      // Cancel — or a stale readiness release landing mid-stop-chunk (the
+      // gate above lets it fall through here) — kills the chunk in flight;
+      // its stops did not complete.
+      mark(own, "cancelled");
+      return;
+    }
+    const proved = !res.timedOut && !res.error && res.code === 0;
+    mark(own, proved ? "finished" : "failed");
+  }
+
+  /**
+   * One terminal event per chain stop step, after the chain job's own (see
+   * _settle). A step whose chunk never resolved (the loop broke before it)
+   * falls back to the job's outcome: a cancelled job reports its unreached
+   * stops as cancelled; anything else — a timeout, an error, even a done
+   * job with unreached steps — is failed. With the last-chunk gate in
+   * _attributeChainStops a done job with still-null steps is unreachable
+   * (every resolving chunk marks its own steps and the gated ready branch
+   * marks the rest), so this fallback NEVER writes "finished": a stop the
+   * chain never proved is never reported finished.
+   */
+  _emitChainStopTerminals(job) {
+    const stops = job.chainStops;
+    if (!Array.isArray(stops) || !stops.length) return;
+    for (const step of stops) {
+      if (step.stage === null) {
+        step.stage = job.status === "cancelled" ? "cancelled" : "failed";
+      }
+      const stage = step.stage;
+      this._emit({
+        type: `model.stop.${stage}`,
+        severity: stage === "finished" ? "success" : stage === "cancelled" ? "info" : "error",
+        sparkId: step.sparkId ?? null,
+        message: this._eventMessage(
+          { action: "stop", modelName: step.name, modelId: step.modelId, exitCode: null },
+          stage
+        ),
+        data: {
+          modelId: step.modelId,
+          action: "stop",
+          source: job.source,
+          jobId: job.jobId,
+          chained: true,
+          chainJobStatus: job.status,
+          ...(stage !== "finished" ? { chainError: job.error } : {}),
+        },
+      });
+    }
+  }
+
   // ─── Internals ──────────────────────────────────────────
   _notify(force = false) {
     if (force) this._lastNotifyAt = 0;
@@ -786,6 +886,14 @@ export class ModelJobManager {
    * guard left standing. A running job that touches the claim is preempted
    * (cancelled) like a stop would — the chain is about to stop that model
    * anyway.
+   *
+   * Every incumbent the chain stops is logged to the fleet Activity log in
+   * its own right: a `model.stop.requested` before the target's start event
+   * and a terminal `model.stop.<stage>` at settle, attributed chunk by
+   * chunk (see _attributeChainStops) so the operator can see which models
+   * the takeover stopped and which of those stops were PROVEN — an
+   * unproven stop never reports finished.
+   *
    * @param {string} targetId
    * @param {string[]} stopFirstIds
    * @param {{ source?: string, action?: "start"|"restart" }} [meta]
@@ -818,6 +926,11 @@ export class ModelJobManager {
         label: `stop ${m.name || id}`,
         modelId: id,
         action: "stop",
+        // Carried on the step so the chain-stop events can name the
+        // incumbent and ride ITS Spark — the job's own sparkId is the
+        // target's and would be a lie for a stopped incumbent.
+        name: m.name || id,
+        sparkId: m.sparkId || null,
       });
     }
     const targetRun = resolveRunTarget(target, this.getSpark);
@@ -844,6 +957,28 @@ export class ModelJobManager {
     }
     const conflictList = this._conflicting([...claims]);
     const job = this._createJob(target, action, { ...meta, chained: stopFirstIds.length > 0 });
+    // Chain-stop bookkeeping: one ordered record per stop step (the
+    // requested events fire from here, the terminal ones from _settle via
+    // _emitChainStopTerminals) plus a chunk → step-index map so _spawnJob
+    // can attribute outcomes chunk by chunk. A step stays null until its
+    // chunk — or the job's overall outcome — settles it: never an
+    // optimistic "finished".
+    job.chainStops = [];
+    job.chainStopChunks = [];
+    for (const c of chunks) {
+      const idx = [];
+      for (const s of c.steps) {
+        if (s.action !== "stop") continue;
+        idx.push(job.chainStops.length);
+        job.chainStops.push({
+          modelId: s.modelId,
+          name: s.name,
+          sparkId: s.sparkId,
+          stage: null,
+        });
+      }
+      job.chainStopChunks.push(idx);
+    }
     job.transcript.append(
       steps.map((s) => `$ ${s.label}: ./${s.script}${s.args?.length ? ` ${s.args.join(" ")}` : ""}   [${s.dir}]`).join("\n") + "\n"
     );
@@ -866,6 +1001,24 @@ export class ModelJobManager {
       })),
       MODEL_JOB_TIMEOUT_MS
     );
+    // The stops this chain performs are part of the story the Activity log
+    // must tell: one requested event per incumbent FIRST — the ring reads
+    // the stops, then the start — then the target's own event as before.
+    for (const step of job.chainStops) {
+      this._emit({
+        type: "model.stop.requested",
+        severity: "info",
+        sparkId: step.sparkId ?? null,
+        message: `${EVENT_VERB.stop} ${step.name}`,
+        data: {
+          modelId: step.modelId,
+          action: "stop",
+          source: job.source,
+          jobId: job.jobId,
+          chained: true,
+        },
+      });
+    }
     this._emitRequested(job, { stopFirstIds });
     return { jobId: job.jobId, status: "running", stoppingJobIds: stopFirstIds };
   }

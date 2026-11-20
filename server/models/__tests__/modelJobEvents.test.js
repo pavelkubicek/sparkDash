@@ -16,6 +16,12 @@ import { ModelScheduler } from "../ModelScheduler.js";
  * Isolation follows the sibling tests: every path the modules write goes to a
  * fresh temp dir through the constructor options (activePath / statePath), so
  * nothing here can read or touch the live config/ files.
+ *
+ * Takeover chains (startExclusive) additionally log EVERY incumbent they
+ * stop: a chained `model.stop.requested` per stop step before the target's
+ * start event, and a terminal `model.stop.<stage>` per step at settle,
+ * attributed chunk by chunk (fail-closed — an unproven stop never says
+ * finished).
  */
 
 // isLocal + no ssh config → spawnOnHost's plain `sh -c` path: a real spawn with
@@ -65,6 +71,33 @@ function stubSpawn(m) {
   m._spawnJob = async () => {};
 }
 
+// Extra isLocal Sparks: distinct ids → distinct resolveRunTarget keys
+// ("local:loc2"…), so a chain whose models live on them really splits into
+// several chunks (same convention as the alive/ssh tests' spark maps).
+const LOCAL2 = { id: "loc2", name: "local2", lanIp: "127.0.0.1", isLocal: true, ssh: null };
+const LOCAL3 = { id: "loc3", name: "local3", lanIp: "127.0.0.1", isLocal: true, ssh: null };
+const LOCAL4 = { id: "loc4", name: "local4", lanIp: "127.0.0.1", isLocal: true, ssh: null };
+const LOCALS = { loc: LOCAL, loc2: LOCAL2, loc3: LOCAL3, loc4: LOCAL4 };
+
+/** Resolve once the running job's transcript contains `needle` (real spawns). */
+function waitForTranscript(job, needle, budgetMs = 15_000) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      const text = job.transcript.read(null).text;
+      if (text.includes(needle)) return resolve();
+      if (job.status !== "running") {
+        return reject(new Error(`job settled before "${needle}" appeared:\n${text}`));
+      }
+      if (Date.now() - started > budgetMs) {
+        return reject(new Error(`transcript never showed "${needle}":\n${text}`));
+      }
+      setTimeout(tick, 15);
+    };
+    tick();
+  });
+}
+
 // ─── requested events ─────────────────────────────────────
 test("start() records exactly one model.start.requested (info) naming the model", () => {
   const dir = repo({ "start.sh": "#!/bin/sh\necho up\n" });
@@ -102,23 +135,351 @@ test("stop / restart / logs each announce themselves with the launcher's verbs",
   );
 });
 
-test("startExclusive() carries the incumbent it will stop first in data", () => {
+test("startExclusive() logs a chained stop per incumbent and carries stopFirstIds on the start", () => {
   const dir = repo({ "start.sh": "#!/bin/sh\n", "stop.sh": "#!/bin/sh\n" });
   const ds = model({ id: "ds", name: "DeepSeek", container: "ds-head", dir });
   const { m, events } = makeManager([model({ dir }), ds]);
   stubSpawn(m);
   const { jobId } = m.startExclusive("glm", ["ds"], { source: "scheduler" });
 
-  assert.equal(events.length, 1);
-  assert.equal(events[0].type, "model.start.requested");
-  assert.equal(events[0].message, "Starting GLM");
+  // The stops come first, then the target's own event — in chain order.
+  assert.deepEqual(events.map((e) => e.type), ["model.stop.requested", "model.start.requested"]);
+  assert.deepEqual(
+    [events[0].severity, events[0].message, events[0].sparkId],
+    ["info", "Stopping DeepSeek", "loc"],
+    "the launcher's own verb, on the INCUMBENT's Spark"
+  );
   assert.deepEqual(events[0].data, {
+    modelId: "ds",
+    action: "stop",
+    source: "scheduler",
+    jobId,
+    chained: true,
+  });
+  assert.equal(events[1].message, "Starting GLM");
+  assert.deepEqual(events[1].data, {
     modelId: "glm",
     action: "start",
     source: "scheduler",
     jobId,
     stopFirstIds: ["ds"],
   });
+});
+
+// ─── takeover-chain stop events ───────────────────────────
+test("a happy chain logs every stop before the start and one terminal per stop", async () => {
+  const dirT = repo({ "start.sh": "#!/bin/sh\necho serving\n" });
+  const dirA = repo({ "stop.sh": "#!/bin/sh\necho alpha down\n" });
+  const dirB = repo({ "stop.sh": "#!/bin/sh\necho beta down\n" });
+  const models = [
+    model({ dir: dirT }),
+    model({ id: "alpha", name: "Alpha", dir: dirA, sparkId: "loc2", container: "alpha-head", port: 8001 }),
+    model({ id: "beta", name: "Beta", dir: dirB, sparkId: "loc3", container: "beta-head", port: 8002 }),
+  ];
+  const { m, events } = makeManager(models, { sparks: LOCALS });
+  // Three Sparks → three chunks, exercising per-chunk attribution.
+  const { jobId } = m.startExclusive("glm", ["alpha", "beta"], { source: "pr-companion" });
+  await m.jobs.get(jobId).done;
+
+  assert.deepEqual(events.map((e) => e.type), [
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.start.requested",
+    "model.start.finished",
+    "model.stop.finished",
+    "model.stop.finished",
+  ], "the ring reads the stops, then the start; terminals match the chain's order");
+
+  assert.deepEqual(
+    events.slice(0, 2).map((e) => [e.severity, e.message, e.sparkId]),
+    [
+      ["info", "Stopping Alpha", "loc2"],
+      ["info", "Stopping Beta", "loc3"],
+    ]
+  );
+  for (const e of events.slice(0, 2)) {
+    assert.equal(e.data.chained, true);
+    assert.equal(e.data.jobId, jobId, "one job did the whole chain");
+    assert.equal(e.data.source, "pr-companion");
+    assert.equal(e.data.action, "stop");
+  }
+  assert.equal(events[0].data.modelId, "alpha");
+  assert.equal(events[1].data.modelId, "beta");
+
+  assert.equal(events[3].message, "GLM: start script finished", "the target's own terminal still fires");
+  assert.deepEqual(
+    events.slice(4).map((e) => [e.severity, e.message]),
+    [
+      ["success", "Alpha: stop script finished"],
+      ["success", "Beta: stop script finished"],
+    ]
+  );
+  for (const e of events.slice(4)) {
+    assert.equal(e.data.chained, true);
+    assert.equal(e.data.jobId, jobId);
+    assert.equal(e.data.chainJobStatus, "done");
+    assert.ok(!("chainError" in e.data), "a proven stop carries no error");
+  }
+});
+
+test("a failing stop fails only its own chunk; later chunks still run and report their own outcome", async () => {
+  // Beta's stop fails (exit 3) and GLM's start then hits the port Beta still
+  // holds (exit 9) — the last chunk's failure is what the job settles on.
+  const dirT = repo({ "start.sh": "#!/bin/sh\nexit 9\n" });
+  const dirA = repo({ "stop.sh": "#!/bin/sh\n" });
+  const dirB = repo({ "stop.sh": "#!/bin/sh\necho 'docker: no such container' >&2\nexit 3\n" });
+  const dirC = repo({ "stop.sh": "#!/bin/sh\n" });
+  const models = [
+    model({ dir: dirT }),
+    model({ id: "alpha", name: "Alpha", dir: dirA, sparkId: "loc2", container: "a", port: 8001 }),
+    model({ id: "beta", name: "Beta", dir: dirB, sparkId: "loc3", container: "b", port: 8002 }),
+    model({ id: "gamma", name: "Gamma", dir: dirC, sparkId: "loc4", container: "c", port: 8003 }),
+  ];
+  const { m, events } = makeManager(models, { sparks: LOCALS });
+  const { jobId } = m.startExclusive("glm", ["alpha", "beta", "gamma"], { source: "manual" });
+  await m.jobs.get(jobId).done;
+
+  assert.deepEqual(events.map((e) => e.type), [
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.start.requested",
+    "model.start.failed",
+    "model.stop.finished",
+    "model.stop.failed",
+    "model.stop.finished",
+  ]);
+  assert.deepEqual(
+    events.slice(5).map((e) => [e.severity, e.message]),
+    [
+      ["success", "Alpha: stop script finished"],
+      ["error", "Beta: stop script failed"],
+      ["success", "Gamma: stop script finished"],
+    ]
+  );
+  // Each chunk reports for itself: the chained commands are ";"-joined and
+  // the chunk loop only breaks on cancel/timeout, so Gamma's chunk really
+  // ran after Beta's failure — its exit 0 proves Gamma down (finished),
+  // while Beta's non-zero chunk marks ITS steps failed (not proven down).
+  assert.equal(events[5].data.chained, true);
+  assert.equal(events[6].data.chained, true);
+  assert.equal(events[6].data.jobId, jobId);
+  assert.match(
+    events[6].data.chainError,
+    /exited with code 9/,
+    "the chain's own failure rides along on the unproven stop"
+  );
+  assert.equal(events[7].data.chained, true);
+  assert.ok(!("chainError" in events[7].data), "a stop its chunk proved carries no error");
+  assert.equal(events[4].type, "model.start.failed", "the chain job's own terminal still fires");
+});
+
+test("cancelling a chain mid-flight settles every stop step as cancelled", async () => {
+  const dirT = repo({ "start.sh": "#!/bin/sh\necho serving\ntail -f /dev/null\n" });
+  const dirA = repo({ "stop.sh": "#!/bin/sh\nsleep 5\n" });
+  const dirB = repo({ "stop.sh": "#!/bin/sh\nsleep 5\n" });
+  const models = [
+    model({ dir: dirT }),
+    model({ id: "alpha", name: "Alpha", dir: dirA, sparkId: "loc2", container: "a", port: 8001 }),
+    model({ id: "beta", name: "Beta", dir: dirB, sparkId: "loc3", container: "b", port: 8002 }),
+  ];
+  const { m, events } = makeManager(models, { sparks: LOCALS });
+  const { jobId } = m.startExclusive("glm", ["alpha", "beta"], { source: "manual" });
+  // Cancel before any chunk can complete: Alpha's chunk dies mid-flight
+  // (attributed cancelled), Beta's chunk never resolves (falls back to the
+  // job's cancelled outcome) — both must read as cancelled either way.
+  m.cancel(jobId);
+  await m.jobs.get(jobId).done;
+
+  assert.deepEqual(events.map((e) => e.type), [
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.start.requested",
+    "model.start.cancelled",
+    "model.stop.cancelled",
+    "model.stop.cancelled",
+  ]);
+  assert.equal(events[3].message, "GLM: start script cancelled", "the chain job's own terminal");
+  assert.deepEqual(
+    events.slice(4).map((e) => [e.severity, e.message]),
+    [
+      ["info", "Alpha: stop script cancelled"],
+      ["info", "Beta: stop script cancelled"],
+    ]
+  );
+  for (const e of events.slice(4)) {
+    assert.equal(e.data.chained, true);
+    assert.equal(e.data.jobId, jobId);
+    assert.equal(e.data.chainJobStatus, "cancelled");
+    assert.match(e.data.chainError, /Cancelled/);
+  }
+});
+
+test("a chain released on readiness credits every stop step as finished", async () => {
+  const dirT = repo({ "start.sh": "#!/bin/sh\necho serving\ntail -f /dev/null\n" });
+  const dirA = repo({ "stop.sh": "#!/bin/sh\n" });
+  const dirB = repo({ "stop.sh": "#!/bin/sh\n" });
+  const models = [
+    model({ dir: dirT }),
+    model({ id: "alpha", name: "Alpha", dir: dirA, sparkId: "loc2", container: "a", port: 8001 }),
+    model({ id: "beta", name: "Beta", dir: dirB, sparkId: "loc3", container: "b", port: 8002 }),
+  ];
+  const { m, events } = makeManager(models, { sparks: LOCALS });
+  const { jobId } = m.startExclusive("glm", ["alpha", "beta"], { source: "scheduler" });
+  const job = m.jobs.get(jobId);
+  // Wait until the target's own script is the chunk in flight (its echo has
+  // landed) — only then is the readiness release the real thing.
+  await waitForTranscript(job, "serving");
+  assert.equal(m.releaseReadyStart("glm"), true);
+  await job.done;
+
+  assert.deepEqual(events.map((e) => e.type), [
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.start.requested",
+    "model.start.finished",
+    "model.stop.finished",
+    "model.stop.finished",
+  ]);
+  assert.equal(events[3].data.jobStatus, "done", "the readiness release is a success, not a cancel");
+  assert.deepEqual(
+    events.slice(4).map((e) => [e.severity, e.message]),
+    [
+      ["success", "Alpha: stop script finished"],
+      ["success", "Beta: stop script finished"],
+    ]
+  );
+});
+
+test("a single-chunk chain charges its exit code to every stop step sharing the chunk", async () => {
+  // The dominant UI shape: incumbents share the target's Spark → ONE chunk
+  // [stop alpha; stop beta; start glm], ";"-joined. The chunk's exit code
+  // is the LAST step's (the start's 9), and per-step codes are not
+  // provable in one merged stream — so the chunk's failure decides for
+  // every stop step in it: neither incumbent is proven down.
+  const dirT = repo({ "start.sh": "#!/bin/sh\nexit 9\n" });
+  const dirA = repo({ "stop.sh": "#!/bin/sh\n" });
+  const dirB = repo({ "stop.sh": "#!/bin/sh\n" });
+  const models = [
+    model({ dir: dirT }),
+    model({ id: "alpha", name: "Alpha", dir: dirA, container: "a", port: 8001 }),
+    model({ id: "beta", name: "Beta", dir: dirB, container: "b", port: 8002 }),
+  ];
+  const { m, events } = makeManager(models);
+  const { jobId } = m.startExclusive("glm", ["alpha", "beta"], { source: "manual" });
+  await m.jobs.get(jobId).done;
+
+  assert.deepEqual(events.map((e) => e.type), [
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.start.requested",
+    "model.start.failed",
+    "model.stop.failed",
+    "model.stop.failed",
+  ]);
+  assert.deepEqual(
+    events.slice(4).map((e) => [e.severity, e.message]),
+    [
+      ["error", "Alpha: stop script failed"],
+      ["error", "Beta: stop script failed"],
+    ],
+    "no '(exit N)' — the step is not its own exit code, the chunk is"
+  );
+  for (const e of events.slice(4)) {
+    assert.equal(e.data.chained, true);
+    assert.equal(e.data.jobId, jobId);
+    assert.match(e.data.chainError, /exited with code 9/);
+  }
+});
+
+test("a single-chunk readiness release credits the stops sharing the target's chunk as finished", async () => {
+  // Regression pin for the last-chunk gate in _attributeChainStops: the
+  // release lands on the chain's ONLY chunk — the one holding both stops
+  // and the target's tail. The ";-joined" command provably ran the stop
+  // scripts before the tail that answered readiness, so the gated ready
+  // branch must settle them finished; without it the aborted chunk would
+  // report both stops "cancelled" — a lie.
+  const dirT = repo({ "start.sh": "#!/bin/sh\necho serving\ntail -f /dev/null\n" });
+  const dirA = repo({ "stop.sh": "#!/bin/sh\n" });
+  const dirB = repo({ "stop.sh": "#!/bin/sh\n" });
+  const models = [
+    model({ dir: dirT }),
+    model({ id: "alpha", name: "Alpha", dir: dirA, container: "a", port: 8001 }),
+    model({ id: "beta", name: "Beta", dir: dirB, container: "b", port: 8002 }),
+  ];
+  const { m, events } = makeManager(models);
+  const { jobId } = m.startExclusive("glm", ["alpha", "beta"], { source: "scheduler" });
+  const job = m.jobs.get(jobId);
+  await waitForTranscript(job, "serving");
+  assert.equal(m.releaseReadyStart("glm"), true);
+  await job.done;
+
+  assert.deepEqual(events.map((e) => e.type), [
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.start.requested",
+    "model.start.finished",
+    "model.stop.finished",
+    "model.stop.finished",
+  ]);
+  assert.equal(events[3].data.jobStatus, "done");
+  assert.deepEqual(
+    events.slice(4).map((e) => [e.severity, e.message]),
+    [
+      ["success", "Alpha: stop script finished"],
+      ["success", "Beta: stop script finished"],
+    ]
+  );
+});
+
+test("a stale readiness release mid-stop-chunk settles stops cancelled/failed — never finished", async () => {
+  // Gate pin for _attributeChainStops AND the never-finished edge of the
+  // _emitChainStopTerminals fallback: releaseReadyStart has no sawDown gate
+  // for plain starts, so a stale target container can answer the probe
+  // while stop chunk 0 is still in flight. The release lands on a NON-final
+  // chunk → the gate is false: Alpha's killed stop reports cancelled (not
+  // the lie of finished), Beta's chunk never resolves → null → the done
+  // job's fallback reports failed, because the chain never proved it.
+  const dirT = repo({ "start.sh": "#!/bin/sh\necho serving\n" });
+  const dirA = repo({ "stop.sh": "#!/bin/sh\nsleep 0.4\n" });
+  const dirB = repo({ "stop.sh": "#!/bin/sh\n" });
+  const models = [
+    model({ dir: dirT }),
+    model({ id: "alpha", name: "Alpha", dir: dirA, sparkId: "loc2", container: "a", port: 8001 }),
+    model({ id: "beta", name: "Beta", dir: dirB, sparkId: "loc3", container: "b", port: 8002 }),
+  ];
+  const { m, events } = makeManager(models, { sparks: LOCALS });
+  const { jobId } = m.startExclusive("glm", ["alpha", "beta"], { source: "manual" });
+  // Immediate release — Alpha's sleep 0.4 keeps chunk 0 in flight, so the
+  // abort lands there deterministically (same synchronous block, the child
+  // cannot have closed yet).
+  assert.equal(m.releaseReadyStart("glm"), true);
+  await m.jobs.get(jobId).done;
+
+  assert.deepEqual(events.map((e) => e.type), [
+    "model.stop.requested",
+    "model.stop.requested",
+    "model.start.requested",
+    "model.start.finished",
+    "model.stop.cancelled",
+    "model.stop.failed",
+  ]);
+  assert.equal(events[3].data.jobStatus, "done", "the release still settles the JOB done");
+  assert.deepEqual(
+    events.slice(4).map((e) => [e.severity, e.message]),
+    [
+      ["info", "Alpha: stop script cancelled"],
+      ["error", "Beta: stop script failed"],
+    ],
+    "killed-in-flight → cancelled; never-run and unproven → failed; finished is off the table"
+  );
+  for (const e of events.slice(4)) {
+    assert.equal(e.data.chained, true);
+    assert.equal(e.data.jobId, jobId);
+    // A ready-settled job carries no error, so the non-finished events
+    // expose the key as null rather than a bogus reason.
+    assert.equal(e.data.chainError, null);
+  }
 });
 
 // ─── terminal events (real exit codes) ────────────────────

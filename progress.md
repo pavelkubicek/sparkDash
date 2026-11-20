@@ -884,3 +884,46 @@ it stops the display manager and runs the pinned upstream installer as
 root, so it stays an operator action from the Edit dialog. Upstream is now
 at v2.90.1; the fork's unreleased Updates/PR Companion work still needs a
 release bump before the next merge.
+
+## 2026-11-20 — Takeover chains log every model they stop (Activity)
+
+**What.** `ModelJobManager.startExclusive` chains [stop incumbent A, stop
+incumbent B, start target] into ONE job but logged only the target's events —
+last night's PR-companion takeover (source `pr-companion`,
+`data.stopFirstIds: ["qwen38-flash-next-v531", "glm-53-flash-1104"]`) left its
+two incumbent stops invisible in the Activity log. Each stop step now emits
+`model.stop.requested` (reusing the launcher's "Stopping" verb, on the
+incumbent's own sparkId, `data.chained: true`) BEFORE the target's
+`model.start.requested`, and one terminal `model.stop.<stage>` per step after
+the job's own terminal in `_settle`. Outcomes are attributed chunk by chunk in
+`_spawnJob` (`job.chainStops` + a chunk → step-index map): every chunk
+reports for itself — a chunk that proved success (exit 0, no
+error/timeout/cancel) finishes its stops, a failed one marks its stops
+failed, a cancelled one marks them cancelled — because the chunk loop only
+breaks on cancel/timeout and a later chunk genuinely still runs after a
+failed one. Steps whose chunk never resolved fall back to the job's outcome
+at settle (cancelled → cancelled, else failed — never finished); the
+readiness release (`releaseReadyStart`) credits the still-null stops only
+when it lands on the chain's LAST (the target's own) chunk — plain starts
+have no sawDown gate there, so a stale target container can answer the
+probe mid-chain, and stops whose chunk was in flight at a release before
+the target's tail honestly report cancelled, never finished.
+Fail-closed throughout — stages are monotone (null → terminal) and a stop
+the chain never proved is never reported finished. Event types/severities
+reuse the existing plain-stop
+vocabulary, so
+the Activity page renders them with no frontend change; plain
+`jobs.start(modelId, "stop"|"start")` events are byte-for-byte unchanged.
+
+**Verification.** `node --test server/models/__tests__/modelJobEvents.test.js`
+green: 19 tests, 0 fail (seven new chain regression tests — happy multi-chunk
+chain ordering + terminals, failing-chunk own-outcome split with later
+chunks still running, mid-flight cancel settling every stop cancelled,
+multi-chunk and single-chunk ready-release paths (the latter the pin for
+the last-chunk gate), a stale release on a non-final chunk settling its
+stops cancelled/failed never finished, and the single-chunk shared-exit-code
+split — plus the updated startExclusive requested-events test).
+`npm run test:server` green: 2508 tests, 2482 pass, 26 skipped, 0 fail.
+Nothing broken; scheduler, modelRoutes and the frontend untouched.
+
+**Next.** None.
