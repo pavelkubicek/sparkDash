@@ -9,6 +9,9 @@ Format: version sections are listed newest first.
 
 ## [Unreleased]
 
+### Changed
+- Install spark-attic v0.1.6 (was v0.1.4). It adds the Ubuntu firmware-console display fix from 0.1.5; the status file and the installer's `--check`/`--plain` flags are unchanged.
+
 ### Added
 
 - **Daily sudo apt-index refresh and "Refresh all machines" on the Updates page.** A sudo password the unit accepted and the person asked to keep (**Remember for the daily refresh**) lives in the sudo vault shared with the Storage Manager — one instance, encrypted at rest, keyed per account (`user@host:port`), never sent back to the browser — and the daily 06:00–09:00 slot now uses it to bring that unit's apt index up to date before the day's check: `apt-get update` ×3 + `fwupdmgr refresh` + the immediate re-check, indexes and metadata only, never installs, gated by **Settings → Refresh the apt index daily** (`updatesAutoRefresh`, on by default, strict like its sibling switch). A stored password the unit stops accepting is dropped and that day falls back to the sudo-free check; nothing is ever fabricated. The page learns each unit's posture (`indexAutoRefresh: "stored-password" | "check-only"` on the summary and the detail), **Refresh all machines** runs the sudo refresh over every unit one at a time through the one fleet job installs share (it reports `mode: "install" | "refresh"`, and a running job of either kind refuses the other), and removing a unit purges its account's remembered password from the vault. A successful refresh also marks apt's `update-success-stamp`, which a plain `apt-get update` never touches, so the "index refreshed" age tells the truth.
