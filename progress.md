@@ -927,3 +927,98 @@ split — plus the updated startExclusive requested-events test).
 Nothing broken; scheduler, modelRoutes and the frontend untouched.
 
 **Next.** None.
+
+## 2026-11-20 — Upstream main merged in; spark-attic pin bumped to v0.1.7 (deployed + e2e)
+
+**Change.** `origin/main` merged into `merge/v2.0.0`, then the pinned
+spark-attic installer moved past upstream's own pin. Two commits, both pushed
+to `fork` (pavelkubicek/sparkDash) `merge/v2.0.0` as a fast-forward
+`ee6c326..ad2ddca`; HEAD `ad2ddcae4b78b6360e70659479c46c228ca749fd`. `origin`
+(MiaAI-Lab/sparkDash) `main` untouched at `e8df863`.
+
+- `6e35fce` "Merge origin/main (spark-attic v0.1.6 pin) into merge/v2.0.0" —
+  upstream `e8df863` ("Install spark-attic v0.1.6", 5 files), `ort`
+  auto-resolved with no hand conflict; `CHANGELOG.md` `[Unreleased]` kept every
+  fork line (4 insertions, 0 deletions).
+- `ad2ddca` "Bump pinned spark-attic installer to v0.1.7" — 5 files:
+  `server/attic/install.js:16-17` (release URL + `sha256sum -c` digest),
+  `README.md:384`, `src/locales/en/devices.json:38`,
+  `src/locales/zh-CN/devices.json:38`, `CHANGELOG.md`.
+
+**Why fork-side.** Upstream's own `main` pins **v0.1.6** (`28a6fe8e…`) only;
+**v0.1.7** is the latest release, published 2026-11-20T04:27Z. The bump is
+deliberate and fork-local so the app, the README and the Edit-dialog confirm
+copy all name the version the fleet will run, instead of three strings
+disagreeing by one patch. Verified before it was written: `install.sh` is
+49311 bytes with sha256
+`f85d40f63070dc6d3537db41371a8b73146618526a91fc565a0c1d404ca0878c`, confirmed
+by two independent downloads of the release artifact that came back
+byte-identical.
+
+**Verification.** `node --check` on the edited `install.js` OK; i18n catalog
+check passed and `npm run test:i18n-check` 11/11 (both locales name v0.1.7);
+`tsc --noEmit` clean; `vite build` OK — 432 modules, the >500 kB chunk-size
+message is an advisory only. `npm test` exit 0: `test:server` 2508 tests /
+2482 pass / 0 fail / 26 skipped, vitest 213 files / 1601 tests passed. GLM
+reviewer verdict **SHIP**, 0 blockers and 0 should-fix; two nits, both
+pre-existing and left alone — duplicate `### Added` headings inside the
+CHANGELOG `[2.90.0]` section (they predate this range), and 7 untracked
+`config/*.bak-*` files in the working tree, a hazard for a future `git add -A`.
+
+**Deployed:** `./deploy.sh` on the default base image — no Docker Hub fallback
+was needed. Container `sparkDash` recreated at `2026-11-20T16:02:16Z`,
+`restarts=0`, 0 error/fatal/exception lines in the last 200 log lines.
+`GET /api/health` now reports `"version":"2.90.1"` (was `2.90.0` before the
+deploy). The container's `/app/server/attic/install.js` carries the v0.1.7 URL
+and digest, and the served bundle `dist/assets/index-Dw0LXpj3.js` (sha256
+`e6f946376dbce668862d28f0081b71ff4ac29895c9bdf28097e06100a9d37cd0`) contains
+`spark-attic v0.1.7` with zero v0.1.6 remnants. Note: `./dist` did not change
+hash during the deploy — the pre-deploy `npm run build` had already produced
+the identical content-hashed bundle.
+
+**E2E (headless Chromium, 1440×900, API dumps in `/tmp/e2e-2917/api/`, shots
+in `/tmp/e2e-2917/shots/`, full results `/tmp/e2e-2917/results.json`):** all
+**14/14 PASS**, 0 console errors, 0 failed requests, and the run held
+read-only — zero non-GET client requests.
+
+- `/api/health` OK; the registry lists 5 units.
+- `GET /api/sparks/:id/attic/status` → `installed: true` on the four Sparks,
+  `null` for dell.lan.
+- `metrics.attic` per unit — spark1 and spark2: clients 1, **lent 2044**;
+  spark3 and spark4: clients 0, **free 2044**; all four report `atticd
+  0.1.4`, driver `580.178.04`, size `2044 MiB`.
+- `GET /api/sparks/spark1-lan/attic/install` → 200
+  `{"passwordAllowed":true,"plainPasswordAllowed":false}`; unknown id → 404.
+- `ws://127.0.0.1:5555/ws` initial snapshot: 5 sparks, `metrics.attic` on each.
+- Static serving matches the on-disk bundle hash above.
+- spark1 and spark3 render the **spark-attic** card; dell.lan renders none.
+- Edit Spark → the confirm dialog text names **v0.1.7**; declined, nothing
+  POSTed.
+- The zh-CN catalog names **v0.1.7**.
+
+**Known state.** The fleet is unchanged this session: all four Sparks still run
+atticd **0.1.4** (installed 2026-11-17, `attic.service` active, status file at
+`/run/spark-attic/status.json`). The device upgrade to 0.1.7 was deliberately
+deferred by the operator — the pin names what the next install will fetch, not
+what is running now. The in-app path cannot perform that upgrade today, for two
+reasons: `INSTALL_PROGRAM` short-circuits on an already-active node —
+`server/attic/install.js:11`, `if systemctl is-active --quiet attic.service;
+then echo 'attic.service already active'; exit 0; fi` — so **Edit Spark →
+Install or retry spark-attic** is a silent no-op on a running node that still
+reports success; and sudo on the Sparks requires a password (`sudo -n` → rc 1,
+"a sudo password is required"), while the install route accepts the password
+request-borne only (no vault fallback) and `settings.allowPlainSudoPassword=false`
+rejects a plain-HTTP POST carrying one unless it comes from loopback.
+
+**Next.** Per node, one at a time, over ssh with sudo: verify the target tag's
+`install.sh` digest, run the official installer on a node whose `lent_mib`
+**and** `draining_mib` are 0, then confirm `/run/spark-attic/status.json`
+reports the new version and the app's attic card follows. Read from the actual
+v0.1.7 release bytes: the installer compares versions with `sort -V` on
+`/var/lib/attic/version`; an upgrade while `lent_mib` or `draining_mib` is
+non-zero is **refused** (exit 1, "atticd still lends memory: wait for its
+clients to exit … nothing was changed") and there is no client-count check,
+only those two fields; the upgrade stops `attic.service`, runs validation, then
+`systemctl enable --now`, and rollback re-starts the service on nodes that were
+active; 0.1.7 also preserves interrupted validation reports under
+`/var/log/spark-attic/failed-<UTC stamp>/` (0700).
