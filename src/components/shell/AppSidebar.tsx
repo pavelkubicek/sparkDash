@@ -53,8 +53,8 @@ interface AppSidebarProps {
   onCollapse?: () => void;
   /** Show the opt-in API Keys entry (Settings → API Keys). */
   showApiKeys?: boolean;
-  /** Put a warn dot on the Updates item: some online unit has apt or firmware updates. */
-  updatesWarn?: boolean;
+  /** Dot on the Updates item: "bad" when a firmware/UEFI update is pending, "warn" when only apt packages are, null for nothing. */
+  updatesTone?: "bad" | "warn" | null;
 }
 
 /**
@@ -192,7 +192,7 @@ export function AppSidebar({
   authMode = null,
   onCollapse,
   showApiKeys = false,
-  updatesWarn = false,
+  updatesTone = null,
 }: AppSidebarProps) {
   const { t } = useTranslation("shell");
   const benchLabels = useBenchLabels();
@@ -450,7 +450,7 @@ export function AppSidebar({
             aria-current={activeId === UPDATES_ID ? "page" : undefined}
           >
             <RotateIcon className="h-4 w-4" />
-            {updatesWarn ? <i className="sdot sdot--warn" aria-hidden /> : null}
+            {updatesTone ? <i className={`sdot sdot--${updatesTone}`} aria-hidden /> : null}
             <span className="rail-item__name">{t("nav.updates")}</span>
           </a>
           <a

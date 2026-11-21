@@ -592,6 +592,26 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                 </>
               ) : null}
 
+              {/* Firmware leads the two lists: it is the section that fails on the Sparks (the
+                  install's firmware phase), so what can be flashed reads above the apt list. */}
+              <h3 className="up-h3">Firmware</h3>
+              {detail.firmware.devices == null ? (
+                <p className="up-empty">{detail.firmware.count > 0 ? `${detail.firmware.count} firmware updates (devices not reported)` : "No firmware updates."}</p>
+              ) : detail.firmware.devices.length === 0 ? (
+                <p className="up-empty">No firmware updates.</p>
+              ) : (
+                <ul className="up-list">
+                  {detail.firmware.devices.map((d) => (
+                    <li key={d.name}>
+                      <span>{d.name}</span>
+                      <span className="up-from mono">
+                        {d.current} → {d.available}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
               <h3 className="up-h3">System packages</h3>
               {detail.apt.length === 0 ? (
                 <p className="up-empty">No apt packages are upgradable.</p>
@@ -616,24 +636,6 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                   {detail.sim.removals.join(", ")}. You will be asked to confirm before anything installs.
                 </Banner>
               ) : null}
-
-              <h3 className="up-h3">Firmware</h3>
-              {detail.firmware.devices == null ? (
-                <p className="up-empty">{detail.firmware.count > 0 ? `${detail.firmware.count} firmware updates (devices not reported)` : "No firmware updates."}</p>
-              ) : detail.firmware.devices.length === 0 ? (
-                <p className="up-empty">No firmware updates.</p>
-              ) : (
-                <ul className="up-list">
-                  {detail.firmware.devices.map((d) => (
-                    <li key={d.name}>
-                      <span>{d.name}</span>
-                      <span className="up-from mono">
-                        {d.current} → {d.available}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </>
           ) : null}
         </section>

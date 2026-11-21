@@ -1,4 +1,4 @@
-import type { SparkSnapshot } from "../../api/types";
+import type { SparkSnapshot, UpdateSummaryUnit } from "../../api/types";
 import { isWorkerSpark } from "../../api/sparkRole";
 import { measuredGenerationTps } from "../../shared/llmRate";
 
@@ -19,6 +19,24 @@ export function railSubLabel(spark: SparkSnapshot, labels: RailStatusLabels = { 
   const tps = primaryDecodeTps(spark);
   if (tps != null) return tps >= 100 ? tps.toFixed(0) : tps.toFixed(1);
   return isWorkerSpark(spark) ? labels.worker : "—";
+}
+
+/**
+ * The Updates nav dot's single source of truth. "bad": a firmware/UEFI update is pending somewhere
+ * (or one is staged and still waits for a reboot — that is the thing that has to be seen); "warn":
+ * only apt packages are; null: nothing to raise. Counts are whatever the last check of each online
+ * unit reported, so a unit whose check now fails keeps its last tone rather than going quiet — an
+ * alert indicator must not read unknown as healthy. Offline units never raise it.
+ */
+export function updatesDotTone(units: readonly UpdateSummaryUnit[] | undefined | null): "bad" | "warn" | null {
+  if (!units?.length) return null;
+  let warn = false;
+  for (const u of units) {
+    if (!u.online) continue;
+    if (u.fwCount > 0 || u.firmwareRebootNeeded) return "bad";
+    if (u.aptCount > 0 || u.rebootRequired) warn = true;
+  }
+  return warn ? "warn" : null;
 }
 
 export function isThrottling(spark: SparkSnapshot): boolean {

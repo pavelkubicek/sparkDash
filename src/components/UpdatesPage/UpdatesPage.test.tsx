@@ -711,10 +711,12 @@ describe("UpdatesPage", () => {
 
     const job = installJob();
     expect(job.heading).toBeTruthy();
-    // The status is the first section of the unit: above System packages, which is above Firmware.
-    expect(before(job.heading, job.systemHeading)).toBe(true);
-    expect(before(job.systemHeading, job.firmwareHeading)).toBe(true);
-    expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:System packages", "up-list", "h3:Firmware", "up-list"]);
+    // The status is the first section of the unit: above Firmware, which is above System packages.
+    expect(before(job.heading, job.firmwareHeading)).toBe(true);
+    expect(before(job.firmwareHeading, job.systemHeading)).toBe(true);
+    expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:Firmware", "up-list", "h3:System packages", "up-list"]);
+    // Both sections have something to show here: the firmware devices and the apt packages each render a list.
+    expect(unitPanel().querySelectorAll("ul.up-list")).toHaveLength(2);
     // The rows are the job's own, with their phase names and states — the spinner on the running one.
     expect(job.names).toEqual(["System packages", "Firmware"]);
     expect(job.stateTexts).toEqual(["done", "running"]);
@@ -732,9 +734,9 @@ describe("UpdatesPage", () => {
     try {
       render(<UpdatesPage sparks={sparks()} />);
       await flush();
-      // Nothing running: no install status, only the two lists.
+      // Nothing running: no install status, only the two lists — Firmware above System packages.
       expect(unitPanel().querySelector("ul.up-job")).toBeNull();
-      expect(unitSectionOrder()).toEqual(["h3:System packages", "up-list", "h3:Firmware", "up-list"]);
+      expect(unitSectionOrder()).toEqual(["h3:Firmware", "up-list", "h3:System packages", "up-list"]);
 
       act(() => button("Install updates").click());
       await flush();
@@ -746,8 +748,8 @@ describe("UpdatesPage", () => {
       });
 
       const job = installJob();
-      expect(before(job.heading, job.systemHeading)).toBe(true);
-      expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:System packages", "up-list", "h3:Firmware", "up-list"]);
+      expect(before(job.heading, job.firmwareHeading)).toBe(true);
+      expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:Firmware", "up-list", "h3:System packages", "up-list"]);
       expect(job.names).toEqual(["System packages", "Firmware"]);
       expect(job.stateTexts).toEqual(["done", "error — fwupdater exited 1"]);
       expect(job.states[1].classList.contains("is-error")).toBe(true);
@@ -758,7 +760,7 @@ describe("UpdatesPage", () => {
     }
   });
 
-  it("shows the failed firmware job's error and code above the System packages heading", async () => {
+  it("shows the failed firmware job's error and code above the Firmware and System packages sections", async () => {
     // The spark3/spark4 failure: the phase row alone read "error" with an empty note and
     // job.error was rendered nowhere. The reason must be visible, above the lists, with its code.
     rememberPasswords();
@@ -784,15 +786,36 @@ describe("UpdatesPage", () => {
       expect(banners[0].textContent).toContain("fwupdmgr update failed (exit 1)");
       expect(banners[0].textContent).toContain("Failed to parse arguments: Unknown option --offline");
       expect(banners[0].textContent).toContain("(fw-failed)");
-      // It is part of the install status: above System packages, not below the lists.
+      // It is part of the install status: above Firmware and System packages, not below the lists.
       const job = installJob();
       expect(before(job.heading, banners[0])).toBe(true);
+      expect(before(banners[0], job.firmwareHeading)).toBe(true);
       expect(before(banners[0], job.systemHeading)).toBe(true);
+      expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:Firmware", "up-list", "h3:System packages", "up-list"]);
       // And the failing phase still carries its note — the row and the banner tell the same story.
       expect(job.stateTexts[1]).toContain("error");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("puts the firmware section above System packages when it has no devices to list", async () => {
+    // The empty branches must move with the heading they belong to: the fallback line is the
+    // firmware section, so it still sits above System packages and under its own heading.
+    vi.mocked(fetchSparkUpdates).mockResolvedValue({ ...DETAIL, firmware: { count: 2, devices: null } });
+    vi.mocked(fetchSparkUpdatesJob).mockResolvedValue({ job: RUNNING_FW_JOB });
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+
+    const panel = unitPanel();
+    const empty = panel.querySelector("p.up-empty")!;
+    expect(empty.textContent).toContain("2 firmware updates (devices not reported)");
+    const job = installJob();
+    expect(before(job.firmwareHeading, empty)).toBe(true);
+    expect(before(empty, job.systemHeading)).toBe(true);
+    // No ul.up-list for firmware — and the one that is there is the apt list, below System packages.
+    expect(unitPanel().querySelectorAll("ul.up-list")).toHaveLength(1);
+    expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:Firmware", "h3:System packages", "up-list"]);
   });
 
   it("drops an install job read for a unit that was replaced while the read was in flight", async () => {
@@ -846,7 +869,7 @@ describe("UpdatesPage", () => {
     expect(fetchDashboardService).toHaveBeenCalledWith("s1");
   });
 
-  it("the rail shows the Updates item and the warn dot only while something is upgradable", async () => {
+  const renderRail = (updatesTone?: "bad" | "warn" | null) =>
     render(
       <AppSidebar
         sparks={[makeSpark("s1")]}
@@ -856,31 +879,38 @@ describe("UpdatesPage", () => {
         onOpenSettings={() => {}}
         onOpenSearch={() => {}}
         connected={false}
-        updatesWarn
+        updatesTone={updatesTone}
       />
     );
+
+  const updatesLink = () => document.querySelector('a[href="/updates"]') as HTMLAnchorElement;
+
+  it("the rail shows the Updates item with a warn dot while only apt packages are upgradable", async () => {
+    renderRail("warn");
     await flush();
-    const link = document.querySelector('a[href="/updates"]') as HTMLAnchorElement;
+    const link = updatesLink();
     expect(link).toBeTruthy();
     expect(link.textContent).toContain("Updates");
     expect(link.querySelector("i.sdot--warn")).toBeTruthy();
+    expect(link.querySelector("i.sdot--bad")).toBeNull();
+  });
+
+  it("the rail shows a red dot on the Updates item while a firmware update is pending", async () => {
+    renderRail("bad");
+    await flush();
+    const link = updatesLink();
+    expect(link.querySelector("i.sdot--bad")).toBeTruthy();
+    expect(link.querySelector("i.sdot--warn")).toBeNull();
   });
 
   it("the rail Updates item carries no dot when nothing is upgradable (or before the first summary)", async () => {
-    render(
-      <AppSidebar
-        sparks={[makeSpark("s1")]}
-        activeId={null}
-        onSelect={() => {}}
-        onAdd={() => {}}
-        onOpenSettings={() => {}}
-        onOpenSearch={() => {}}
-        connected={false}
-      />
-    );
-    await flush();
-    const link = document.querySelector('a[href="/updates"]') as HTMLAnchorElement;
-    expect(link).toBeTruthy();
-    expect(link.querySelector("i.sdot--warn")).toBeNull();
+    for (const tone of [null, undefined] as const) {
+      renderRail(tone);
+      await flush();
+      const links = [...document.querySelectorAll('a[href="/updates"]')];
+      expect(links.length).toBeGreaterThan(0);
+      // Renders accumulate until afterEach; every /updates link on screen must stay dotless.
+      for (const link of links) expect(link.querySelector("i.sdot")).toBeNull();
+    }
   });
 });

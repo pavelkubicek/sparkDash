@@ -1,5 +1,39 @@
 # Progress log
 
+## 2026-11-21 — Updates nav dot: two tiers, and it finally reaches the phone
+
+**What changed.** Two follow-ups to the firmware fix. (1) The selected-unit panel now leads with
+what actually breaks: **Firmware above System packages** (`Install job` → `Firmware` → `System
+packages`), because the firmware phase is the one that fails and needs to be the first thing you
+see; the block moved byte-identical, no markup or class changed. (2) The Updates attention
+indicator existed only on the desktop rail (`AppSidebar` rendered `sdot sdot--warn`; `MobileTabBar`
+had no updates prop at all, and below 900px the sidebar is `display: none`), so on a phone the
+operator had no signal whatsoever — and it had one colour for two very different situations. The
+tone is now computed once, `updatesDotTone()` in `src/components/shell/sparkSummary.ts`: **red**
+(`sdot--bad`, the existing danger token) when any online unit has a firmware/UEFI update pending or
+one staged and still waiting for a reboot, **yellow** (`sdot--warn`) when only apt packages (or a
+plain reboot) are pending, no dot otherwise and never for offline units. `App.tsx` derives it from
+the summary it already polls and hands it to both navs — the same dot now rides the Updates row in
+the Stats sheet and the Sparks sheet, and additionally the Stats tab button of the bottom bar, so it
+is visible without opening anything. Dots stay `aria-hidden` and decorative (no new strings, no
+locale entries); `anyUpgradable` is untouched and still gates the fleet-wide install action, which is
+a different question from "should this catch your eye". A unit whose check currently fails keeps its
+last tone rather than going quiet — the dot never reads unknown as healthy.
+
+**What is broken.** Nothing known — typecheck clean, build clean, `npm test` green (server 2497 /
+0 fail / 26 env-skips, frontend 1624 pass), 20 new/converted assertions. The order tests pin the
+exact section sequence including the `devices: null` fallback, and the dot tests pin class names per
+tier; all of them were pinned negative (revert the component, watch them go red). Unverified by
+machines only: the Stats-tab dot's pixel offset (`top: 5px; right: calc(50% - 15px)`) wants one
+glance on a real phone, and the tone follows the summary's once-a-minute poll, so a freshly detected
+firmware update can lag one cycle.
+
+**What is next.** Frontend-only: `dist` was rebuilt on the host, the browser picks it up on
+refresh — no container restart needed. Natural follow-up if the operator wants it: the red tier
+currently means "fwupd has something", which on these units is always UEFI capsule hardware
+(EC/BIOS/PD/dbx); a narrower "only real UEFI devices" rule would need the summary to carry device
+identity, not just `fwCount`.
+
 ## 2026-11-21 — Updates: the firmware phase actually ran `fwupdmgr` (fwupd 2 has no `--offline`)
 
 **What changed.** `fwupdmgr upgrade -y --offline` is not a command on the fleet: fwupd **2.0.20**

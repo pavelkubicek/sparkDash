@@ -24,10 +24,12 @@ interface MobileTabBarProps {
   onOpenSettings: () => void;
   /** Show the opt-in API Keys entry in the Stats sheet (Settings → API Keys). */
   showApiKeys?: boolean;
+  /** Dot on the Updates entries and the Stats tab: "bad" when a firmware/UEFI update is pending, "warn" when only apt packages are, null for nothing. */
+  updatesTone?: "bad" | "warn" | null;
 }
 
 /** Floating bottom tab bar for narrow screens (the fleet rail is hidden there). */
-export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings, showApiKeys = false }: MobileTabBarProps) {
+export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings, showApiKeys = false, updatesTone = null }: MobileTabBarProps) {
   const { t } = useTranslation("shell");
   const benchLabels = useBenchLabels();
   const statusLabels = { offline: t("spark.offline"), worker: t("spark.worker") };
@@ -71,7 +73,7 @@ export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings
   const statsActive = activeId === TOKENS_ID || activeId === COST_ID || (showApiKeys && activeId === API_KEYS_ID) || activeId === ENERGY_ID || activeId === TEMPS_ID || activeId === ACTIVITY_ID || activeId === STORAGE_ID || activeId === UPDATES_ID;
   const tabIndex =
     sheetKind === "sparks" ? 1 : sheetKind === "stats" ? 2 : activeId === OVERVIEW_ID ? 0 : onSpark ? 1 : statsActive ? 2 : -1;
-  const pageButton = (id: string, label: string, icon: ReactNode, compact = false) => (
+  const pageButton = (id: string, label: string, icon: ReactNode, compact = false, dot?: "bad" | "warn" | null) => (
     <button
       key={id}
       type="button"
@@ -82,6 +84,7 @@ export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings
       }}
     >
       {icon}
+      {dot ? <i className={`sdot sdot--${dot}`} aria-hidden /> : null}
       <span className="rail-item__name">{label}</span>
     </button>
   );
@@ -104,6 +107,7 @@ export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings
           aria-haspopup="dialog"
         >
           <ChartIcon className="h-[18px] w-[18px]" />
+          {updatesTone ? <i className={`sdot sdot--${updatesTone} tabbar-dot`} aria-hidden /> : null}
           {t("nav.stats")}
         </button>
         <button type="button" onClick={onOpenSettings}>
@@ -130,7 +134,7 @@ export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings
                       [ACTIVITY_ID, t("nav.activity"), <ListIcon key="a" className="h-4 w-4" />],
                       [STORAGE_ID, t("nav.storage"), <DiskIcon key="st" className="h-4 w-4" />],
                       [UPDATES_ID, t("nav.updates"), <RotateIcon key="u" className="h-4 w-4" />],
-                    ] as const).map(([id, label, icon]) => pageButton(id, label, icon)).concat(
+                    ] as const).map(([id, label, icon]) => pageButton(id, label, icon, false, id === UPDATES_ID ? updatesTone : null)).concat(
                       showApiKeys ? [pageButton(API_KEYS_ID, t("nav.apiKeys"), <KeyIcon key="k" className="h-4 w-4" />)] : []
                     )
                   ) : (
@@ -175,7 +179,7 @@ export function MobileTabBar({ sparks, activeId, onSelect, onAdd, onOpenSettings
                     </Fragment>
                   ))}
                   {pageButton(STORAGE_ID, t("nav.storage"), <DiskIcon className="h-3.5 w-3.5" />, true)}
-                  {pageButton(UPDATES_ID, t("nav.updates"), <RotateIcon className="h-3.5 w-3.5" />, true)}
+                  {pageButton(UPDATES_ID, t("nav.updates"), <RotateIcon className="h-3.5 w-3.5" />, true, updatesTone)}
                   <div className="rail-label rail-label--spaced">
                     <span>{t("nav.sparks")}</span>
                   </div>

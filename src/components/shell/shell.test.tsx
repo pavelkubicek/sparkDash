@@ -373,4 +373,58 @@ describe("MobileTabBar sheet", () => {
     act(() => rea.click());
     expect(onSelect).toHaveBeenCalledWith(toolId("rea"));
   });
+
+  // The dot a phone operator needs without opening a sheet twice: tone on both Updates rows and on the Stats tab.
+  const openSheetTab = (container: HTMLElement, name: string) => {
+    const tab = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === name)!;
+    act(() => tab.click());
+    return tab;
+  };
+  const sheetUpdatesRow = () =>
+    [...document.querySelectorAll<HTMLButtonElement>(".sheet .rail-item")].find(
+      (b) => b.querySelector(".rail-item__name")?.textContent === "Updates"
+    )!;
+
+  it.each([["bad", "sdot--bad"], ["warn", "sdot--warn"]] as const)(
+    "marks the Updates rows in the Stats and Sparks sheets and the Stats tab with the %s tone",
+    (tone, cls) => {
+      const { container } = render(
+        <MobileTabBar sparks={[makeSpark("a")]} activeId={null} onSelect={() => {}} onAdd={() => {}} onOpenSettings={() => {}} updatesTone={tone} />
+      );
+      openSheetTab(container, "Stats");
+      expect(sheetUpdatesRow().querySelector(`i.${cls}`)).toBeTruthy();
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      act(() => vi.advanceTimersByTime(400));
+      openSheetTab(container, "Sparks");
+      expect(sheetUpdatesRow().querySelector(`i.${cls}`)).toBeTruthy();
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      act(() => vi.advanceTimersByTime(400));
+      const statsTab = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Stats")!;
+      expect(statsTab.querySelector(`i.tabbar-dot.${cls}`)).toBeTruthy();
+    }
+  );
+
+  it("leaves the Updates rows and the Stats tab undotted when the tone is null", () => {
+    const { container } = render(
+      <MobileTabBar sparks={[makeSpark("a")]} activeId={null} onSelect={() => {}} onAdd={() => {}} onOpenSettings={() => {}} updatesTone={null} />
+    );
+    openSheetTab(container, "Stats");
+    expect(sheetUpdatesRow().querySelector("i.sdot")).toBeNull();
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    act(() => vi.advanceTimersByTime(400));
+    openSheetTab(container, "Sparks");
+    expect(sheetUpdatesRow().querySelector("i.sdot")).toBeNull();
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    act(() => vi.advanceTimersByTime(400));
+    const statsTab = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Stats")!;
+    expect(statsTab.querySelector("i.sdot")).toBeNull();
+  });
 });

@@ -13,7 +13,7 @@ import { AppSidebar } from "./components/shell/AppSidebar";
 import { MobileTabBar } from "./components/shell/MobileTabBar";
 import { InstallPrompt } from "./components/shell/InstallPrompt";
 import { CommandPalette, type PaletteCommand } from "./components/shell/CommandPalette";
-import { openShowcase, showcaseTarget } from "./components/shell/sparkSummary";
+import { openShowcase, showcaseTarget, updatesDotTone } from "./components/shell/sparkSummary";
 import { AddSparkDialog } from "./components/AddSparkDialog";
 import { EditSparkDialog } from "./components/EditSparkDialog";
 import { SparkPage } from "./components/SparkPage/SparkPage";
@@ -216,6 +216,8 @@ function DashboardApp() {
   }, []);
   // The Updates rail dot: the fleet's upgradability, polled once a minute while connected.
   const updatesSummary = useUpdatesSummary(connected);
+  // One tone for both navs: red when a firmware update waits, yellow when only apt does.
+  const updatesTone = useMemo(() => updatesDotTone(updatesSummary?.sparks), [updatesSummary]);
   const [telemetryNow, setTelemetryNow] = useState(Date.now());
   const { navigate, replace } = useRoute(setActiveId);
   const [showAdd, setShowAdd] = useState(false);
@@ -598,7 +600,7 @@ function DashboardApp() {
           refreshInterval={refreshInterval}
           authMode={authMode}
           showApiKeys={apiKeysEnabled}
-          updatesWarn={updatesSummary?.anyUpgradable === true}
+          updatesTone={updatesTone}
         />
         <div className="side-strip" aria-hidden={!sideHidden}>
           <button type="button" className="icon-circle" onClick={toggleSidebar} tabIndex={sideHidden ? 0 : -1} title={t("nav.showSidebarTitle")} aria-label={t("nav.showSidebar")}>
@@ -728,6 +730,7 @@ function DashboardApp() {
         onAdd={() => setShowAdd(true)}
         onOpenSettings={() => setShowSettings(true)}
         showApiKeys={apiKeysEnabled}
+        updatesTone={updatesTone}
       />
       <InstallPrompt />
       <CommandPalette open={showPalette} onClose={() => setShowPalette(false)} commands={paletteCommands} />

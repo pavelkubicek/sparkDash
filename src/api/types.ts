@@ -4390,7 +4390,7 @@ export interface UpdateSummaryUnit {
 export interface UpdateSummary {
   now: number;
   sparks: UpdateSummaryUnit[];
-  /** Any online unit has apt or firmware updates: the nav item carries a warn dot then. */
+  /** Any online unit has apt or firmware updates: gates the fleet-wide "update all machines" action. The nav dot has its own tiers — see `updatesDotTone`. */
   anyUpgradable: boolean;
 }
 
