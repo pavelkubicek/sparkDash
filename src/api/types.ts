@@ -4382,6 +4382,8 @@ export interface UpdateSummaryUnit {
   checkedAt: number | null;
   /** How the daily slot treats this unit's apt index: a stored password refreshes it, otherwise the check stays sudo-free. */
   indexAutoRefresh: "stored-password" | "check-only";
+  /** The dashboard remembers a sudo password for this unit's account: an action needs none typed. */
+  sudoSaved: boolean;
 }
 
 /** GET /api/updates/summary: one cheap poll for the whole fleet (nav badge + page header). */
@@ -4430,6 +4432,8 @@ export interface SparkUpdateDetail {
   index: { refreshedAt: number | null };
   /** How the daily slot treats this unit's apt index: a stored password refreshes it, otherwise the check stays sudo-free. */
   indexAutoRefresh: "stored-password" | "check-only";
+  /** The dashboard remembers a sudo password for this unit's account: an action needs none typed. */
+  sudoSaved: boolean;
   apt: AptUpdate[];
   sim: UpdateSim;
   firmware: FirmwareUpdateSection;

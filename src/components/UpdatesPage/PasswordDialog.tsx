@@ -12,15 +12,20 @@ export interface PasswordRequest {
   /** What the password will be used for, in a few words: "to install updates on Pico". */
   purpose: string;
   /**
-   * Run the action with the typed password. Return null to close the dialog, or the sentence to show
-   * under the box ("That password was not accepted", the 429 wait, a plain failure). When the dialog
-   * shows the remember tick box, it hands the second argument too.
+   * Run the action with the typed password (an empty string when the box was left empty and `optional`
+   * allowed it). Return null to close the dialog, or the sentence to show under the box ("That password
+   * was not accepted", the 429 wait, a plain failure). When the dialog shows the remember tick box, it
+   * hands the second argument too.
    */
   submit: (password: string, remember?: boolean) => Promise<string | null>;
-  /** Show the "remember" tick box (only for actions whose password the server can store for the daily refresh). */
+  /** Show the "remember" tick box: an accepted password can be kept for this unit's account. */
   allowRemember?: boolean;
   /** What the tick box says when shown, e.g. "Remember for the daily refresh". */
   rememberLabel?: string;
+  /** The box may stay empty: the action then runs on the password the dashboard already remembers. */
+  optional?: boolean;
+  /** One more sentence under the box: what leaving it empty does here, which units keep their own password. */
+  hint?: string;
 }
 
 interface PasswordDialogProps {
@@ -30,9 +35,9 @@ interface PasswordDialogProps {
 }
 
 /**
- * The sudo password box every update action shares (one-time use, never stored): the Storage dialog
- * shell, a `field` password input, the submit disabled while it is empty, and one error line under it.
- * The box is emptied whenever the dialog closes.
+ * The sudo password box every update action shares: Storage's dialog shell, a `field` password input,
+ * the submit disabled while the box is empty (unless the action may run on a remembered password), and
+ * one error line under it. The box is emptied whenever the dialog closes, so nothing lingers in the tab.
  */
 export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
   const open = request != null;
@@ -76,10 +81,10 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
   if (!mounted || !request) return null;
 
   const confirm = async () => {
-    if (!password || busy) return;
+    if (busy || (password.length === 0 && !request.optional)) return;
     setBusy(true);
     setProblem(null);
-    const text = await request.submit(password, request.allowRemember ? remember : undefined);
+    const text = await request.submit(password, request.allowRemember && remember ? true : undefined);
     if (text == null) {
       // The action took it: close (and the close effect wipes the box).
       onCancel();
@@ -102,6 +107,7 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
           <div className="field">
             <label htmlFor={fieldId}>
               <LockIcon className="h-3.5 w-3.5" /> sudo password {request.purpose}
+              {request.optional ? <span className="up-pw__optional"> (empty uses the remembered one)</span> : null}
             </label>
             <input
               id={fieldId}
@@ -112,7 +118,7 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
               value={password}
               disabled={busy}
               autoFocus
-              placeholder="Your password on the unit"
+              placeholder={request.optional ? "Leave empty to use the remembered password" : "Your password on the unit"}
               aria-invalid={problem ? true : undefined}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => {
@@ -136,16 +142,17 @@ export function PasswordDialog({ request, onCancel }: PasswordDialogProps) {
           ) : null}
           <p className="up-pw__note">
             {request.allowRemember
-              ? "Your sudo password is used once for this action. Ticked, the dashboard keeps it encrypted for the daily index refresh: used server-side only, never sent back to the browser, dropped if a check rejects it."
+              ? "Your sudo password is used once for this action. Ticked, the dashboard keeps it encrypted for this account and uses it itself from then on — for the next action you click and the daily index refresh — so you need not type it again; it is never sent back to the browser, and a password the unit stops accepting is dropped."
               : "Your sudo password is used once for this action and never stored on the dashboard."}
           </p>
+          {request.hint ? <p className="up-pw__note">{request.hint}</p> : null}
         </div>
         <div className="modal-sheet__footer">
           <div className="modal-sheet__footer-actions">
             <button type="button" className="btn btn--ghost" onClick={onCancel} disabled={busy}>
               Cancel
             </button>
-            <button type="button" className="btn btn--primary" onClick={() => void confirm()} disabled={busy || password.length === 0}>
+            <button type="button" className="btn btn--primary" onClick={() => void confirm()} disabled={busy || (password.length === 0 && !request.optional)}>
               {busy ? "Working…" : "Confirm"}
             </button>
           </div>

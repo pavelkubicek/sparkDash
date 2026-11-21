@@ -9,10 +9,10 @@ const FLEET_FIRST_POLL_MS = 400;
 export interface InstallAll {
   /** The run this page follows: started here, or found still running when the page opened. */
   job: InstallAllJob | null;
-  /** Start a run with the one-time password and follow it. Rejects when the dashboard refuses it. */
-  start: (sudoPassword: string) => Promise<void>;
-  /** Start a refresh-only run (apt index, never installs) and follow it; `remember` stores the password for the daily refresh. */
-  startRefresh: (sudoPassword: string, remember?: boolean) => Promise<void>;
+  /** Start a run and follow it; no `sudoPassword` means every unit runs on the password the dashboard remembers. Rejects when the dashboard refuses it. */
+  start: (sudoPassword?: string, remember?: boolean) => Promise<void>;
+  /** Start a refresh-only run (apt index, never installs) and follow it; `remember` stores a typed password for the daily refresh. */
+  startRefresh: (sudoPassword?: string, remember?: boolean) => Promise<void>;
 }
 
 /**
@@ -85,9 +85,9 @@ export function useInstallAllJob(): InstallAll {
   }, [follow, stop]);
 
   const start = useCallback(
-    async (sudoPassword: string) => {
+    async (sudoPassword?: string, remember?: boolean) => {
       // Throws when the dashboard refuses the run (already-running, a bad password); the dialog shows it.
-      const res = await installAllUpdates(sudoPassword);
+      const res = await installAllUpdates({ sudoPassword, remember });
       if (!mounted.current) return;
       setJob({ id: res.jobId, mode: "install", state: "running", startedAt: Date.now(), finishedAt: null, units: [] });
       follow();
@@ -96,7 +96,7 @@ export function useInstallAllJob(): InstallAll {
   );
 
   const startRefresh = useCallback(
-    async (sudoPassword: string, remember?: boolean) => {
+    async (sudoPassword?: string, remember?: boolean) => {
       // Same shared fleet job, refresh mode; the same refusals (already-running, a bad password).
       const res = await refreshAllUpdates({ sudoPassword, remember });
       if (!mounted.current) return;

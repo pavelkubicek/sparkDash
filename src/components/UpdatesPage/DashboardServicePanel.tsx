@@ -10,6 +10,8 @@ interface DashboardServicePanelProps {
   sparkId: string;
   sparkName: string;
   online: boolean;
+  /** The dashboard remembers a sudo password for this unit's account: the switch needs none typed. */
+  sudoSaved: boolean;
   /** Open the shared password dialog for an action (the page owns the one dialog). */
   requirePassword: (request: PasswordRequest) => void;
   /** Map a failure to the sentence shown under the password box. */
@@ -24,8 +26,10 @@ function runningNow(units: DashboardServiceUnit[]): boolean {
 /**
  * The DGX Dashboard services of a unit: systemctl's view of both units (enabled, active, RAM from
  * MemoryCurrent) and one sudo action that enables or disables them together, then re-reads the status.
+ * With a password remembered for the unit's account the switch runs on it directly; otherwise the page's
+ * password box asks, and its tick box lets the person have the dashboard keep the accepted one.
  */
-export function DashboardServicePanel({ sparkId, sparkName, online, requirePassword, problem }: DashboardServicePanelProps) {
+export function DashboardServicePanel({ sparkId, sparkName, online, sudoSaved, requirePassword, problem }: DashboardServicePanelProps) {
   const [units, setUnits] = useState<DashboardServiceUnit[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -63,21 +67,32 @@ export function DashboardServicePanel({ sparkId, sparkName, online, requirePassw
   }
 
   const on = units ? runningNow(units) : false;
-  const toggle = (enabled: boolean) =>
-    requirePassword({
-      title: enabled ? "Start DGX Dashboard" : "Stop DGX Dashboard",
-      purpose: `to ${enabled ? "enable" : "disable"} the DGX Dashboard services on ${sparkName}`,
-      submit: async (sudoPassword) => {
-        try {
-          const res = await setDashboardService(sparkId, { enabled, sudoPassword });
-          setUnits(res.units); // the server answers with the status after applying
-          setError(null);
-          return null;
-        } catch (err) {
-          return problem(err);
-        }
-      },
+  const apply = async (enabled: boolean, sudoPassword?: string, remember?: boolean) => {
+    try {
+      const res = await setDashboardService(sparkId, { enabled, sudoPassword, remember });
+      setUnits(res.units); // the server answers with the status after applying
+      setError(null);
+      return null;
+    } catch (err) {
+      return problem(err);
+    }
+  };
+  const toggle = (enabled: boolean) => {
+    // Nothing remembered to lean on: the box asks, and offers to remember what it accepts.
+    if (!sudoSaved) {
+      requirePassword({
+        title: enabled ? "Start DGX Dashboard" : "Stop DGX Dashboard",
+        purpose: `to ${enabled ? "enable" : "disable"} the DGX Dashboard services on ${sparkName}`,
+        allowRemember: true,
+        rememberLabel: "Remember this password so I do not have to type it again",
+        submit: async (sudoPassword, remember) => apply(enabled, sudoPassword.length > 0 ? sudoPassword : undefined, remember),
+      });
+      return;
+    }
+    void apply(enabled).then((text) => {
+      if (text) setError(text);
     });
+  };
 
   return (
     <section className="panel up-panel" aria-label="DGX Dashboard">

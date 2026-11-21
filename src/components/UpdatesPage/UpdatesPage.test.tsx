@@ -8,6 +8,7 @@ import {
   fetchSparkUpdates,
   fetchSparkUpdatesJob,
   fetchUpdatesSummary,
+  forgetUpdatesSudo,
   installAllUpdates,
   installSparkUpdates,
   refreshAllUpdates,
@@ -33,6 +34,7 @@ vi.mock("../../api/client", async (importOriginal) => ({
   fetchInstallAllJob: vi.fn(),
   fetchDashboardService: vi.fn(),
   setDashboardService: vi.fn(),
+  forgetUpdatesSudo: vi.fn(),
 }));
 
 const NOW = 1_800_000_000_000;
@@ -41,10 +43,16 @@ const H = 3_600_000;
 const SUMMARY: UpdateSummary = {
   now: NOW,
   sparks: [
-    { id: "s1", name: "Pico", online: true, state: "ok", aptCount: 3, fwCount: 1, rebootRequired: true, firmwareRebootNeeded: false, checkedAt: NOW - 3 * H, indexAutoRefresh: "stored-password" },
-    { id: "s2", name: "Dell", online: true, state: "ok", aptCount: 0, fwCount: 0, rebootRequired: false, firmwareRebootNeeded: false, checkedAt: NOW - 60_000, indexAutoRefresh: "stored-password" },
+    { id: "s1", name: "Pico", online: true, state: "ok", aptCount: 3, fwCount: 1, rebootRequired: true, firmwareRebootNeeded: false, checkedAt: NOW - 3 * H, indexAutoRefresh: "check-only", sudoSaved: false },
+    { id: "s2", name: "Dell", online: true, state: "ok", aptCount: 0, fwCount: 0, rebootRequired: false, firmwareRebootNeeded: false, checkedAt: NOW - 60_000, indexAutoRefresh: "check-only", sudoSaved: false },
   ],
   anyUpgradable: true,
+};
+
+/** The same fleet with a sudo password remembered for every unit: the page asks for none. */
+const SUMMARY_SAVED: UpdateSummary = {
+  ...SUMMARY,
+  sparks: SUMMARY.sparks.map((s) => ({ ...s, indexAutoRefresh: "stored-password" as const, sudoSaved: true })),
 };
 
 const DETAIL: SparkUpdateDetail = {
@@ -53,7 +61,8 @@ const DETAIL: SparkUpdateDetail = {
   state: "ok",
   checkedAt: NOW - 3 * H,
   index: { refreshedAt: NOW - 2 * H },
-  indexAutoRefresh: "stored-password",
+  indexAutoRefresh: "check-only",
+  sudoSaved: false,
   apt: [
     { name: "curl", newVersion: "8.5.0-2", oldVersion: "8.5.0-1" },
     { name: "libssl3", newVersion: "3.0.11", oldVersion: "3.0.10" },
@@ -65,6 +74,17 @@ const DETAIL: SparkUpdateDetail = {
   firmwareRebootNeeded: null,
   lastError: null,
 };
+
+/** The same unit with a sudo password the dashboard remembers: every action on it needs no typing. */
+const SAVED_DETAIL: SparkUpdateDetail = { ...DETAIL, indexAutoRefresh: "stored-password", sudoSaved: true };
+
+/** Tell the page — and every action's answer — that these units' passwords are remembered. */
+function rememberPasswords() {
+  vi.mocked(fetchUpdatesSummary).mockResolvedValue(SUMMARY_SAVED);
+  vi.mocked(fetchSparkUpdates).mockResolvedValue(SAVED_DETAIL);
+  vi.mocked(checkSparkUpdates).mockResolvedValue(SAVED_DETAIL);
+  vi.mocked(refreshSparkUpdates).mockResolvedValue(SAVED_DETAIL);
+}
 
 const DASH: DashboardServiceStatus = {
   units: [
@@ -122,6 +142,7 @@ beforeEach(() => {
   vi.mocked(fetchInstallAllJob).mockResolvedValue({ job: null });
   vi.mocked(fetchDashboardService).mockResolvedValue(DASH);
   vi.mocked(setDashboardService).mockResolvedValue(DASH);
+  vi.mocked(forgetUpdatesSudo).mockResolvedValue({ success: true, forgotten: true });
 });
 
 describe("UpdatesPage", () => {
@@ -197,7 +218,7 @@ describe("UpdatesPage", () => {
     expect(confirm.disabled ?? button("Confirm").disabled).toBe(false);
     act(() => button("Confirm").click());
     await flush();
-    expect(refreshSparkUpdates).toHaveBeenCalledWith("s1", "hunter2", false);
+    expect(refreshSparkUpdates).toHaveBeenCalledWith("s1", "hunter2", undefined);
     expect(input.value === "hunter2" || dialog() == null).toBe(true);
   });
 
@@ -231,15 +252,84 @@ describe("UpdatesPage", () => {
     expect((dialog()!.querySelector('input[type="password"]') as HTMLInputElement).value).toBe("");
   });
 
-  it("the unit panel says when the daily index refresh runs only as a sudo-free check", async () => {
-    vi.mocked(fetchSparkUpdates).mockResolvedValue({ ...DETAIL, indexAutoRefresh: "check-only" });
+  it("the unit panel says whether a sudo password is remembered for the unit", async () => {
     render(<UpdatesPage sparks={sparks()} />);
     await flush();
-    expect(text()).toContain("daily refresh off — no stored sudo password");
-    vi.mocked(fetchSparkUpdates).mockResolvedValue(DETAIL);
+    // Nothing remembered: the page says so and offers no forgetting.
+    expect(text()).toContain("no sudo password stored");
+    expect(button(/Forget password/) ?? null).toBeNull();
+    vi.mocked(checkSparkUpdates).mockResolvedValue(SAVED_DETAIL);
     act(() => button("Check now").click());
     await flush();
-    expect(text()).not.toContain("daily refresh off");
+    expect(text()).toContain("sudo password remembered");
+    expect(text()).not.toContain("no sudo password stored");
+    expect(button("Forget password")).toBeTruthy();
+  });
+
+  it("Forget password asks the server to drop the remembered one and re-reads the unit", async () => {
+    vi.mocked(fetchSparkUpdates).mockResolvedValue(SAVED_DETAIL);
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Forget password").click());
+    await flush();
+    expect(forgetUpdatesSudo).toHaveBeenCalledWith("s1");
+    expect(vi.mocked(fetchSparkUpdates).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("an action on a unit with a remembered password runs without the box and sends no password", async () => {
+    rememberPasswords();
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Install updates").click());
+    await flush();
+    expect(dialog()).toBeNull();
+    expect(installSparkUpdates).toHaveBeenCalledWith("s1", {});
+    act(() => button("Refresh index").click());
+    await flush();
+    expect(dialog()).toBeNull();
+    expect(refreshSparkUpdates).toHaveBeenCalledWith("s1", undefined, undefined);
+    // The DGX Dashboard switch is the same: nothing to type, no box.
+    act(() => button("Disable").click());
+    await flush();
+    expect(dialog()).toBeNull();
+    expect(setDashboardService).toHaveBeenCalledWith("s1", { enabled: false });
+  });
+
+  it("a fleet install needs no typing when every online unit has its password remembered", async () => {
+    rememberPasswords();
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Update all machines").click());
+    await flush();
+    expect(dialog()).toBeNull();
+    expect(installAllUpdates).toHaveBeenCalledWith({});
+  });
+
+  it("a fleet index refresh needs no typing when every online unit has its password remembered", async () => {
+    rememberPasswords();
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Refresh all machines").click());
+    await flush();
+    expect(dialog()).toBeNull();
+    expect(refreshAllUpdates).toHaveBeenCalledWith({});
+  });
+
+  it("a mixed fleet still opens the box, but an empty box is an answer: remembered units use theirs", async () => {
+    vi.mocked(fetchUpdatesSummary).mockResolvedValue({
+      ...SUMMARY,
+      sparks: SUMMARY.sparks.map((s, i) => ({ ...s, sudoSaved: i === 1, indexAutoRefresh: i === 1 ? ("stored-password" as const) : ("check-only" as const) })),
+    });
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Update all machines").click());
+    expect(dialog()).toBeTruthy();
+    // The box may stay empty: Confirm is live without typing.
+    expect(button("Confirm").disabled).toBe(false);
+    expect(dialog()!.textContent).toContain("A unit whose password the dashboard already remembers");
+    act(() => button("Confirm").click());
+    await flush();
+    expect(installAllUpdates).toHaveBeenCalledWith({});
   });
 
   it("Refresh all machines starts the shared job in refresh mode and follows it with refresh wording", async () => {
@@ -393,6 +483,19 @@ describe("UpdatesPage", () => {
     expect(installSparkUpdates).toHaveBeenCalledWith("s1", { sudoPassword: "hunter2" });
   });
 
+  it("Install updates offers the remember tick and hands it to the server", async () => {
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Install updates").click());
+    expect(dialog()!.textContent).toContain("Remember this password");
+    const box = dialog()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => box.click());
+    typePassword("hunter2");
+    act(() => button("Confirm").click());
+    await flush();
+    expect(installSparkUpdates).toHaveBeenCalledWith("s1", { sudoPassword: "hunter2", remember: true });
+  });
+
   it("a 409 needs_confirmation lists the removals verbatim and the confirm re-posts with confirmRemovals", async () => {
     const gate = new ApiError("packages would be removed", 409, "needs_confirmation", false, { removals: ["liblegacy0 1.2.3-1", "old-daemon 0.9"] });
     vi.mocked(installSparkUpdates)
@@ -415,6 +518,22 @@ describe("UpdatesPage", () => {
     expect(installSparkUpdates).toHaveBeenCalledTimes(2);
     expect(installSparkUpdates).toHaveBeenLastCalledWith("s1", { sudoPassword: "hunter2", confirmRemovals: true });
     expect(dialog()).toBeNull();
+  });
+
+  it("a removals confirmation on a remembered password re-posts without typing anything", async () => {
+    vi.mocked(fetchSparkUpdates).mockResolvedValue(SAVED_DETAIL);
+    const gate = new ApiError("packages would be removed", 409, "needs_confirmation", false, { removals: ["liblegacy0 1.2.3-1"] });
+    vi.mocked(installSparkUpdates)
+      .mockRejectedValueOnce(gate)
+      .mockResolvedValueOnce({ jobId: "j3" });
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+    act(() => button("Install updates").click());
+    await settle();
+    expect(dialog()!.textContent).toContain("The update wants to remove packages");
+    act(() => button("Install anyway").click());
+    await settle();
+    expect(installSparkUpdates).toHaveBeenLastCalledWith("s1", { confirmRemovals: true });
   });
 
   it("a bad password keeps the dialog open with the 403 line", async () => {
@@ -484,7 +603,7 @@ describe("UpdatesPage", () => {
       typePassword("hunter2");
       act(() => button("Confirm").click());
       await flush();
-      expect(installAllUpdates).toHaveBeenCalledWith("hunter2");
+      expect(installAllUpdates).toHaveBeenCalledWith({ sudoPassword: "hunter2" });
       vi.mocked(fetchInstallAllJob).mockResolvedValueOnce({ job: running }).mockResolvedValueOnce({ job: done });
       // The first follow comes early (short runs end within a second), then every second.
       await act(async () => {

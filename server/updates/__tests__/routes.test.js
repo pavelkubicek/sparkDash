@@ -111,7 +111,7 @@ test("summary and detail answer with the contract shapes; unknown and host units
     assert.equal(summary.anyUpgradable, false);
     assert.deepEqual(summary.sparks.map((s) => s.id).sort(), ["s1", "s2"], "hosts are not update machines");
     const s1 = summary.sparks.find((s) => s.id === "s1");
-    assert.deepEqual(Object.keys(s1).sort(), ["aptCount", "checkedAt", "firmwareRebootNeeded", "fwCount", "id", "indexAutoRefresh", "name", "online", "rebootRequired", "state"]);
+    assert.deepEqual(Object.keys(s1).sort(), ["aptCount", "checkedAt", "firmwareRebootNeeded", "fwCount", "id", "indexAutoRefresh", "name", "online", "rebootRequired", "state", "sudoSaved"]);
     assert.equal(s1.state, "idle");
     assert.equal(s1.online, true);
     assert.equal(summary.sparks.find((s) => s.id === "s2").online, false);
@@ -454,4 +454,52 @@ test("a refresh with remember stores only a sudo-accepted password", async () =>
       assert.equal(set.length, 1, "the refused password was never stored");
     }
   );
+});
+
+test("install takes the remember tick too, and a remembered password needs neither the box nor https", async () => {
+  const pw = "install-remember-pw";
+  const calls = { set: [], delete: [], inputs: [] };
+  const vault = {
+    has: () => false,
+    get: () => null,
+    set: (k, v) => calls.set.push([k, v]),
+    delete: (k) => {
+      calls.delete.push(k);
+      return true;
+    },
+  };
+  const run = async (s, program, opts) => {
+    calls.inputs.push({ name: program.match(/sparkdash-updates:(\w+)/)?.[1], input: opts?.input ?? null });
+    if (program.includes("sparkdash-updates:install")) return "STEP=apt\nSTEP=firmware\nFWUP=none\n" + CHECK_OK;
+    return CHECK_OK;
+  };
+  await withApp({ plain: true, vault, run }, async (base, events) => {
+    // Check first: an install never runs blind.
+    await fetch(`${base}/sparks/s1/updates/check`, json({}));
+    const started = await fetch(`${base}/sparks/s1/updates/install`, json({ sudoPassword: pw, remember: true }));
+    assert.equal(started.status, 202);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(calls.set, [["u@s1.lan:22", pw]], "the tick reaches the install route and the vault");
+    assert.ok(events.some((e) => e.type === "updates.install"));
+  });
+
+  // A remembered password is used by the server itself: no password crosses the wire, so plain http
+  // from another machine is no obstacle (the transport gate only ever guards a typed one).
+  const stored = { has: () => true, get: (k) => (k === "u@s1.lan:22" ? "stored-hunter" : null), set: () => {}, delete: () => false };
+  await withApp({ remoteAddr: "192.168.1.20", vault: stored, run }, async (base) => {
+    await fetch(`${base}/sparks/s1/updates/check`, json({}));
+    const started = await fetch(`${base}/sparks/s1/updates/install`, json({}));
+    assert.equal(started.status, 202, "no password in the body: nothing to refuse");
+    await new Promise((r) => setTimeout(r, 20)); // the route answers 202 before the unit has been touched
+    const install = calls.inputs.filter((c) => c.name === "install").pop();
+    assert.equal(install.input, "stored-hunter", "the unit was upgraded on the remembered password");
+  });
+
+  // Forgetting asks the shared vault for the unit's account.
+  await withApp({ vault, run }, async (base) => {
+    const gone = await fetch(`${base}/sparks/s1/updates/sudo-password`, { method: "DELETE" });
+    assert.equal(gone.status, 200);
+    assert.deepEqual(await gone.json(), { success: true, forgotten: true });
+    assert.deepEqual(calls.delete, ["u@s1.lan:22"]);
+  });
 });

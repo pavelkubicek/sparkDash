@@ -1,6 +1,7 @@
 /**
  * The Updates page's server side: per-Spark state of what could be upgraded (apt + firmware),
- * sudo-free daily checks, one-time-sudo-password installs, and the DGX Dashboard service switch.
+ * sudo-free daily checks, installs with a one-time sudo password or the one remembered for the
+ * unit's account, and the DGX Dashboard service switch.
  *
  * Transport is the GpuClockManager pattern (server/gpuclock/GpuClockManager.js): the program text
  * travels base64-encoded (`echo b64 | base64 -d | sh`), a sudo password — when the action has one —
@@ -8,8 +9,10 @@
  * mount namespace). It is never part of an argv and never logged, and it is stripped from any
  * message that might echo it. The one authorized exception is a password the person chose to
  * remember: encrypted at rest in the shared sudo vault (server/storage/sudoVault.js, keyed by the
- * account key of util/sudoPasswordGuard.js), used only by the daily index refresh and remembered
- * actions, and never sent back to the browser. Wrong guesses are braked by the shared
+ * account key of util/sudoPasswordGuard.js), used by the daily index refresh and by every elevated
+ * action the page starts without typing one, and never sent back to the browser — the same deal the
+ * Storage Manager makes with the one vault both features share. A remembered password sudo stops
+ * accepting is dropped, so the page asks again. Wrong guesses are braked by the shared
  * SudoPasswordGuard, keyed user@host:port.
  */
 import { execFile } from "node:child_process";
@@ -188,6 +191,7 @@ export class UpdateManager {
       checkedAt: st.checkedAt,
       index: { refreshedAt: st.index.refreshedAt },
       indexAutoRefresh: this._vault?.has(sudoAccountKey(spark)) ? "stored-password" : "check-only",
+      sudoSaved: Boolean(this._vault?.has(sudoAccountKey(spark))),
       apt: st.apt.map((r) => ({ ...r })),
       sim: { upgrades: st.sim.upgrades, kept: st.sim.kept, removals: [...st.sim.removals] },
       firmware: { count: st.firmware.count, devices: st.firmware.devices ? st.firmware.devices.map((d) => ({ ...d })) : null },
@@ -212,6 +216,7 @@ export class UpdateManager {
         firmwareRebootNeeded: st.firmwareRebootNeeded === true,
         checkedAt: st.checkedAt,
         indexAutoRefresh: this._vault?.has(sudoAccountKey(s)) ? "stored-password" : "check-only",
+        sudoSaved: Boolean(this._vault?.has(sudoAccountKey(s))),
       };
     });
     const anyUpgradable = sparks.some((s) => s.online && (s.aptCount > 0 || s.fwCount > 0));
@@ -331,17 +336,76 @@ export class UpdateManager {
     }
   }
 
+  /** The password remembered for this unit's account, as credentials that say where they came from. */
+  _vaultCreds(spark) {
+    const saved = this._vault?.get(sudoAccountKey(spark)) ?? null;
+    return saved != null ? { password: saved, fromVault: true } : { password: null, fromVault: false };
+  }
+
+  /**
+   * Credentials for an action on one unit: what was typed for it wins (the person just gave it for
+   * this unit), the remembered password stands in when nothing was typed — that is what makes the
+   * tick box worth ticking: the next install needs no typing.
+   */
+  _credsFor(spark, typed) {
+    return typed != null ? { password: typed, fromVault: false } : this._vaultCreds(spark);
+  }
+
+  /**
+   * Credentials for one unit of a fleet run: the unit keeps its own remembered password (a fleet
+   * password typed for the run is one guess for five machines), what was typed covers the rest.
+   */
+  _fleetCredsFor(spark, typed) {
+    const saved = this._vaultCreds(spark);
+    return saved.password != null ? saved : { password: typed ?? null, fromVault: false };
+  }
+
+  /** A remembered password sudo no longer accepts is dropped, so the page asks for a fresh one. */
+  _forgetPassword(spark) {
+    try {
+      this._vault?.delete(sudoAccountKey(spark));
+    } catch (err) {
+      console.error(`[updates] Could not forget the sudo password: ${err.message}`);
+    }
+  }
+
+  /**
+   * What a program's answer says about the sudo password it ran with, shared by every elevated
+   * action. A refusal counts against the brute-force brake (and drops a remembered password nobody
+   * typed); anything sudo let through — the program answering at all, `no-sudo` excepted, which is
+   * sudo refusing the request rather than the password — proves it was accepted, which is the one
+   * moment a typed password may be remembered. A truncated or noise-only answer proves nothing.
+   */
+  _settlePassword(spark, res, { password = null, fromVault = false, remember = false } = {}) {
+    if (password == null) return;
+    if (res.CODE === "bad-password") {
+      this._notePassword(spark, true);
+      if (fromVault) this._forgetPassword(spark);
+      return;
+    }
+    if (res.CODE === "no-sudo" || (res.RESULT !== "ok" && res.RESULT !== "error")) return;
+    this._notePassword(spark, false);
+    if (remember && !fromVault) this._rememberPassword(spark, password);
+  }
+
+  /** Drop the remembered sudo password for this unit's account (the page's Forget button). */
+  forgetSudo(spark) {
+    this._assert(spark);
+    return { forgotten: Boolean(this._vault?.delete(sudoAccountKey(spark))) };
+  }
+
   /**
    * The refresh program itself: apt-get update ×3 + fwupdmgr refresh, then the fresh check merged
    * into the unit's state. The caller holds the unit's busy lock and ran the password-lock check;
-   * the route path and the daily tick share this core. Throws on transport and program errors.
+   * the route path, the fleet loop and the daily tick share this core. Throws on transport and program errors.
    */
-  async _runRefresh(spark, sudoPassword) {
+  async _runRefresh(spark, creds = { password: null, fromVault: false }, { remember = false } = {}) {
     const st = this._state(spark.id);
+    const { password, fromVault } = creds;
     st.state = "checking";
     let res;
     try {
-      res = await this._exec(spark, buildProgram("refresh", { password: sudoPassword != null }), REFRESH_TIMEOUT_MS, sudoPassword);
+      res = await this._exec(spark, buildProgram("refresh", { password: password != null }), REFRESH_TIMEOUT_MS, password);
     } catch (err) {
       st.state = "error";
       st.lastError = err.message;
@@ -350,10 +414,10 @@ export class UpdateManager {
     if (res.RESULT !== "ok") {
       st.state = "error";
       st.lastError = res.MSG || "the refresh failed on the unit";
-      if (res.CODE === "bad-password") this._notePassword(spark, true);
+      this._settlePassword(spark, res, { password, fromVault, remember });
       throw this._fail(res);
     }
-    this._notePassword(spark, false);
+    this._settlePassword(spark, res, { password, fromVault, remember });
     const errs = this._applyCheck(st, res);
     if (res.REFRESH_ERR) errs.unshift(res.REFRESH_ERR);
     st.state = "ok";
@@ -362,16 +426,19 @@ export class UpdateManager {
     return res;
   }
 
-  /** Sudo index refresh (apt-get update ×3 + fwupdmgr refresh), then the fresh check. `remember`: keep an accepted password in the shared vault. */
+  /**
+   * Sudo index refresh (apt-get update ×3 + fwupdmgr refresh), then the fresh check. `sudoPassword`
+   * null falls back to the password remembered for the unit's account; `remember` keeps an accepted
+   * password in the shared vault, so the next action — and the daily refresh — needs no typing.
+   */
   async refresh(spark, { sudoPassword = null, remember = false } = {}) {
     this._assert(spark);
     this._refuseBusy(spark);
-    if (sudoPassword != null) this._checkPasswordLock(spark);
+    const creds = this._credsFor(spark, sudoPassword);
+    if (creds.password != null) this._checkPasswordLock(spark);
     this._busy.add(spark.id);
     try {
-      const res = await this._runRefresh(spark, sudoPassword);
-      // Sudo accepted the password — that is the moment worth remembering; a later apt failure is no password fault.
-      if (remember) this._rememberPassword(spark, sudoPassword);
+      const res = await this._runRefresh(spark, creds, { remember });
       if (res.REFRESH_ERR) {
         // The index itself could not be brought up to date — say so, even though the check ran.
         throw httpError(502, res.REFRESH_ERR, "apt-update-failed");
@@ -385,16 +452,15 @@ export class UpdateManager {
   // ─── install jobs ───────────────────────────────────────
 
   /** The install program's answer → job phases + refreshed unit state. Throws on program errors. */
-  async _runInstallProgram(spark, password) {
+  async _runInstallProgram(spark, creds) {
+    const { password } = creds;
     const res = await this._exec(spark, buildProgram("install", { password: password != null }), INSTALL_TIMEOUT_MS, password);
     return res;
   }
 
-  _settleInstallResult(spark, job, res) {
+  _settleInstallResult(spark, job, res, creds = { password: null, fromVault: false }, remember = false) {
+    this._settlePassword(spark, res, { ...creds, remember });
     if (res.RESULT !== "ok") {
-      // A wrong password counts against the guard; any other program error means sudo itself
-      // was fine and clears the account's count.
-      this._notePassword(spark, res.CODE === "bad-password");
       job.state = "error";
       job.error = res.MSG || "the unit refused the upgrade";
       job.code = res.CODE || "install-failed";
@@ -406,7 +472,6 @@ export class UpdateManager {
       }
       return { ok: false, code: job.code };
     }
-    this._notePassword(spark, false);
     const aptPhase = job.phases.find((p) => p.key === "apt");
     aptPhase.state = "done";
     aptPhase.note = res.LAST ? `last: ${res.LAST}` : "all packages up to date";
@@ -437,8 +502,10 @@ export class UpdateManager {
   /**
    * Start the install job for one unit. Removals the last simulation showed gate the run:
    * until the page confirms them, this is a 409 `needs_confirmation` carrying the list.
+   * `sudoPassword` null falls back to the password remembered for the unit's account; `remember`
+   * keeps a typed one once sudo has accepted it.
    */
-  install(spark, { sudoPassword = null, confirmRemovals = false } = {}) {
+  install(spark, { sudoPassword = null, confirmRemovals = false, remember = false } = {}) {
     this._assert(spark);
     this._refuseBusy(spark);
     // The fleet loop has claimed this unit but not reached it yet: it belongs to the fleet job.
@@ -458,7 +525,8 @@ export class UpdateManager {
       err.removals = [...st.sim.removals];
       throw err;
     }
-    if (sudoPassword != null) this._checkPasswordLock(spark);
+    const creds = this._credsFor(spark, sudoPassword);
+    if (creds.password != null) this._checkPasswordLock(spark);
     const job = {
       id: randomUUID(),
       sparkId: spark.id,
@@ -475,14 +543,14 @@ export class UpdateManager {
     this._jobs.set(spark.id, job);
     this._busy.add(spark.id);
     // The job survives the page closing: it runs here, not in a tab.
-    void this._executeInstall(spark, job, sudoPassword);
+    void this._executeInstall(spark, job, creds, remember);
     return { jobId: job.id };
   }
 
-  async _executeInstall(spark, job, password) {
+  async _executeInstall(spark, job, creds, remember) {
     try {
-      const res = await this._runInstallProgram(spark, password);
-      this._settleInstallResult(spark, job, res);
+      const res = await this._runInstallProgram(spark, creds);
+      this._settleInstallResult(spark, job, res, creds, remember);
     } catch (err) {
       // Transport failure (or a refused program): name it on the job, keep the last state.
       const st = this._state(spark.id);
@@ -516,7 +584,7 @@ export class UpdateManager {
    * removals answer `needs_confirmation` (the same list the per-unit route gates on) and the
    * job carries on with the others; offline and busy units are skipped, not errors.
    */
-  installAll({ sudoPassword = null } = {}) {
+  installAll({ sudoPassword = null, remember = false } = {}) {
     if (this._fleetJob && this._fleetJob.state === "running") {
       throw httpError(409, "A fleet update job is already running", "already-running");
     }
@@ -527,11 +595,11 @@ export class UpdateManager {
     }));
     const job = { id: randomUUID(), mode: "install", state: "running", startedAt: this._now(), finishedAt: null, units };
     this._fleetJob = job;
-    void this._executeInstallAll(job, sudoPassword);
+    void this._executeInstallAll(job, sudoPassword, remember);
     return { jobId: job.id };
   }
 
-  async _executeInstallAll(job, password) {
+  async _executeInstallAll(job, typedPassword, remember) {
     for (const row of job.units) {
       const spark = (this._listSparks() ?? []).find((s) => s && s.id === row.sparkId);
       if (!spark || !this._isOnline(row.sparkId)) {
@@ -564,16 +632,17 @@ export class UpdateManager {
       }
       row.state = "running";
       this._busy.add(row.sparkId);
+      // Nothing remembered and nothing typed: the unit's own sudo gate answers no-sudo.
+      const creds = this._fleetCredsFor(spark, typedPassword);
       try {
-        const res = await this._runInstallProgram(spark, password);
+        const res = await this._runInstallProgram(spark, creds);
+        this._settlePassword(spark, res, { ...creds, remember });
         if (res.RESULT !== "ok") {
-          if (res.CODE === "bad-password") this._notePassword(spark, true);
           row.state = "error";
           row.error = res.MSG || "the unit refused the upgrade";
           row.code = res.CODE || "install-failed";
           continue;
         }
-        this._notePassword(spark, false);
         const errs = this._applyCheck(st, res);
         st.state = "ok";
         st.checkedAt = this._now();
@@ -614,7 +683,7 @@ export class UpdateManager {
     return { jobId: job.id };
   }
 
-  async _executeRefreshAll(job, password, remember) {
+  async _executeRefreshAll(job, typedPassword, remember) {
     for (const row of job.units) {
       const spark = (this._listSparks() ?? []).find((s) => s && s.id === row.sparkId);
       if (!spark || !this._isOnline(row.sparkId)) {
@@ -635,11 +704,11 @@ export class UpdateManager {
       }
       row.state = "running";
       this._busy.add(row.sparkId);
+      const creds = this._fleetCredsFor(spark, typedPassword);
       try {
-        // A refresh needs no prior check: it answers with its own fresh state.
-        const res = await this._runRefresh(spark, password);
-        // Sudo accepted: remember it for the unit's account when asked (same moment as the route path).
-        if (remember) this._rememberPassword(spark, password);
+        // A refresh needs no prior check: it answers with its own fresh state. Remember an accepted
+        // typed password for the unit's account (same moment as the route path).
+        const res = await this._runRefresh(spark, creds, { remember });
         if (res.REFRESH_ERR) {
           // sudo passed and the check ran, but the index itself could not be brought up to date.
           row.state = "error";
@@ -685,25 +754,26 @@ export class UpdateManager {
     return { units: parseDashboard(res), now: this._now() };
   }
 
-  /** `systemctl disable --now` / `enable --now` both units, then answer with the truth. */
-  async setDashboardService(spark, { enabled, sudoPassword = null } = {}) {
+  /**
+   * `systemctl disable --now` / `enable --now` both units, then answer with the truth. `sudoPassword`
+   * null falls back to the password remembered for the unit's account; `remember` keeps a typed one.
+   */
+  async setDashboardService(spark, { enabled, sudoPassword = null, remember = false } = {}) {
     this._assert(spark);
     if (typeof enabled !== "boolean") throw httpError(400, "enabled must be true or false");
     this._refuseBusy(spark);
-    if (sudoPassword != null) this._checkPasswordLock(spark);
+    const creds = this._credsFor(spark, sudoPassword);
+    if (creds.password != null) this._checkPasswordLock(spark);
     this._busy.add(spark.id);
     try {
       const res = await this._exec(
         spark,
-        buildProgram("dashboard", { args: [enabled ? "on" : "off"], elevate: true, password: sudoPassword != null }),
+        buildProgram("dashboard", { args: [enabled ? "on" : "off"], elevate: true, password: creds.password != null }),
         DASHBOARD_TIMEOUT_MS,
-        sudoPassword
+        creds.password
       );
-      if (res.RESULT !== "ok") {
-        if (res.CODE === "bad-password") this._notePassword(spark, true);
-        throw this._fail(res);
-      }
-      this._notePassword(spark, false);
+      this._settlePassword(spark, res, { ...creds, remember });
+      if (res.RESULT !== "ok") throw this._fail(res);
       return { units: parseDashboard(res), now: this._now() };
     } finally {
       this._busy.delete(spark.id);
@@ -802,12 +872,11 @@ export class UpdateManager {
         this._checkNow(unit).catch(() => {}).finally(() => this._busy.delete(unit.id));
         continue;
       }
-      this._runRefresh(unit, stored)
+      this._runRefresh(unit, { password: stored, fromVault: true })
         .catch((err) => {
           if (err?.code !== "bad-password") return; // any other failure keeps its error state: never a healthy guess
-          // sudo no longer accepts the remembered password: drop it (the wrong guess is already on
-          // the guard from _runRefresh) and still take the day's data with the sudo-free check.
-          this._vault?.delete(sudoAccountKey(unit));
+          // sudo no longer accepts the remembered password: _runRefresh dropped the entry (and put the
+          // wrong guess on the guard); still take the day's data with the sudo-free check.
           return this._checkNow(unit).catch(() => {});
         })
         .finally(() => this._busy.delete(unit.id));

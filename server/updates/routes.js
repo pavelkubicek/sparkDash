@@ -83,7 +83,8 @@ export function registerUpdatesRoutes(app, { manager, registry, recordEvent = ()
     })
   );
 
-  // sudo apt-get update (three tries) + fwupdmgr refresh, then the check. Password used once.
+  // sudo apt-get update (three tries) + fwupdmgr refresh, then the check. A typed password is used once;
+  // with none in the body the dashboard falls back to the one remembered for the unit's account.
   app.post(
     "/api/sparks/:id/updates/refresh",
     handle(async (spark, req, res) => {
@@ -94,14 +95,15 @@ export function registerUpdatesRoutes(app, { manager, registry, recordEvent = ()
     })
   );
 
-  // Start the install job. Removals the last simulation showed are gated until confirmed.
+  // Start the install job. No sudoPassword in the body: the dashboard uses the one remembered for the
+  // unit's account, if any. Removals the last simulation showed are gated until confirmed.
   app.post(
     "/api/sparks/:id/updates/install",
     handle(async (spark, req, res) => {
       if (!allowChange(req)) return rejectLimited(res, "Too many update requests, try again in a minute");
       if (refuseInsecurePassword(req, res)) return;
       const sudoPassword = parseSudoPassword(req.body?.sudoPassword);
-      const started = manager.install(spark, { sudoPassword, confirmRemovals: req.body?.confirmRemovals === true });
+      const started = manager.install(spark, { sudoPassword, confirmRemovals: req.body?.confirmRemovals === true, remember: req.body?.remember === true });
       recordEvent({ type: "updates.install", severity: "info", message: `Started the software update on ${name(spark)}` });
       res.status(202).json(started);
     })
@@ -115,14 +117,15 @@ export function registerUpdatesRoutes(app, { manager, registry, recordEvent = ()
     })
   );
 
-  // The fleet job: every Linux Spark unit, one at a time, the same sudo password used once per unit.
+  // The fleet job: every Linux Spark unit, one at a time. A unit with a remembered password keeps it;
+  // a typed password covers the units that have none.
   app.post(
     "/api/updates/install-all",
     handleGlobal(async (req, res) => {
       if (!allowChange(req)) return rejectLimited(res, "Too many update requests, try again in a minute");
       if (refuseInsecurePassword(req, res)) return;
       const sudoPassword = parseSudoPassword(req.body?.sudoPassword);
-      const started = manager.installAll({ sudoPassword });
+      const started = manager.installAll({ sudoPassword, remember: req.body?.remember === true });
       recordEvent({ type: "updates.install-all", severity: "info", message: "Started the software update on all Sparks" });
       res.status(202).json(started);
     })
@@ -149,6 +152,16 @@ export function registerUpdatesRoutes(app, { manager, registry, recordEvent = ()
     })
   );
 
+  // Forget the sudo password the dashboard remembers for this unit's account (the vault is shared with
+  // the Storage Manager, so this forgets it for both).
+  app.delete(
+    "/api/sparks/:id/updates/sudo-password",
+    handle(async (spark, req, res) => {
+      if (!allowChange(req)) return rejectLimited(res, "Too many update requests, try again in a minute");
+      res.json({ success: true, ...manager.forgetSudo(spark) });
+    })
+  );
+
   // The DGX Dashboard services: status unprivileged; on/off needs the administrator password.
   app.get(
     "/api/sparks/:id/updates/dashboard-service",
@@ -169,7 +182,7 @@ export function registerUpdatesRoutes(app, { manager, registry, recordEvent = ()
         return res.status(400).json({ error: "enabled must be true or false" });
       }
       const enabled = req.body.enabled;
-      const out = await manager.setDashboardService(spark, { enabled, sudoPassword });
+      const out = await manager.setDashboardService(spark, { enabled, sudoPassword, remember: req.body?.remember === true });
       recordEvent({
         type: "updates.dashboard-service",
         severity: "info",

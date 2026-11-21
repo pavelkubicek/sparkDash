@@ -65,7 +65,13 @@ function makeStubs(extraEnv = {}) {
   stub("apt", 'if [ "$1" = list ]; then printf "%s\\n" "$STUB_APT_LIST"; fi; exit "${STUB_APT_RC:-0}"');
   stub("apt-get", [
     'if [ "$1" = -s ] || [ "$2" = -s ]; then printf "%s\\n" "$STUB_SIM"; exit "${STUB_SIM_RC:-0}"; fi',
-    'if [ "$1" = update ]; then echo update >> "${STUB_APT_GET_LOG:-/dev/null}"; exit "${STUB_APT_UPDATE_RC:-0}"; fi',
+    'if [ "$1" = update ]; then',
+    '  echo update >> "${STUB_APT_GET_LOG:-/dev/null}"',
+    '  [ -z "${STUB_APT_UPDATE_ERR:-}" ] || printf "%s\\n" "$STUB_APT_UPDATE_ERR" >&2',
+    '  ALLOWED=""; for a in "$@"; do case "$a" in *AllowReleaseInfoChange*) ALLOWED=1;; esac; done',
+    '  if [ "${ALLOWED:-}" = 1 ] && [ "${STUB_APT_UPDATE_ALLOW_OK:-0}" = 1 ]; then exit 0; fi',
+    '  exit "${STUB_APT_UPDATE_RC:-0}"',
+    "fi",
     "exit 0",
   ].join("\n"));
   if (!extraEnv.STUB_NO_FW) {
@@ -222,6 +228,81 @@ test("check.sh: no devices and fwupd exit 2, missing fwupdmgr, reboot flag from 
   assert.equal(parseKv(spaced).FWREBOOT, "1");
 });
 
+test("check.sh counts what fwupd 2.x offers: Releases with a newer version, not just VersionUpgrade", async () => {
+  // The fleet's real payload shape, taken from a Spark's `fwupdmgr get-updates --json`. fwupd 2.0.x
+  // pretty-prints (one field per line, spaces around the colon) and leaves VersionUpgrade out, so the
+  // old parser — one line per device, VersionUpgrade required — answered count 0 for every machine
+  // while a Dell BIOS and a Critical PD-FW upgrade sat in the output.
+  const PRETTY = `{
+  "Devices" : [
+    {
+      "Name" : "Embedded Controller",
+      "DeviceId" : "da8b80164e924b8eea07413b35ee413e529aeb21",
+      "Guid" : [
+        "78c7f535-9b96-43c8-8e4c-84415507151c"
+      ],
+      "Flags" : [
+        "internal",
+        "updatable",
+        "needs-reboot"
+      ],
+      "Version" : "0x02000c00",
+      "VersionFormat" : "hex",
+      "Created" : 1794819273,
+      "UpdateState" : 2,
+      "Releases" : [
+        {
+          "AppstreamId" : "com.dell.uefi78c7f535.firmware",
+          "Name" : "Pro Max Desktop with GB10 FCM1253",
+          "Summary" : "BIOS update",
+          "Version" : "0x02000d00",
+          "Filename" : "bios.cab",
+          "Urgency" : "critical"
+        }
+      ]
+    },
+    {
+      "Name" : "UEFI Device Firmware",
+      "DeviceId" : "9f6a3a2e3a3b",
+      "Version" : "0x00000516",
+      "UpdateState" : 2,
+      "Releases" : [
+        {
+          "Name" : "Pro Max Desktop with GB10 FCM1253 USB-C PD FW",
+          "Version" : "0x00000519"
+        }
+      ]
+    },
+    {
+      "Name" : "BG7 KIOXIA 1024GB",
+      "DeviceId" : "7de5ffdca08fa52d95fd4bb42aa5d07a4b35d2dd",
+      "Version" : "12300103",
+      "UpdateState" : 2,
+      "Releases" : [
+        {
+          "Name" : "BG7 FW 12300103",
+          "Version" : "12300103"
+        }
+      ]
+    }
+  ]
+}`;
+  const base = { STUB_APT_LIST: "Listing...\n", STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded." };
+  const res = parseKv(await runShell(buildProgram("check"), { ...base, STUB_FW_JSON: PRETTY, STUB_FW_RC: "2", STUB_FW_DEVICES: '{"Devices":[]}' }));
+  assert.equal(res.RESULT, "ok");
+  assert.equal(res.FW_STATE, "ok");
+  const fw = parseFirmware("ok", res.FW_B64);
+  assert.equal(fw.count, 2, "the two devices with a newer release, the reinstall offer left out");
+  assert.deepEqual(fw.devices, [
+    { name: "Embedded Controller", current: "0x02000c00", available: "0x02000d00" },
+    { name: "UEFI Device Firmware", current: "0x00000516", available: "0x00000519" },
+  ]);
+
+  // A pretty-printed answer with nothing offered is still nothing — no phantom upgrades.
+  const none = parseKv(await runShell(buildProgram("check"), { ...base, STUB_FW_JSON: '{\n  "Devices" : []\n}', STUB_FW_RC: "2", STUB_FW_DEVICES: '{"Devices":[]}' }));
+  assert.deepEqual(parseFirmware("ok", none.FW_B64), { count: 0, devices: [] });
+});
+
 test("refresh.sh tries apt-get update at most three times and reports honestly", async () => {
   const base = {
     STUB_APT_LIST: "Listing...\n",
@@ -241,6 +322,48 @@ test("refresh.sh tries apt-get update at most three times and reports honestly",
   assert.equal(r2.RESULT, "ok", "a failed index still answers with the fresh check");
   assert.ok(r2.REFRESH_ERR && !("REFRESHED" in r2));
   assert.equal(fs.readFileSync(log2, "utf8").trim().split("\n").length, 3, "exactly three tries");
+});
+
+test("refresh.sh lets a repository that changed its Release metadata through, and names apt's real complaint", async () => {
+  const base = {
+    STUB_APT_LIST: "Listing...\n",
+    STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+    STUB_FW_RC: "2",
+    STUB_FW_JSON: "{}",
+  };
+  // The real spark1 case: a PPA renamed its Label, which apt refuses as a hard error, so every
+  // plain retry failed identically. One try with the change allowed brings the index up.
+  const changed =
+    "E: Repository 'https://ppa.launchpadcontent.net/ondrej/php/ubuntu noble InRelease' changed its 'Label' value from 'PPA for PHP' to 'PPA for PHP (deprecated)'";
+  const log = path.join(tmp, `upd-rel-${Math.random().toString(36).slice(2)}`);
+  const r = parseKv(
+    await runShell(buildProgram("refresh"), {
+      ...base,
+      STUB_APT_UPDATE_RC: "100",
+      STUB_APT_UPDATE_ALLOW_OK: "1",
+      STUB_APT_UPDATE_ERR: changed,
+      STUB_APT_GET_LOG: log,
+    })
+  );
+  assert.equal(r.RESULT, "ok");
+  assert.equal(r.REFRESHED, "ok", "the index came up: the third plain refusal was not the last word");
+  assert.equal(fs.readFileSync(log, "utf8").trim().split("\n").length, 4, "three plain tries, then one with the change allowed");
+
+  // An unrelated failure is not answered by relaxing anything: three tries, and the unit's own
+  // E: line is what the page gets to read (not the bare "failed after 3 tries").
+  const log2 = path.join(tmp, `upd-net-${Math.random().toString(36).slice(2)}`);
+  const r2 = parseKv(
+    await runShell(buildProgram("refresh"), {
+      ...base,
+      STUB_APT_UPDATE_RC: "100",
+      STUB_APT_UPDATE_ALLOW_OK: "1",
+      STUB_APT_UPDATE_ERR: "E: Failed to fetch http://ports.ubuntu.com/ubuntu-ports/dists/noble/InRelease  Temporary failure resolving 'ports.ubuntu.com'",
+      STUB_APT_GET_LOG: log2,
+    })
+  );
+  assert.equal(r2.RESULT, "ok", "the check still runs and answers even when the index did not");
+  assert.match(r2.REFRESH_ERR, /Failed to fetch http:\/\/ports\.ubuntu\.com\/ubuntu-ports/, "the reason the person needs is in the message");
+  assert.equal(fs.readFileSync(log2, "utf8").trim().split("\n").length, 3, "nothing is relaxed for an error that is not a metadata change");
 });
 
 test("refresh.sh marks the success stamp after a successful update, never after a failed one", async () => {
@@ -427,6 +550,7 @@ test("check fills the detail shape exactly as the contract lists it", async () =
     "sim",
     "sparkId",
     "state",
+    "sudoSaved",
   ]);
   assert.equal(d.state, "ok");
   assert.equal(d.sparkId, "s1");
@@ -993,6 +1117,125 @@ test("remember stores only when sudo accepted the password", async () => {
   } finally {
     console.error = orig;
   }
+});
+
+test("an action with nothing typed runs on the password remembered for the account", async () => {
+  // The point of the tick box: the next install needs no typing at all.
+  const calls = [];
+  const vault = fakeVault({ "u@s1.lan:22": "stored-hunter" });
+  const m = new UpdateManager({
+    run: async (s, program, opts) => {
+      calls.push({ program, input: opts?.input });
+      if (program.includes("sparkdash-updates:install")) return "STEP=apt\nSTEP=firmware\nFWUP=none\n" + checkLines({});
+      if (program.includes("sparkdash-updates:dashboard")) return "RESULT=ok\nD1_ENABLED=enabled\nD1_ACTIVE=active\nD2_ENABLED=enabled\nD2_ACTIVE=inactive\n";
+      return checkLines({});
+    },
+    now: () => 5,
+    listSparks: () => [spark("s1")],
+    isOnline: () => true,
+    getSettings: () => ({}),
+    vault,
+  });
+  const s1 = spark("s1");
+  await m.check(s1);
+  m.install(s1, {});
+  await m.settled();
+  const install = calls.find((c) => c.program.includes("sparkdash-updates:install"));
+  assert.equal(install.input, "stored-hunter", "the remembered password is the one sent");
+  assert.ok(install.program.includes("spw_sudo"), "and the program elevates with it");
+  assert.equal(m.job(s1).job.state, "done");
+  assert.deepEqual(vault.calls.set, [], "a password already remembered is not stored again");
+
+  // The DGX Dashboard switch is the same action with the same deal.
+  await m.setDashboardService(s1, { enabled: false });
+  const dash = calls.find((c) => c.program.includes("sparkdash-updates:dashboard"));
+  assert.equal(dash.input, "stored-hunter");
+
+  // A typed password is what the person just gave for this unit: it wins, and what they typed for the
+  // run is never written to the vault unless the box was ticked.
+  m.install(s1, { sudoPassword: "typed-hunter" });
+  await m.settled();
+  assert.equal(calls.filter((c) => c.program.includes("sparkdash-updates:install"))[1].input, "typed-hunter");
+  assert.deepEqual(vault.calls.set, []);
+  m.install(s1, { sudoPassword: "typed-hunter", remember: true });
+  await m.settled();
+  assert.deepEqual(vault.calls.set, [["u@s1.lan:22", "typed-hunter"]], "ticked, an accepted password is kept");
+});
+
+test("a remembered password the unit stops accepting is dropped by the action that tried it", async () => {
+  const vault = fakeVault({ "u@s1.lan:22": "stale-hunter" });
+  const calls = [];
+  let refused = true;
+  const m = new UpdateManager({
+    run: async (s, program, opts) => {
+      calls.push({ program, input: opts?.input });
+      if (program.includes("sparkdash-updates:install")) {
+        return refused
+          ? "RESULT=error\nCODE=bad-password\nMSG=The sudo password was not accepted\n"
+          : "STEP=apt\nSTEP=firmware\nFWUP=none\n" + checkLines({});
+      }
+      return checkLines({});
+    },
+    now: () => 5,
+    listSparks: () => [spark("s1")],
+    isOnline: () => true,
+    getSettings: () => ({}),
+    vault,
+  });
+  const s1 = spark("s1");
+  await m.check(s1);
+  m.install(s1, {});
+  await m.settled();
+  assert.deepEqual(vault.calls.delete, ["u@s1.lan:22"], "the stale entry goes, so the page asks again");
+  assert.equal(m.job(s1).job.code, "bad-password");
+  assert.equal(m.detail(s1).sudoSaved, false, "and the unit reads as needing a typed password");
+  assert.equal(m._pwGuard._fails.get("u@s1.lan:22").n, 1, "the guess counts once against the brake, nobody's fault notwithstanding");
+
+  // Nothing remembered any more: the next action goes sudo-free and the unit's own gate answers, so the
+  // page has to ask for a password rather than fail on a stale one.
+  refused = false;
+  await m.refresh(s1, {});
+  const free = calls[calls.length - 1];
+  assert.equal(free.input ?? null, null, "no password, remembered or otherwise, rides along");
+  assert.ok(!free.program.includes("spw_sudo"), "and the program does not try to use one");
+});
+
+test("a fleet run keeps each unit's own remembered password, the typed one covering the rest", async () => {
+  const units = [spark("a"), spark("b")];
+  const calls = [];
+  const vault = fakeVault({ "u@a.lan:22": "a-own-pw" });
+  const m = new UpdateManager({
+    run: async (s, program, opts) => {
+      calls.push({ id: s.id, program, input: opts?.input });
+      if (program.includes("sparkdash-updates:install")) return "STEP=apt\nSTEP=firmware\nFWUP=none\n" + checkLines({});
+      return checkLines({});
+    },
+    now: () => 5,
+    listSparks: () => units,
+    isOnline: () => true,
+    getSettings: () => ({}),
+    vault,
+  });
+  await m.check(spark("a"));
+  await m.check(spark("b"));
+  m.installAll({ sudoPassword: "fleet-pw", remember: true });
+  while (m.fleetJob().job?.state !== "done") await new Promise((r) => setTimeout(r, 5));
+  const installs = calls.filter((c) => c.program.includes("sparkdash-updates:install"));
+  assert.deepEqual(installs.map((c) => [c.id, c.input]), [["a", "a-own-pw"], ["b", "fleet-pw"]], "a unit with its own password is not guessed at with the fleet's");
+  assert.deepEqual(vault.calls.set, [["u@b.lan:22", "fleet-pw"]], "only the unit that had none learns the new one");
+});
+
+test("detail and summary say a password is remembered for the account, and Forget drops it", async () => {
+  const vault = fakeVault({ "u@a.lan:22": "stored" });
+  const m = new UpdateManager({ run: async () => checkLines({}), now: () => 5, listSparks: () => [spark("a")], isOnline: () => true, getSettings: () => ({}), vault });
+  assert.equal(m.detail(spark("a")).sudoSaved, true);
+  assert.equal(m.summary().sparks[0].sudoSaved, true);
+  // A second entry for the same machine sees the same password (the account key, not the id).
+  assert.equal(m.detail(spark("a", { id: "a-alias", name: "alias", ssh: { user: "u", host: "a.lan", port: 22 } })).sudoSaved, true);
+  assert.deepEqual(m.forgetSudo(spark("a")), { forgotten: true });
+  assert.deepEqual(vault.calls.delete, ["u@a.lan:22"]);
+  assert.equal(m.detail(spark("a")).sudoSaved, false);
+  assert.deepEqual(m.forgetSudo(spark("a")), { forgotten: false }, "forgetting nothing says so, without an error");
 });
 
 test("refresh-all walks the fleet with installAll's outcome semantics, in refresh mode", async () => {

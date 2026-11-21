@@ -1055,20 +1055,23 @@ export function checkSparkUpdates(id: string): Promise<SparkUpdateDetail> {
 }
 
 /**
- * sudo index refresh (apt-get update + fwupdmgr refresh) and a re-check. The password is used for this
- * call; `remember` (from the dialog's tick box) additionally asks the server to store it for the daily refresh.
+ * sudo index refresh (apt-get update + fwupdmgr refresh) and a re-check. A typed password is used for this
+ * call only; `remember` (the dialog's tick box) additionally asks the server to store it. With no password
+ * the server uses the one it remembers for the unit's account, so an empty call is the normal case once
+ * the password has been remembered.
  */
-export function refreshSparkUpdates(id: string, sudoPassword: string, remember?: boolean): Promise<SparkUpdateDetail> {
+export function refreshSparkUpdates(id: string, sudoPassword?: string, remember?: boolean): Promise<SparkUpdateDetail> {
   return apiFetch(updatesUrl(id, "/refresh"), { method: "POST", body: JSON.stringify({ sudoPassword, remember }) });
 }
 
 /**
- * Start the install job on the unit. 409 unit-busy when a job runs; 409 needs_confirmation (with the
- * removals on the error body) when the dry-run wants to remove packages and `confirmRemovals` is not true.
+ * Start the install job on the unit. No `sudoPassword`: the dashboard uses the one remembered for the
+ * unit's account. 409 unit-busy when a job runs; 409 needs_confirmation (with the removals on the error
+ * body) when the dry-run wants to remove packages and `confirmRemovals` is not true.
  */
 export function installSparkUpdates(
   id: string,
-  body: { sudoPassword: string; confirmRemovals?: boolean }
+  body: { sudoPassword?: string; confirmRemovals?: boolean; remember?: boolean }
 ): Promise<{ jobId: string }> {
   return apiFetch(updatesUrl(id, "/install"), { method: "POST", body: JSON.stringify(body) });
 }
@@ -1078,16 +1081,20 @@ export function fetchSparkUpdatesJob(id: string): Promise<{ job: UpdateInstallJo
   return apiFetch(updatesUrl(id, "/job"));
 }
 
-/** Start the fleet install-all job (409 already-running when one runs). The password is used for this call only. */
-export function installAllUpdates(sudoPassword: string): Promise<{ jobId: string }> {
-  return apiFetch("/api/updates/install-all", { method: "POST", body: JSON.stringify({ sudoPassword }) });
+/**
+ * Start the fleet install-all job (409 already-running when one runs). A typed password is used once per
+ * unit that has no password of its own remembered; with none at all every unit runs on its remembered one.
+ */
+export function installAllUpdates(body: { sudoPassword?: string; remember?: boolean } = {}): Promise<{ jobId: string }> {
+  return apiFetch("/api/updates/install-all", { method: "POST", body: JSON.stringify(body) });
 }
 
 /**
  * Start the fleet refresh-all job (409 already-running when one runs): apt-get update + fwupdmgr refresh on
- * each online unit, one after another, never an install. `remember` stores the password for the daily refresh.
+ * each online unit, one after another, never an install. `remember` stores a typed password for the daily
+ * refresh; units with one already remembered keep theirs and need none typed.
  */
-export function refreshAllUpdates(body: { sudoPassword: string; remember?: boolean }): Promise<{ jobId: string }> {
+export function refreshAllUpdates(body: { sudoPassword?: string; remember?: boolean }): Promise<{ jobId: string }> {
   return apiFetch("/api/updates/refresh-all", { method: "POST", body: JSON.stringify(body) });
 }
 
@@ -1101,12 +1108,17 @@ export function fetchDashboardService(id: string): Promise<DashboardServiceStatu
   return apiFetch(updatesUrl(id, "/dashboard-service"));
 }
 
-/** Enable or disable both DGX Dashboard services; answers with the status after applying. */
+/** Enable or disable both DGX Dashboard services; answers with the status after applying. No `sudoPassword`: the remembered one is used. */
 export function setDashboardService(
   id: string,
-  body: { enabled: boolean; sudoPassword: string }
+  body: { enabled: boolean; sudoPassword?: string; remember?: boolean }
 ): Promise<DashboardServiceStatus> {
   return apiFetch(updatesUrl(id, "/dashboard-service"), { method: "POST", body: JSON.stringify(body) });
+}
+
+/** Forget the sudo password the dashboard remembers for this unit's account (shared with the Storage Manager). */
+export function forgetUpdatesSudo(id: string): Promise<{ success: boolean; forgotten: boolean }> {
+  return apiFetch(updatesUrl(id, "/sudo-password"), { method: "DELETE" });
 }
 
 // ─── Hermes update preview ───────────────────────────────

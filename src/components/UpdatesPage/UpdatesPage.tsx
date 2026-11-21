@@ -3,6 +3,7 @@ import {
   ApiError,
   checkSparkUpdates,
   fetchUpdatesSummary,
+  forgetUpdatesSudo,
   installSparkUpdates,
   refreshSparkUpdates,
 } from "../../api/client";
@@ -92,9 +93,10 @@ export function isUpdatesSpark(spark: SparkSnapshot): boolean {
 
 /**
  * Updates: check each DGX Spark and the dashboard's own machine for apt and firmware updates without a
- * password, install what the owner asks for with a one-time sudo password (per unit, or the whole fleet
- * at once), and keep the DGX Dashboard service on or off on the Sparks. The layout follows the Storage
- * Manager; the jobs are the server's, so closing the page never stops one.
+ * password, install what the owner asks for with a sudo password — one-time, or the one remembered
+ * encrypted for the unit's account, which is what makes the second install need no typing (per unit, or
+ * the whole fleet at once) — and keep the DGX Dashboard service on or off on the Sparks. The layout
+ * follows the Storage Manager; the jobs are the server's, so closing the page never stops one.
  */
 export function UpdatesPage({ sparks }: UpdatesPageProps) {
   const candidates = useMemo(() => sparks.filter(isUpdatesSpark), [sparks]);
@@ -183,10 +185,23 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
   const requirePassword = useCallback((request: PasswordRequest) => setPwRequest(request), []);
   const cancelPassword = useCallback(() => setPwRequest(null), []);
 
-  // An install the server sent back for confirmation: the removals and the one-time password kept for
-  // the re-post only, dropped the moment the confirmation dialog closes either way.
-  const [pendingInstall, setPendingInstall] = useState<{ sparkId: string; sparkName: string; password: string; removals: string[] } | null>(null);
+  // An install the server sent back for confirmation: the removals and, when one was typed, the
+  // one-time password kept for the re-post only — dropped the moment the confirmation dialog closes
+  // either way. No password means the unit runs on the one the dashboard remembers.
+  const [pendingInstall, setPendingInstall] = useState<{ sparkId: string; sparkName: string; password: string | null; remember?: boolean; removals: string[] } | null>(null);
   const [installBusy, setInstallBusy] = useState(false);
+
+  /**
+   * Whether the dashboard remembers a sudo password for a unit's account: the server can elevate an
+   * action on it with nothing typed. The open unit answers from its own detail (fresh after an
+   * action), the cards from the summary.
+   */
+  const sudoSavedFor = useCallback(
+    (id: string) =>
+      (id === selectedId ? updates.detail?.sudoSaved : undefined) ??
+      rows.find((r) => r.spark.id === id)?.row?.sudoSaved === true,
+    [rows, selectedId, updates.detail]
+  );
 
   const checkNow = async (id: string) => {
     setActionError(null);
@@ -199,13 +214,48 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
     }
   };
 
-  const askRefreshIndex = (id: string, name: string) =>
+  /**
+   * Run an action that needs administrator rights. With a password remembered for every unit it covers
+   * there is nothing to type — it runs on the remembered one straight away, which is the whole point of
+   * ticking "remember". Otherwise the shared password box opens, its tick box asking the server to keep
+   * an accepted password for the next time.
+   */
+  const runElevated = (action: {
+    title: string;
+    purpose: string;
+    /** Nothing to type: the dashboard remembers a password for every unit this action covers. */
+    saved: boolean;
+    /** The box may stay empty even though one unit has none remembered (a fleet run over mixed units). */
+    optional?: boolean;
+    hint?: string;
+    rememberLabel?: string;
+    run: (password: string | undefined, remember: boolean | undefined) => Promise<string | null>;
+  }) => {
+    setActionError(null);
+    if (action.saved) {
+      void action.run(undefined, undefined).then((problem) => {
+        if (problem) setActionError(problem);
+      });
+      return;
+    }
     requirePassword({
+      title: action.title,
+      purpose: action.purpose,
+      allowRemember: true,
+      rememberLabel: action.rememberLabel ?? "Remember this password so I do not have to type it again",
+      optional: action.optional,
+      hint: action.hint,
+      submit: async (password, remember) => action.run(password.length > 0 ? password : undefined, remember),
+    });
+  };
+
+  const askRefreshIndex = (id: string, name: string) =>
+    runElevated({
       title: "Refresh the index",
       purpose: `to refresh the package index on ${name}`,
-      allowRemember: true,
+      saved: sudoSavedFor(id),
       rememberLabel: "Remember for the daily refresh",
-      submit: async (password, remember) => {
+      run: async (password, remember) => {
         try {
           const detail = await refreshSparkUpdates(id, password, remember);
           updates.applyDetail(detail);
@@ -218,12 +268,13 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
     });
 
   const askInstall = (id: string, name: string) =>
-    requirePassword({
+    runElevated({
       title: "Install updates",
       purpose: `to install updates on ${name}`,
-      submit: async (password) => {
+      saved: sudoSavedFor(id),
+      run: async (password, remember) => {
         try {
-          await installSparkUpdates(id, { sudoPassword: password });
+          await installSparkUpdates(id, { sudoPassword: password, remember });
           updates.followJob();
           return null;
         } catch (err) {
@@ -232,7 +283,8 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
             setPendingInstall({
               sparkId: id,
               sparkName: name,
-              password,
+              password: password ?? null,
+              remember,
               removals: Array.isArray(body?.removals) ? (body.removals as string[]) : [],
             });
             return null; // the password box closes; the confirmation dialog takes over
@@ -247,7 +299,11 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
     setInstallBusy(true);
     setActionError(null);
     try {
-      await installSparkUpdates(pendingInstall.sparkId, { sudoPassword: pendingInstall.password, confirmRemovals: true });
+      await installSparkUpdates(pendingInstall.sparkId, {
+        sudoPassword: pendingInstall.password ?? undefined,
+        confirmRemovals: true,
+        remember: pendingInstall.remember,
+      });
       setPendingInstall(null);
       updates.followJob();
     } catch (err) {
@@ -258,13 +314,26 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
     }
   };
 
+  // What a fleet run covers: the online units. All of them remembered means nothing to type; a mix
+  // still offers the box, whose empty answer leaves every unit on its own remembered password.
+  const onlineRows = rows.filter((r) => r.spark.online);
+  const fleetSaved = onlineRows.length > 0 && onlineRows.every((r) => sudoSavedFor(r.spark.id));
+  const fleetAnySaved = onlineRows.some((r) => sudoSavedFor(r.spark.id));
+  const fleetHint =
+    fleetAnySaved || !fleetSaved
+      ? "A unit whose password the dashboard already remembers uses that one; what you type here covers the units that have none. Leave it empty to run on the remembered passwords only."
+      : undefined;
+
   const askInstallAll = () =>
-    requirePassword({
+    runElevated({
       title: "Update all machines",
       purpose: "to update every online unit, one after another",
-      submit: async (password) => {
+      saved: fleetSaved,
+      optional: fleetAnySaved,
+      hint: fleetHint,
+      run: async (password, remember) => {
         try {
-          await fleet.start(password);
+          await fleet.start(password, remember);
           void loadSummary();
           return null;
         } catch (err) {
@@ -277,12 +346,14 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
     });
 
   const askRefreshAll = () =>
-    requirePassword({
+    runElevated({
       title: "Refresh all machines",
       purpose: "to refresh the package index on every online unit, one after another",
-      allowRemember: true,
+      saved: fleetSaved,
+      optional: fleetAnySaved,
+      hint: fleetHint,
       rememberLabel: "Remember for the daily refresh",
-      submit: async (password, remember) => {
+      run: async (password, remember) => {
         try {
           await fleet.startRefresh(password, remember);
           void loadSummary();
@@ -295,6 +366,18 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
         }
       },
     });
+
+  /** Make the dashboard forget the sudo password it remembers for this unit's account. */
+  const forgetPassword = async (id: string) => {
+    setActionError(null);
+    try {
+      await forgetUpdatesSudo(id);
+      await updates.refresh();
+      void loadSummary();
+    } catch (err) {
+      setActionError(passwordProblem(err));
+    }
+  };
 
   const age = (at: number | null): string | null => {
     const s = formatSince(at, summary?.now);
@@ -328,7 +411,8 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
           <h1>Updates</h1>
           <p className="page-head__sub">
             Check every DGX Spark and this dashboard's own machine for apt and firmware updates without a password,
-            install what you ask for with a one-time sudo password, and keep the DGX Dashboard service on or off on the Sparks.
+            install what you ask for with a sudo password — remembered encrypted, so the next one needs no typing —
+            and keep the DGX Dashboard service on or off on the Sparks.
           </p>
         </div>
         <div className="page-head__tools">
@@ -434,6 +518,11 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
               <button type="button" className="btn btn--primary btn--sm" disabled={offline} onClick={() => askInstall(selected.spark.id, selected.spark.name)}>
                 Install updates
               </button>
+              {sudoSavedFor(selected.spark.id) ? (
+                <button type="button" className="btn btn--sm" onClick={() => void forgetPassword(selected.spark.id)}>
+                  Forget password
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -460,7 +549,7 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                   return [
                     checkedAge ? `Checked ${checkedAge}` : "Never checked",
                     indexAge ? `index refreshed ${indexAge}` : "index age unknown",
-                    detail.indexAutoRefresh === "check-only" ? "daily refresh off — no stored sudo password" : null,
+                    detail.sudoSaved ? "sudo password remembered — nothing to type" : "no sudo password stored — you will be asked for one",
                   ]
                     .filter((s): s is string => s != null)
                     .join(" · ");
@@ -547,6 +636,7 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
           sparkId={selected.spark.id}
           sparkName={selected.spark.name}
           online={selected.spark.online}
+          sudoSaved={sudoSavedFor(selected.spark.id)}
           requirePassword={requirePassword}
           problem={passwordProblem}
         />

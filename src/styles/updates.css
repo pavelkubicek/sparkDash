@@ -360,6 +360,10 @@
   color: var(--color-muted);
   margin: 0;
 }
+.up-dialog .up-pw__optional {
+  font-weight: 400;
+  color: var(--color-muted);
+}
 .up-dialog .up-pw__error {
   font-size: 0.75rem;
   color: var(--color-danger);
