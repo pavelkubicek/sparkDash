@@ -1,5 +1,50 @@
 # Progress log
 
+## 2026-11-21 — Updates: the firmware phase actually ran `fwupdmgr` (fwupd 2 has no `--offline`)
+
+**What changed.** `fwupdmgr upgrade -y --offline` is not a command on the fleet: fwupd **2.0.20**
+dropped `--offline`, so the client died in its argument parser — verified on spark3/spark4 with
+`fwupdmgr update --offline` → `Failed to parse arguments: Unknown option --offline`. Two reporting
+bugs hid that completely. (1) The failure message grepped the log **case-sensitively** for
+`Failure|failed`, which never matches a capital-F `Failed to …`, so the page showed a bare
+`fwupdmgr upgrade failed:` with nothing after the colon — which is what the operator saw when
+spark3 and spark4 "failed". (2) The "nothing to do" classifier accepted `failed to obtain`, so the
+same dead invocation reported `FWUP=none` — a total firmware failure dressed as "nothing to
+upgrade" — any time the client exited 0 or 1. `server/updates/scripts/install.sh` now runs
+`fwupdmgr update -y --no-reboot-check` (offline / capsule-on-disk staging is automatic in 2.x, the
+2.0 client has no reboot capability at all — no systemctl/reboot string in client or daemon — so the
+"never reboot from here" invariant holds and the person reboots when they choose; a staged device
+comes back UpdateState 4 and `check.sh` reports it as `FWREBOOT=1`). Classification is now
+two-tier: HARD evidence (`^Failed to `, `failed to (parse|connect|open|download|write|update|obtain)`,
+`failure:`, `denied`, `unauthorized`) fails the phase whatever the exit code left, SOFT evidence
+(`error`, `not supported` — routine plugin chatter on a device-rich GB10) escalates only on a
+non-zero exit; a `nothing to do | no updates | no devices to update | nothing needs updating` log is
+the only thing that may say `none`; staged-work wording is checked before it, so a mixed run that
+updated one device and skipped another says `done`, not "nothing to upgrade". Every failure carries
+the exit code and the real output, newest line first, so `clean`'s 200-char cap cannot bury the
+cause, and the tail also travels as its own `FWTAIL=` line. `UpdateManager` puts that tail on the
+firmware phase and refuses to publish a `job.error` that is only a trailing colon. The page now
+shows **why** a job failed at all: `job.error` was never rendered anywhere (and `job.code` was not
+in `src/api/types.ts`), and the install status block moved from the bottom of the unit panel to the
+top — first thing under the chips, above the `System packages` and `Firmware` lists, where a running
+or failed job belongs.
+
+**What is broken.** Nothing known — typecheck clean, build clean, `npm test` green (server 2497
+pass / 0 fail / 26 env-skips, frontend 1611 pass), plus 11 new tests. Five of them run the real
+assembled `install.sh` under `/bin/sh` against a stubbed `fwupdmgr`; the three that pin a classifier
+change were also pinned negative (revert that fix alone and exactly that test fails). Residual risk, deliberate: a line-initial
+`Failed to open /sys/firmware/efi/… (ignored)` on stderr is still HARD evidence, so that particular
+piece of fwupd chatter would false-fail an exit-0 run — an `(ignored)` carve-out belongs in the hard
+tier if the field ever shows it. Also note the firmware failure path still skips the appended check
+body (existing contract), so a failed run leaves the previous check state rather than a fresh one.
+
+**What is next.** Deploy is `docker compose restart sparkDash` (server code is bind-mounted and
+`commands.js` reads the scripts at import, so a restart is mandatory; `dist` was rebuilt on the
+host). The operator installs from the UI: spark3 and spark4 each carry three Critical LVFS updates
+(EC `0x02000c00→0x02000d00`, BIOS `4.1.0→5.0.0`, USB-C PD `0x00000516→0x00000519`), all
+capsule-on-disk, so a green firmware phase means *staged* — the units must still be rebooted, which
+the dashboard never does; `dell.lan` (4 firmware updates pending) runs the same path.
+
 ## 2026-11-19 — Model Loader events in the fleet Activity log
 
 **What changed.** `server/models` now records its lifecycle in the fleet event log the Activity

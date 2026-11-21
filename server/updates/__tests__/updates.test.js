@@ -78,6 +78,7 @@ function makeStubs(extraEnv = {}) {
     stub("fwupdmgr", [
       'if [ "$1" = get-updates ]; then printf "%s\\n" "$STUB_FW_JSON"; exit "${STUB_FW_RC:-0}"; fi',
       'if [ "$1" = get-devices ]; then printf "%s\\n" "$STUB_FW_DEVICES"; exit "${STUB_FW_DEVICES_RC:-0}"; fi',
+      'if [ "$1" = update ]; then [ -z "${STUB_FW_UPDATE_OUT:-}" ] || printf "%s\\n" "$STUB_FW_UPDATE_OUT"; exit "${STUB_FW_UPDATE_RC:-0}"; fi',
       "exit 0",
     ].join("\n"));
   }
@@ -99,6 +100,8 @@ function makeStubs(extraEnv = {}) {
     'exec "$@"',
   ].join("\n"));
   stub("sleep", "exit 0");
+  // install.sh demands root; a fixture may say the stubbed id is uid 0 without the suite running as root.
+  if (extraEnv.STUB_ID_UID) stub("id", 'printf "%s\\n" "${STUB_ID_UID:-0}"');
   return dir;
 }
 
@@ -476,6 +479,148 @@ test("dashboard.sh on/off refuses without root and reports what it did", async (
   assert.ok(res.RESULT === "ok" || res.CODE === "no-sudo");
 });
 
+// ─── install.sh firmware phase (the fwupd 2.0.20 regression) ───
+
+test("install.sh: a broken fwupdmgr invocation is an error, never \"nothing to upgrade\"", async () => {
+  // As it happened on spark3/spark4: fwupd 2.0.20 has no --offline, the client died at argument
+  // parsing, and the log's only line was "Failed to parse arguments: Unknown option --offline".
+  // Whatever exit code such an invocation leaves, it must never read as nothing-to-do or success.
+  const base = {
+    STUB_ID_UID: "0", // install.sh demands root; the stubbed id says we have it
+    STUB_APT_LIST: "Listing...\n",
+    STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+    STUB_FW_JSON: '{"Devices":[],"Updates":[]}',
+    STUB_FW_RC: "2",
+  };
+  for (const rc of ["0", "1", "2"]) {
+    const res = parseKv(
+      await runShell(buildProgram("install"), {
+        ...base,
+        STUB_FW_UPDATE_OUT: "Failed to parse arguments: Unknown option --offline",
+        STUB_FW_UPDATE_RC: rc,
+      })
+    );
+    assert.equal(res.RESULT, "error", `exit ${rc}: a broken invocation must fail loudly`);
+    assert.equal(res.CODE, "fw-failed");
+    assert.equal(res.STEP, "firmware", "the page learns the apt phase got through");
+    assert.ok(!("FWUP" in res), `exit ${rc}: no firmware verdict at all, never FWUP=none`);
+    assert.match(res.MSG, new RegExp(`fwupdmgr update failed \\(exit ${rc}\\)`), "the exit code is always in the message");
+    assert.match(res.MSG, /Failed to parse arguments: Unknown option --offline/, "and so is what fwupdmgr actually said");
+    assert.equal(res.FWTAIL, "Failed to parse arguments: Unknown option --offline");
+  }
+  // 'failed to obtain' left the no-work classifier with this fix: it is failure evidence, not an empty queue.
+  const obtained = parseKv(
+    await runShell(buildProgram("install"), { ...base, STUB_FW_UPDATE_OUT: "Failed to obtain Metadata for some devices", STUB_FW_UPDATE_RC: "1" })
+  );
+  assert.equal(obtained.CODE, "fw-failed");
+  assert.ok(!("FWUP" in obtained), "a failed metadata read is not \"nothing to upgrade\"");
+  // Only explicit no-work wording, in any case, says nothing to do.
+  for (const line of ["Nothing to do", "No updates available for any device.", "Nothing needs updating", "no devices to update"]) {
+    const res = parseKv(await runShell(buildProgram("install"), { ...base, STUB_FW_UPDATE_OUT: line, STUB_FW_UPDATE_RC: "0" }));
+    assert.equal(res.RESULT, "ok", line);
+    assert.equal(res.FWUP, "none", line);
+  }
+  // Real work done: no failure wording, exit 0 → done ("requires restart" is a success line, not an error).
+  const done = parseKv(
+    await runShell(buildProgram("install"), { ...base, STUB_FW_UPDATE_OUT: "Installing firmware on NVIDIA GB10\nDevice requires restart", STUB_FW_UPDATE_RC: "0" })
+  );
+  assert.equal(done.RESULT, "ok");
+  assert.equal(done.FWUP, "done");
+  // An exit code that means failure with an empty log still names the exit code and never goes blank.
+  const silent = parseKv(await runShell(buildProgram("install"), { ...base, STUB_FW_UPDATE_OUT: "", STUB_FW_UPDATE_RC: "1" }));
+  assert.equal(silent.CODE, "fw-failed");
+  assert.match(silent.MSG, /fwupdmgr update failed \(exit 1\)/);
+});
+
+const INSTALL_FW_BASE = {
+  STUB_ID_UID: "0", // install.sh demands root; the stubbed id says we have it
+  STUB_APT_LIST: "Listing...\n",
+  STUB_SIM: "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+  STUB_FW_JSON: '{"Devices":[],"Updates":[]}',
+  STUB_FW_RC: "2",
+};
+
+test("install.sh: incidental soft evidence on exit 0 is not a firmware failure (Dell GB10 plugin chatter)", async () => {
+  // On device-rich GB10 units fwupdmgr exits 0 while printing harmless lines that mention
+  // "error" (plugin enumeration chatter) or "not supported" (per-device skip wording). The
+  // whole-log classifier called that fw-failed, so a genuine exit-0 success — even one that
+  // staged a capsule — came back as a failure. Soft wording escalates only on a nonzero exit;
+  // only hard evidence ("Failed to …" at line start, "Failure:", denied/unauthorized) wins
+  // outright. These two lines are soft and carry no staging wording, so the phase must pass.
+  const res = parseKv(
+    await runShell(buildProgram("install"), {
+      ...INSTALL_FW_BASE,
+      STUB_FW_UPDATE_OUT: "Loading plugin Tpm: error while enumerating a device\nDevice Foo: firmware branch not supported on this hardware",
+      STUB_FW_UPDATE_RC: "0",
+    })
+  );
+  assert.equal(res.RESULT, "ok");
+  assert.ok(res.FWUP === "done" || res.FWUP === "none", `soft chatter on exit 0 must not fail the phase, got ${JSON.stringify(res)}`);
+});
+
+test("install.sh: staged capsule with a per-device \"No updates found\" is done, not \"nothing to upgrade\"", async () => {
+  // The mixed run: one device had nothing queued while another really got a capsule staged.
+  // The no-work grep used to win and the phase said "nothing to upgrade" for work that happened.
+  const res = parseKv(
+    await runShell(buildProgram("install"), {
+      ...INSTALL_FW_BASE,
+      STUB_FW_UPDATE_OUT: "No updates found for NVMe Controller\nInstalling firmware… \nDevice requires restart",
+      STUB_FW_UPDATE_RC: "0",
+    })
+  );
+  assert.equal(res.RESULT, "ok");
+  assert.equal(res.FWUP, "done", "a staged capsule is never reported as nothing-to-upgrade");
+});
+
+test("install.sh: a timed-out fwupdmgr with only progress lines fails with the exit code and a tail", async () => {
+  // timeout returns 124; the log holds only what it got through, no wording either tier
+  // classifies as evidence. A non-ok exit with no verdict is fw-failed, naming the exit code
+  // and carrying FWTAIL so the page shows what the run was doing when it died.
+  const res = parseKv(
+    await runShell(buildProgram("install"), {
+      ...INSTALL_FW_BASE,
+      STUB_FW_UPDATE_OUT: "Fetching firmware for Embedded Controller\nUpdating UEFI dbx from 76 to 84",
+      STUB_FW_UPDATE_RC: "124",
+    })
+  );
+  assert.equal(res.RESULT, "error");
+  assert.equal(res.CODE, "fw-failed");
+  assert.ok(!("FWUP" in res), "a timed-out run answers no firmware verdict");
+  assert.match(res.MSG, /exit 124/);
+  assert.ok(res.FWTAIL && res.FWTAIL.trim().length > 0, `FWTAIL must carry the progress: ${JSON.stringify(res)}`);
+});
+
+test("install.sh: the newest evidence line survives the 200-char cap in MSG and FWTAIL", async () => {
+  // clean() keeps the FIRST 200 chars of the flattened tail, but the real cause is normally
+  // the LAST line: a long earlier evidence line used to push it past the cap and out of the
+  // message, leaving an uninformative wall of older chatter. The tail is flattened newest-
+  // first, so the cause is what the person reads.
+  const long = `Failure: unexpected descriptor while enumerating UEFI variables ${"A".repeat(180)}`;
+  assert.ok(long.length > 180, "the fixture's early line must be long enough to bury the cause");
+  const res = parseKv(
+    await runShell(buildProgram("install"), {
+      ...INSTALL_FW_BASE,
+      STUB_FW_UPDATE_OUT: `${long}\nFailed to write capsule: (0xE0000227)`,
+      STUB_FW_UPDATE_RC: "1",
+    })
+  );
+  assert.equal(res.CODE, "fw-failed");
+  assert.match(res.FWTAIL, /Failed to write capsule: \(0xE0000227\)/, `the real cause must survive the cap: ${res.FWTAIL}`);
+  assert.match(res.MSG, /Failed to write capsule: \(0xE0000227\)/, `and so it must in the message: ${res.MSG}`);
+});
+
+test("install.sh keeps the fwupd 2.0 client contract: update -y --no-reboot-check, never --offline, never a reboot", () => {
+  const text = fs.readFileSync(new URL("../scripts/install.sh", import.meta.url), "utf8");
+  const code = text
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n"); // the why-lives-in-the-comments; the assertions are about the commands
+  assert.ok(!code.includes("--offline"), "fwupd 2.0.20 has no --offline: it died at argument parsing (the spark3/spark4 failure)");
+  assert.ok(!code.includes("fwupdmgr upgrade"), "the invocation is fwupdmgr update");
+  assert.match(code, /fwupdmgr update -y --no-reboot-check/, "the one real Application Option that keeps the client from rebooting");
+  assert.ok(!code.includes("systemctl reboot") && !code.includes("shutdown -r"), "the script never reboots the unit itself");
+});
+
 // ─── password transport ───────────────────────────────────
 
 test("the password never rides in the program text or the ssh command line", () => {
@@ -667,6 +812,59 @@ test("a refused password marks the job and locks further guesses", async () => {
   }
   await assert.rejects(async () => m.install(s1, { sudoPassword: "wrong-guess", confirmRemovals: true }), (e) => e.status === 429 && e.code === "password-locked");
   assert.equal(n, 3, "the lock refuses before the transport is even used");
+});
+
+test("a failed firmware phase never settles as a blank error on the job", async () => {
+  // The UI once showed the empty message "fwupdmgr upgrade failed:": MSG ended on a colon,
+  // the tail was lost, and the phase carried no note. Neither may come back.
+  const m = makeManager({
+    run: async (s, program) => {
+      if (!program.includes("sparkdash-updates:install")) return checkLines({});
+      return "RESULT=error\nCODE=fw-failed\nSTEP=firmware\nMSG=\nFWTAIL=Failed to parse arguments: Unknown option --offline\n";
+    },
+  });
+  const s1 = spark("s1");
+  await m.check(s1);
+  m.install(s1, { sudoPassword: "hunter2long", confirmRemovals: true });
+  await m.settled();
+  const { job } = m.job(s1);
+  assert.equal(job.state, "error");
+  assert.equal(job.code, "fw-failed");
+  assert.ok(job.error && job.error.trim(), `job.error must never be blank: ${JSON.stringify(job.error)}`);
+  assert.ok(!/[:\s]+$/.test(job.error), `job.error must not end on a bare colon: ${job.error}`);
+  assert.match(job.error, /Failed to parse arguments/);
+  assert.equal(job.phases[0].state, "done", "apt finished before the firmware phase died");
+  assert.equal(job.phases[1].state, "error");
+  assert.equal(job.phases[1].note, "Failed to parse arguments: Unknown option --offline");
+});
+
+test("a firmware failure the unit said nothing about is still named honestly", async () => {
+  const m = makeManager({
+    run: async (s, program) => {
+      if (!program.includes("sparkdash-updates:install")) return checkLines({});
+      return "RESULT=error\nCODE=fw-failed\nSTEP=firmware\nMSG=fwupdmgr upgrade failed:\n"; // the old script's empty message
+    },
+  });
+  const s1 = spark("s1");
+  await m.check(s1);
+  m.install(s1, { sudoPassword: "hunter2long", confirmRemovals: true });
+  await m.settled();
+  const { job } = m.job(s1);
+  assert.equal(job.state, "error");
+  assert.ok(!/[:\s]+$/.test(job.error), `no bare trailing colon: ${job.error}`);
+  // Nothing to attach at all → an honest composed line, never a blank.
+  const bare = makeManager({
+    run: async (s, program) => {
+      if (!program.includes("sparkdash-updates:install")) return checkLines({});
+      return "RESULT=error\nCODE=fw-failed\nSTEP=firmware\n";
+    },
+  });
+  await bare.check(s1);
+  bare.install(s1, { sudoPassword: "hunter2long", confirmRemovals: true });
+  await bare.settled();
+  const bareJob = bare.job(s1).job;
+  assert.equal(bareJob.error, "fwupdmgr update failed (exit code not reported)");
+  assert.equal(bareJob.phases[1].note, "fwupdmgr update failed (exit code not reported)");
 });
 
 test("install-all walks the fleet: offline, busy, unconfirmed removals and work", async () => {

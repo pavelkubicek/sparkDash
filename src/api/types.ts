@@ -4461,6 +4461,8 @@ export interface UpdateInstallJob {
   rebootRequired: boolean;
   firmwareRebootNeeded: boolean;
   error?: string;
+  /** Failure code when state is "error" (fw-failed, apt-failed, bad-password, unreachable, timeout). */
+  code?: string;
 }
 
 /** One unit's outcome inside the fleet install-all job. */

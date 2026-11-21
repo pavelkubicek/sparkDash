@@ -462,13 +462,24 @@ export class UpdateManager {
     this._settlePassword(spark, res, { ...creds, remember });
     if (res.RESULT !== "ok") {
       job.state = "error";
-      job.error = res.MSG || "the unit refused the upgrade";
-      job.code = res.CODE || "install-failed";
       // Where it broke: STEP names the phase the script had reached.
       const reachedFirmware = res.STEP === "firmware";
+      const tail = typeof res.FWTAIL === "string" ? res.FWTAIL.trim() : "";
+      let msg = String(res.MSG || "").trim().replace(/[\s:]+$/, "");
+      if (reachedFirmware) {
+        // A firmware failure never shows as a blank or a bare "failed:": compose an honest
+        // message when the unit gave none and attach the fwupd log tail the script sent.
+        if (!msg) msg = "fwupdmgr update failed (exit code not reported)";
+        if (tail && !msg.includes(tail)) msg = `${msg}: ${tail}`;
+      }
+      job.error = msg || "the unit refused the upgrade";
+      job.code = res.CODE || "install-failed";
       for (const phase of job.phases) {
         if (phase.key === "apt") phase.state = reachedFirmware ? "done" : "error";
-        else phase.state = reachedFirmware ? "error" : "skipped";
+        else {
+          phase.state = reachedFirmware ? "error" : "skipped";
+          if (reachedFirmware) phase.note = tail || msg;
+        }
       }
       return { ok: false, code: job.code };
     }

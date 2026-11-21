@@ -94,12 +94,65 @@ const DASH: DashboardServiceStatus = {
   now: NOW,
 };
 
+/** An install of the selected unit in flight: apt finished, firmware still spinning. */
+const RUNNING_FW_JOB: UpdateInstallJob = {
+  id: "j-run",
+  state: "running",
+  startedAt: NOW,
+  finishedAt: null,
+  phases: [{ key: "apt", state: "done" }, { key: "firmware", state: "running" }],
+  rebootRequired: false,
+  firmwareRebootNeeded: false,
+};
+
+/** The same install gone wrong on the firmware phase — the answer the server keeps after it stops. */
+const ERRORED_FW_JOB: UpdateInstallJob = {
+  ...RUNNING_FW_JOB,
+  id: "j-err",
+  state: "error",
+  finishedAt: NOW,
+  phases: [{ key: "apt", state: "done" }, { key: "firmware", state: "error", note: "fwupdater exited 1" }],
+  error: "firmware update failed",
+};
+
 const sparks = (): SparkSnapshot[] => [
   { ...makeSpark("s1"), name: "Pico" },
   { ...makeSpark("s2"), name: "Dell" },
 ];
 
 const text = () => document.body.textContent ?? "";
+
+/** The selected unit's panel: the install status and the two lists, and nothing of the fleet panel. */
+const unitPanel = (name = "Pico") =>
+  document.body.querySelector(`section[aria-label="Updates for ${name}"]`) as HTMLElement;
+
+/** Section headings and the lists under them, in DOM order — what sits above what. */
+const unitSectionOrder = (name = "Pico") =>
+  [...unitPanel(name).querySelectorAll("h3.up-h3, ul.up-job, ul.up-list")].map((el) =>
+    el.matches("h3") ? `h3:${el.textContent}` : el.className,
+  );
+
+/** True when a comes before b in the document. */
+const before = (a: Element, b: Element) =>
+  (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+/** The install job of the selected unit: its heading, its rows and the state of each phase. */
+function installJob(name = "Pico") {
+  const panel = unitPanel(name);
+  const heading = [...panel.querySelectorAll("h3.up-h3")].find((h) => h.textContent === "Install job")!;
+  const rows = [...panel.querySelectorAll<HTMLElement>("ul.up-job .up-job__row")];
+  const states = rows.map((row) => row.querySelector<HTMLElement>(".up-job__state")!);
+  return {
+    heading,
+    names: rows.map((row) => row.querySelector(".up-job__name")?.textContent),
+    states,
+    stateTexts: states.map((s) => s.textContent),
+    spinners: states.map((s) => s.querySelector("i.up-spin")),
+    systemHeading: [...panel.querySelectorAll("h3.up-h3")].find((h) => h.textContent === "System packages")!,
+    firmwareHeading: [...panel.querySelectorAll("h3.up-h3")].find((h) => h.textContent === "Firmware")!,
+  };
+}
+
 const button = (label: string | RegExp) =>
   [...document.body.querySelectorAll("button")].find((b) => (typeof label === "string" ? b.textContent?.includes(label) : label.test(b.textContent ?? ""))) as HTMLButtonElement;
 const dialog = () => document.body.querySelector('[role="dialog"]') as HTMLElement | null;
@@ -646,6 +699,97 @@ describe("UpdatesPage", () => {
         await vi.advanceTimersByTimeAsync(10_000); // and nothing reschedules forever
       });
       expect(vi.mocked(fetchInstallAllJob).mock.calls.length).toBe(afterFirstTick);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the install job above the update lists while the firmware phase runs", async () => {
+    vi.mocked(fetchSparkUpdatesJob).mockResolvedValue({ job: RUNNING_FW_JOB });
+    render(<UpdatesPage sparks={sparks()} />);
+    await flush();
+
+    const job = installJob();
+    expect(job.heading).toBeTruthy();
+    // The status is the first section of the unit: above System packages, which is above Firmware.
+    expect(before(job.heading, job.systemHeading)).toBe(true);
+    expect(before(job.systemHeading, job.firmwareHeading)).toBe(true);
+    expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:System packages", "up-list", "h3:Firmware", "up-list"]);
+    // The rows are the job's own, with their phase names and states — the spinner on the running one.
+    expect(job.names).toEqual(["System packages", "Firmware"]);
+    expect(job.stateTexts).toEqual(["done", "running"]);
+    expect(job.states[0].classList.contains("is-done")).toBe(true);
+    expect(job.states[1].querySelector("i.up-spin")).toBeTruthy();
+    expect(job.spinners[0]).toBeNull();
+    // It is rendered once: the lists below it are the unit's, not a second copy of the job.
+    expect(unitPanel().querySelectorAll("ul.up-job")).toHaveLength(1);
+    expect(unitPanel().querySelectorAll("h3.up-h3")).toHaveLength(3);
+  });
+
+  it("keeps the install job above the update lists when the firmware phase fails", async () => {
+    rememberPasswords();
+    vi.useFakeTimers();
+    try {
+      render(<UpdatesPage sparks={sparks()} />);
+      await flush();
+      // Nothing running: no install status, only the two lists.
+      expect(unitPanel().querySelector("ul.up-job")).toBeNull();
+      expect(unitSectionOrder()).toEqual(["h3:System packages", "up-list", "h3:Firmware", "up-list"]);
+
+      act(() => button("Install updates").click());
+      await flush();
+      expect(installSparkUpdates).toHaveBeenCalledWith("s1", {});
+      // The job answers with the firmware failure, and stays on screen above the lists.
+      vi.mocked(fetchSparkUpdatesJob).mockResolvedValue({ job: ERRORED_FW_JOB });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400); // the first tick of the follow
+      });
+
+      const job = installJob();
+      expect(before(job.heading, job.systemHeading)).toBe(true);
+      expect(unitSectionOrder()).toEqual(["h3:Install job", "up-job", "h3:System packages", "up-list", "h3:Firmware", "up-list"]);
+      expect(job.names).toEqual(["System packages", "Firmware"]);
+      expect(job.stateTexts).toEqual(["done", "error — fwupdater exited 1"]);
+      expect(job.states[1].classList.contains("is-error")).toBe(true);
+      expect(job.spinners[1]).toBeNull(); // a finished phase does not spin
+      expect(unitPanel().querySelectorAll("ul.up-job")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the failed firmware job's error and code above the System packages heading", async () => {
+    // The spark3/spark4 failure: the phase row alone read "error" with an empty note and
+    // job.error was rendered nowhere. The reason must be visible, above the lists, with its code.
+    rememberPasswords();
+    const failedFwJob: UpdateInstallJob = {
+      ...ERRORED_FW_JOB,
+      error: "fwupdmgr update failed (exit 1): Failed to parse arguments: Unknown option --offline",
+      code: "fw-failed",
+    };
+    vi.useFakeTimers();
+    try {
+      render(<UpdatesPage sparks={sparks()} />);
+      await flush();
+      act(() => button("Install updates").click());
+      await flush();
+      vi.mocked(fetchSparkUpdatesJob).mockResolvedValue({ job: failedFwJob });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400); // the first tick of the follow
+      });
+
+      const panel = unitPanel();
+      const banners = [...panel.querySelectorAll<HTMLElement>(".up-banner.is-error")];
+      expect(banners).toHaveLength(1);
+      expect(banners[0].textContent).toContain("fwupdmgr update failed (exit 1)");
+      expect(banners[0].textContent).toContain("Failed to parse arguments: Unknown option --offline");
+      expect(banners[0].textContent).toContain("(fw-failed)");
+      // It is part of the install status: above System packages, not below the lists.
+      const job = installJob();
+      expect(before(job.heading, banners[0])).toBe(true);
+      expect(before(banners[0], job.systemHeading)).toBe(true);
+      // And the failing phase still carries its note — the row and the banner tell the same story.
+      expect(job.stateTexts[1]).toContain("error");
     } finally {
       vi.useRealTimers();
     }

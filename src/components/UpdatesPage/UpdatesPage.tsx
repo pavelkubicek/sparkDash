@@ -562,6 +562,36 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                 {detail.sim.removals.length > 0 ? <span className="up-chip">{detail.sim.removals.length} removals pending</span> : null}
               </div>
 
+              {/* The install status sits above what is installable: while a job runs (or after it
+                  failed) it is the first thing on the unit, not something below the lists. */}
+              {updates.job ? (
+                <>
+                  <h3 className="up-h3">Install job</h3>
+                  <ul className="up-job">
+                    {updates.job.phases.map((phase) => (
+                      <li key={phase.key} className="up-job__row">
+                        <span className="up-job__name">{phase.key === "apt" ? "System packages" : "Firmware"}</span>
+                        <span
+                          className={`up-job__state${phase.state === "done" ? " is-done" : phase.state === "error" ? " is-error" : ""}`}
+                        >
+                          {phase.state === "running" ? <i className="up-spin" aria-hidden /> : null}
+                          {phase.state}
+                          {phase.note ? ` — ${phase.note}` : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {/* The reason a job died, next to the phase that died: an errored firmware
+                      phase can read "error" with an empty note otherwise. */}
+                  {updates.job.state === "error" && updates.job.error ? (
+                    <Banner tone="error">
+                      {updates.job.error}
+                      {updates.job.code ? ` (${updates.job.code})` : ""}
+                    </Banner>
+                  ) : null}
+                </>
+              ) : null}
+
               <h3 className="up-h3">System packages</h3>
               {detail.apt.length === 0 ? (
                 <p className="up-empty">No apt packages are upgradable.</p>
@@ -604,26 +634,6 @@ export function UpdatesPage({ sparks }: UpdatesPageProps) {
                   ))}
                 </ul>
               )}
-
-              {updates.job ? (
-                <>
-                  <h3 className="up-h3">Install job</h3>
-                  <ul className="up-job">
-                    {updates.job.phases.map((phase) => (
-                      <li key={phase.key} className="up-job__row">
-                        <span className="up-job__name">{phase.key === "apt" ? "System packages" : "Firmware"}</span>
-                        <span
-                          className={`up-job__state${phase.state === "done" ? " is-done" : phase.state === "error" ? " is-error" : ""}`}
-                        >
-                          {phase.state === "running" ? <i className="up-spin" aria-hidden /> : null}
-                          {phase.state}
-                          {phase.note ? ` — ${phase.note}` : ""}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : null}
             </>
           ) : null}
         </section>
